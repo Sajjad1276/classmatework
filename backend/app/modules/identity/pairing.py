@@ -48,15 +48,35 @@ async def _require_assignment_authority(
     db: AsyncSession,
     *,
     actor_id: UUID,
+    scope_type: str,
+    tenant_id: UUID | None,
 ) -> None:
-    for permission_key in ("platform:users:manage", "platform:roles:assign"):
-        allowed = await has_permission(
+    platform_permissions = ("platform:users:manage", "platform:roles:assign")
+    platform_allowed = True
+    for permission_key in platform_permissions:
+        platform_allowed = platform_allowed and await has_permission(
             db,
             user_id=actor_id,
             permission_key=permission_key,
             tenant_id=None,
             scope_type="platform",
             scope_id=None,
+        )
+    if platform_allowed:
+        return
+
+    if scope_type != "tenant" or tenant_id is None:
+        raise PairingNotAllowed
+
+    tenant_permissions = ("membership:invite", "role:manage")
+    for permission_key in tenant_permissions:
+        allowed = await has_permission(
+            db,
+            user_id=actor_id,
+            permission_key=permission_key,
+            tenant_id=tenant_id,
+            scope_type="tenant",
+            scope_id=tenant_id,
         )
         if not allowed:
             raise PairingNotAllowed
@@ -144,11 +164,16 @@ async def _validate_pairing_grant(
     pairing: AdminPairingToken,
     actor_id: UUID,
 ) -> Role:
-    await _require_assignment_authority(db, actor_id=actor_id)
     tenant_id = await _resolve_invitation_scope(
         db,
         scope_type=pairing.scope_type,
         scope_id=pairing.scope_id,
+    )
+    await _require_assignment_authority(
+        db,
+        actor_id=actor_id,
+        scope_type=pairing.scope_type,
+        tenant_id=tenant_id,
     )
     if tenant_id != pairing.tenant_id:
         raise ValueError("The invitation scope no longer matches its tenant.")
@@ -176,8 +201,6 @@ async def create_admin_pairing(
     scope_id: UUID | None,
     ttl: timedelta = timedelta(minutes=15),
 ) -> PairingInvitation:
-    await _require_assignment_authority(db, actor_id=actor_id)
-
     if (
         target_telegram_user_id <= 0
         or target_telegram_user_id > 9_223_372_036_854_775_807
@@ -204,6 +227,12 @@ async def create_admin_pairing(
         db,
         scope_type=scope_type,
         scope_id=scope_id,
+    )
+    await _require_assignment_authority(
+        db,
+        actor_id=actor_id,
+        scope_type=scope_type,
+        tenant_id=tenant_id,
     )
     role = await _resolve_assignable_role(
         db,
