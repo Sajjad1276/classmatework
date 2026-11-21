@@ -241,6 +241,7 @@ class AdminPairingToken(Base):
     __table_args__ = (
         UniqueConstraint("token_hash", name="uq_admin_pairing_token_hash"),
         CheckConstraint("expires_at > created_at", name="ck_admin_pairing_expiry"),
+        CheckConstraint("target_telegram_user_id > 0", name="ck_admin_pairing_target_positive"),
         CheckConstraint(
             "(scope_type = 'platform' AND tenant_id IS NULL AND scope_id IS NULL) OR "
             "(scope_type = 'tenant' AND tenant_id IS NOT NULL AND tenant_id = scope_id) OR "
