@@ -9,7 +9,6 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -21,9 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.errors import (
     AccessDenied,
     ApplicationError,
-    InvalidApplicationInput,
-    ResourceConflict,
-    ResourceNotFound,
 )
 from app.application.tenants import create_tenant, list_tenants
 from app.db.models import User
@@ -153,6 +149,8 @@ async def _show_tenant_step(
 async def _move_tenant_wizard_back(
     message: Message,
     state: FSMContext,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
 ) -> None:
     current = await state.get_state()
     previous = {
@@ -163,7 +161,10 @@ async def _move_tenant_wizard_back(
     }
     if current not in previous:
         await state.clear()
-        await message.answer("به منوی اصلی برگشتید.")
+        await message.answer(
+            "به منوی اصلی برگشتید.",
+            reply_markup=await main_menu(db, principal),
+        )
         return
     step = previous[current]
     await state.set_state(getattr(TenantCreation, step))
@@ -230,14 +231,7 @@ async def back_command(
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
-    current = await state.get_state()
-    if current is not None and current.startswith("TenantCreation:"):
-        await _move_tenant_wizard_back(message, state)
-        return
-    await message.answer(
-        "در حال حاضر در منوی اصلی هستید.",
-        reply_markup=await main_menu(db, principal),
-    )
+    await _move_tenant_wizard_back(message, state, principal, db)
 
 
 @router.message(Command("cancel"))
@@ -319,12 +313,12 @@ async def tenant_list_callback(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
-    await callback.answer()
     try:
         tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
     except AccessDenied:
         await callback.answer("دسترسی ندارید.", show_alert=True)
         return
+    await callback.answer()
     if not tenants:
         body = "هنوز مجموعه‌ای در سامانه ثبت نشده است."
     else:
@@ -344,7 +338,6 @@ async def tenant_create_callback(
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
-    await callback.answer()
     allowed = await has_permission(
         db,
         user_id=principal.user.id,
@@ -356,6 +349,7 @@ async def tenant_create_callback(
     if not allowed:
         await callback.answer("دسترسی ایجاد مجموعه را ندارید.", show_alert=True)
         return
+    await callback.answer()
     await state.clear()
     await state.set_state(TenantCreation.name)
     if callback.message is not None:
@@ -430,10 +424,10 @@ async def tenant_confirm_callback(
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
-    await callback.answer()
     if await state.get_state() != TenantCreation.confirm.state:
         await callback.answer("این مرحله منقضی شده است. از منو دوباره شروع کنید.", show_alert=True)
         return
+    await callback.answer()
     data = await state.get_data()
     try:
         tenant = await create_tenant(
@@ -446,9 +440,10 @@ async def tenant_confirm_callback(
         )
     except AccessDenied:
         await state.clear()
-        await callback.answer("دسترسی ایجاد مجموعه را ندارید.", show_alert=True)
+        if callback.message is not None:
+            await callback.message.answer("دسترسی ایجاد مجموعه را ندارید.")
         return
-    except (InvalidApplicationInput, ResourceConflict, ResourceNotFound, ApplicationError) as exc:
+    except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
     await state.clear()
@@ -465,12 +460,14 @@ async def tenant_confirm_callback(
 @router.callback_query(F.data == "wizard:back")
 async def wizard_back_callback(
     callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
     state: FSMContext,
 ) -> None:
     await callback.answer()
     if callback.message is None:
         return
-    await _move_tenant_wizard_back(callback.message, state)
+    await _move_tenant_wizard_back(callback.message, state, principal, db)
 
 
 @router.callback_query(F.data == "wizard:cancel")
