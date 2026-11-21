@@ -1,7 +1,7 @@
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
-import re
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +18,7 @@ from app.db.models import (
     RoleBinding,
     RolePermission,
     TelegramAccount,
+    Tenant,
     TenantMembership,
     User,
 )
@@ -32,6 +33,16 @@ class TenantMemberView:
     telegram_user_id: int | None
     role_keys: tuple[str, ...]
     joined_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RoleDirectoryEntry:
+    role_id: UUID
+    key: str
+    name: str
+    tenant_id: UUID | None
+    tenant_name: str | None
+    permissions: tuple[tuple[str, str], ...]
 
 
 async def _require_tenant_permission(
@@ -53,13 +64,51 @@ async def _require_tenant_permission(
         raise AccessDenied
 
 
+async def _build_role_directory(
+    db: AsyncSession,
+    *,
+    rows: list[tuple[Role, str | None]],
+) -> list[RoleDirectoryEntry]:
+    role_ids = [role.id for role, _ in rows]
+    permission_map: dict[UUID, list[tuple[str, str]]] = {
+        role_id: [] for role_id in role_ids
+    }
+    if role_ids:
+        permission_rows = (
+            await db.execute(
+                select(
+                    RolePermission.role_id,
+                    Permission.key,
+                    RolePermission.effect,
+                )
+                .join(Permission, Permission.id == RolePermission.permission_id)
+                .where(RolePermission.role_id.in_(role_ids))
+                .order_by(Permission.key)
+            )
+        ).all()
+        for role_id, permission_key, effect in permission_rows:
+            permission_map[role_id].append((permission_key, effect))
+
+    return [
+        RoleDirectoryEntry(
+            role_id=role.id,
+            key=role.key,
+            name=role.name,
+            tenant_id=role.tenant_id,
+            tenant_name=tenant_name,
+            permissions=tuple(permission_map[role.id]),
+        )
+        for role, tenant_name in rows
+    ]
+
+
 async def list_tenant_roles(
     db: AsyncSession,
     *,
     actor_id: UUID,
     tenant_id: UUID,
     limit: int = 100,
-) -> list[Role]:
+) -> list[RoleDirectoryEntry]:
     if not 1 <= limit <= 100:
         raise InvalidApplicationInput("Role page size must be between 1 and 100.")
     await _require_tenant_permission(
@@ -70,22 +119,24 @@ async def list_tenant_roles(
     )
     rows = (
         await db.execute(
-            select(Role)
+            select(Role, Tenant.name)
+            .outerjoin(Tenant, Tenant.id == Role.tenant_id)
             .where(Role.tenant_id == tenant_id)
             .order_by(Role.key)
             .limit(limit)
         )
-    ).scalars().all()
+    ).all()
+    entries = await _build_role_directory(db, rows=list(rows))
     await record_event(
         db,
         event_type="role.tenant_directory.read",
         actor_id=actor_id,
         tenant_id=tenant_id,
         aggregate_type="role_directory",
-        event_data={"returned_count": len(rows), "limit": limit},
+        event_data={"returned_count": len(entries), "limit": limit},
     )
     await db.commit()
-    return list(rows)
+    return entries
 
 
 async def list_platform_roles(
@@ -93,7 +144,7 @@ async def list_platform_roles(
     *,
     actor_id: UUID,
     limit: int = 100,
-) -> list[Role]:
+) -> list[RoleDirectoryEntry]:
     if not 1 <= limit <= 200:
         raise InvalidApplicationInput("Platform role page size must be between 1 and 200.")
     allowed = await has_permission(
@@ -108,18 +159,22 @@ async def list_platform_roles(
         raise AccessDenied
     rows = (
         await db.execute(
-            select(Role).order_by(Role.tenant_id, Role.key).limit(limit)
+            select(Role, Tenant.name)
+            .outerjoin(Tenant, Tenant.id == Role.tenant_id)
+            .order_by(Role.tenant_id, Role.key)
+            .limit(limit)
         )
-    ).scalars().all()
+    ).all()
+    entries = await _build_role_directory(db, rows=list(rows))
     await record_event(
         db,
         event_type="role.platform_directory.read",
         actor_id=actor_id,
         aggregate_type="role_directory",
-        event_data={"returned_count": len(rows), "limit": limit},
+        event_data={"returned_count": len(entries), "limit": limit},
     )
     await db.commit()
-    return list(rows)
+    return entries
 
 
 async def create_tenant_role(
@@ -171,9 +226,7 @@ async def create_tenant_role(
     permission_by_key = {permission.key: permission for permission in permissions}
     missing = sorted(set(normalized_permissions) - set(permission_by_key))
     if missing:
-        raise InvalidApplicationInput(
-            "Unknown permission keys: " + ", ".join(missing)
-        )
+        raise InvalidApplicationInput("Unknown permission keys: " + ", ".join(missing))
 
     for permission_key in normalized_permissions:
         allowed = await has_permission(
