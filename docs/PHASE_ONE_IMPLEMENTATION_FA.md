@@ -1,6 +1,6 @@
 # فاز یک — هویت تلگرام و هسته مدیریت ClassMate Work
 
-**شاخه:** \`phase-1/core-identity-access\`  
+**شاخه:** `phase-1/core-identity-access`  
 **وضعیت PR:** Draft، باز و ادغام‌نشده  
 **وضعیت این پیاده‌سازی:** برش موقت؛ با مرجع Telegram-first هنوز هم‌راستا نیست.  
 **معیار ادغام:** تکمیل موانع بخش پایانی این سند؛ سبز بودن CI به‌تنهایی کافی نیست.
@@ -12,7 +12,7 @@
 - منطق دامنه باید در Application Use Case باشد؛ Bot Handler و HTTP Route فقط Adapter هستند.
 - هویت مدیر از Telegram User ID عددی و Pairing امن ساخته می‌شود؛ ایمیل/گذرواژه و Browser Cookie مدل نهایی نیست.
 - PostgreSQL منبع اصلی و Redis محل FSM/TTL/Rate Limit است.
-- \`classmate2\` مستقل است و این شاخه هیچ تغییری در آن ایجاد نمی‌کند.
+- `classmate2` مستقل است و این شاخه هیچ تغییری در آن ایجاد نمی‌کند.
 
 ## 2. آنچه در PR فعلی وجود دارد
 
@@ -39,7 +39,7 @@
 
 ### B. ساخت Bot Adapter
 
-- ساخت \`backend/app/bot/main.py\` و Application/Dispatcher.
+- ساخت `backend/app/bot/main.py` و Application/Dispatcher.
 - انتخاب aiogram 3، Long Polling و تک Replica در Railway.
 - Middlewareهای Private Chat، Actor Extraction، Account Status، Rate Limit و Correlation.
 - Routerهای فرمان عمومی، Navigation، Tenant/School، Academic و Admin Identity.
