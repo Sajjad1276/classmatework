@@ -178,8 +178,11 @@ async def create_admin_pairing(
 ) -> PairingInvitation:
     await _require_assignment_authority(db, actor_id=actor_id)
 
-    if target_telegram_user_id <= 0:
-        raise ValueError("Telegram User ID must be positive.")
+    if (
+        target_telegram_user_id <= 0
+        or target_telegram_user_id > 9_223_372_036_854_775_807
+    ):
+        raise ValueError("Telegram User ID must be within the positive 64-bit range.")
     normalized_name = display_name.strip()
     if not normalized_name or len(normalized_name) > 160:
         raise ValueError("Display name must contain 1 to 160 characters.")
@@ -296,7 +299,12 @@ async def consume_admin_pairing(
     first_name: str | None,
     last_name: str | None,
 ) -> TelegramAccount:
-    if not raw_token or len(raw_token) > 128 or telegram_user_id <= 0:
+    if (
+        not raw_token
+        or len(raw_token) > 128
+        or telegram_user_id <= 0
+        or telegram_user_id > 9_223_372_036_854_775_807
+    ):
         raise PairingRejected
 
     now = datetime.now(UTC)
