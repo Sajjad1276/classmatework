@@ -97,7 +97,7 @@
 
 **موارد باز:**
 
-- CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1` سبز شده است (Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده). Run: `44932267328`.
+- CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d` سبز شده است (Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده). Run: `44932471573`.
 - اجرای واقعی Bot با Token معتبر و تست end-to-end هنوز انجام نشده است.
 - لغو اتصال، بازیابی مدیر و Step-up/MFA کامل نیست.
 - مدیریت Role/Permission و فرم‌های کامل CRUD آموزشی در Bot هنوز تکمیل نشده‌اند.
