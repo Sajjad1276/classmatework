@@ -3,8 +3,8 @@
 **نسخه:** 1.0  
 **وضعیت:** مبنای معماری برای ادامه توسعه  
 **رابط مدیریتی انسان:** فقط ربات اختصاصی تلگرام  
-**دامنه:** مخزن \`Sajjad1276/classmatework\`  
-**مرز مستقل:** مخزن \`classmate2\` بدون تغییر
+**دامنه:** مخزن `Sajjad1276/classmatework`  
+**مرز مستقل:** مخزن `classmate2` بدون تغییر
 
 ---
 
@@ -18,7 +18,7 @@ ClassMate Work سامانه مرکزی مدیریت و عملیات ClassMate ا
 2. Backend مالک منطق، داده، سیاست دسترسی و اجرای عملیات است. ربات فقط رابط مکالمه‌ای و تبدیل‌کننده Update تلگرام به درخواست کاربردی است.
 3. FastAPI برای Health Check و APIهای داخلی/یکپارچه‌سازی باقی می‌ماند؛ API به معنی وجود پنل وب نیست.
 4. هیچ منطق دامنه‌ای نباید فقط داخل Telegram Handler یا FastAPI Route نوشته شود. هر دو باید Application Service/Use Case مشترک را صدا بزنند.
-5. \`classmate2\` مالک رابط و منطق آموزشی/دانش‌آموزی خودش باقی می‌ماند. این مخزن فقط از طریق قرارداد API و Event با آن ارتباط می‌گیرد؛ کد، تنظیمات یا دیتابیس آن از این پروژه تغییر نمی‌کند.
+5. `classmate2` مالک رابط و منطق آموزشی/دانش‌آموزی خودش باقی می‌ماند. این مخزن فقط از طریق قرارداد API و Event با آن ارتباط می‌گیرد؛ کد، تنظیمات یا دیتابیس آن از این پروژه تغییر نمی‌کند.
 6. قابلیت منویی که Use Case، مجوز، اعتبارسنجی، Audit و تست ندارد نباید به مدیر نمایش داده شود.
 7. هیچ عدد، وضعیت، گزارش یا موفقیتی با داده ساختگی نمایش داده نمی‌شود.
 
@@ -30,7 +30,7 @@ ClassMate Work سامانه مرکزی مدیریت و عملیات ClassMate ا
 - احراز هویت مبتنی بر رمز عبور مرورگر، Cookie و CSRF برای مدیر انسانی.
 - ثبت‌نام عمومی مدیران.
 - اجرای عملیات مدیریتی از طریق پیام آزاد بدون منوی مشخص، اعتبارسنجی و مجوز.
-- تغییر مستقیم مخزن یا زیرساخت \`classmate2\`.
+- تغییر مستقیم مخزن یا زیرساخت `classmate2`.
 
 ---
 
@@ -38,7 +38,7 @@ ClassMate Work سامانه مرکزی مدیریت و عملیات ClassMate ا
 
 انتخاب اصلی **Modular Monolith با مرزهای ماژولی سخت و چند Adapter ورودی** است؛ در این مرحله Microserviceهای متعدد ساخته نمی‌شوند.
 
-\`\`\`text
+```text
                    Telegram Bot API
                           │
                   Admin Bot Service
@@ -71,7 +71,7 @@ ClassMate Work سامانه مرکزی مدیریت و عملیات ClassMate ا
              ▼
           classmate2
      (فقط از قرارداد رسمی)
-\`\`\`
+```
 
 ### 2.1 لایه رابط تلگرام
 
@@ -79,7 +79,7 @@ ClassMate Work سامانه مرکزی مدیریت و عملیات ClassMate ا
 
 - دریافت Update از Telegram Bot API.
 - تشخیص پیام، فرمان، Callback Query و ورودی مرحله‌ای.
-- استخراج هویت از \`from.id\`؛ نه از username، نام نمایشی یا داده ارسالی در Callback.
+- استخراج هویت از `from.id`؛ نه از username، نام نمایشی یا داده ارسالی در Callback.
 - محدودکردن ربات مدیریتی به گفت‌وگوی خصوصی.
 - نمایش منو، صفحه جزئیات، فهرست صفحه‌بندی‌شده و فرم‌های چندمرحله‌ای.
 - تبدیل ورودی به درخواست معتبر و فراخوانی Use Case.
@@ -91,16 +91,16 @@ Handler مجاز به اجرای Query یا Mutation مستقیم روی ORM ن�
 
 هر قابلیت مدیریتی در این لایه یک یا چند Use Case مستقل دارد؛ نمونه:
 
-- \`CreateTenant\`
-- \`ListTenants\`
-- \`CreateSchool\`
-- \`CreateAcademicYear\`
-- \`CreateClass\`
-- \`InviteMember\`
-- \`AssignRole\`
-- \`SuspendMembership\`
-- \`SubmitApprovalDecision\`
-- \`ReadAuditEvents\`
+- `CreateTenant`
+- `ListTenants`
+- `CreateSchool`
+- `CreateAcademicYear`
+- `CreateClass`
+- `InviteMember`
+- `AssignRole`
+- `SuspendMembership`
+- `SubmitApprovalDecision`
+- `ReadAuditEvents`
 
 Use Case باید ورودی نوع‌دار، اعتبارسنجی، کنترل مجوز، محدوده تراکنش، ثبت Audit و خروجی مشخص داشته باشد. هیچ منطق کسب‌وکار نباید در Callback Handler یا Route Handler تکثیر شود.
 
@@ -110,7 +110,7 @@ FastAPI برای موارد زیر حفظ می‌شود:
 
 - Liveness و Readiness.
 - APIهای داخلی مورد نیاز یکپارچه‌سازی‌ها.
-- قرارداد versioned برای ارتباط کنترل‌شده با \`classmate2\`.
+- قرارداد versioned برای ارتباط کنترل‌شده با `classmate2`.
 - دریافت/انتشار Eventهای تعریف‌شده با احراز هویت ماشینی.
 
 این API رابط مدیریتی انسانی نیست. Endpointهای داخلی باید احراز هویت سرویس‌به‌سرویس، scope محدود، اعتبارسنجی payload، rate limit و Audit مناسب داشته باشند. هیچ Endpoint مدیریتی نباید به دلیل قابل حدس بودن URL یا Telegram ID قابل فراخوانی عمومی باشد.
@@ -123,8 +123,8 @@ FastAPI برای موارد زیر حفظ می‌شود:
 
 | سرویس | وظیفه | فرمان اجرا |
 |---|---|---|
-| \`classmatework-api\` | FastAPI، Health Check و API یکپارچه‌سازی | \`uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT\` |
-| \`classmatework-admin-bot\` | دریافت Update و اجرای رابط مدیریتی تلگرام | \`python -m app.bot.main\` |
+| `classmatework-api` | FastAPI، Health Check و API یکپارچه‌سازی | `uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT` |
+| `classmatework-admin-bot` | دریافت Update و اجرای رابط مدیریتی تلگرام | `python -m app.bot.main` |
 | PostgreSQL | منبع اصلی داده | سرویس دیتابیس موجود |
 | Redis | FSM، قفل کوتاه‌مدت و Rate Limit | سرویس Redis موجود |
 
@@ -151,19 +151,19 @@ FastAPI برای موارد زیر حفظ می‌شود:
 
 فرمان‌های سراسری:
 
-- \`/start\` — آغاز و کنترل دسترسی.
-- \`/menu\` — بازگشت به منوی اصلی.
-- \`/back\` — بازگشت دقیقاً یک مرحله.
-- \`/cancel\` — لغو فرم یا عملیات در حال انجام.
-- \`/help\` — راهنمای فرمان‌ها و الگوی کار.
-- \`/status\` — وضعیت واقعی سرویس‌ها، فقط برای نقش مجاز.
+- `/start` — آغاز و کنترل دسترسی.
+- `/menu` — بازگشت به منوی اصلی.
+- `/back` — بازگشت دقیقاً یک مرحله.
+- `/cancel` — لغو فرم یا عملیات در حال انجام.
+- `/help` — راهنمای فرمان‌ها و الگوی کار.
+- `/status` — وضعیت واقعی سرویس‌ها، فقط برای نقش مجاز.
 
 ### 4.2 قواعد قطعی دکمه‌ها و هندلرها
 
 1. هر دکمه باید Handler متناظر و تست داشته باشد؛ دکمه بی‌عملکرد ممنوع است.
 2. هر صفحه فرزند باید دکمه «بازگشت» داشته باشد؛ هر Wizard علاوه بر آن دکمه «لغو عملیات» دارد.
 3. «بازگشت» فقط یک سطح در Navigation Stack حرکت می‌کند؛ «لغو» وضعیت فرم جاری را پاک می‌کند و عملیات را اجرا نمی‌کند.
-4. \`/menu\` از هر مرحله قابل اجرا است و وضعیت جاری را طبق سیاست همان Flow می‌بندد.
+4. `/menu` از هر مرحله قابل اجرا است و وضعیت جاری را طبق سیاست همان Flow می‌بندد.
 5. پس از ورود متن نامعتبر، کاربر باید همان مرحله را ببیند و بداند چه چیزی اشتباه است؛ سیستم نباید بی‌دلیل به پیام قبلی یا ابتدای فرم برگردد.
 6. هر Callback Query باید پاسخ داده شود؛ Callback منقضی یا تکراری نباید عملیات را دوباره اجرا کند.
 7. Callback قدیمی پس از انقضا یا تغییر وضعیت باید پیام «این مرحله منقضی شده؛ از منو شروع کنید» بدهد.
@@ -192,7 +192,7 @@ FastAPI برای موارد زیر حفظ می‌شود:
 
 فرم نمونه ایجاد مدرسه:
 
-\`\`\`text
+```text
 منوی اصلی
 → سازمان‌ها و مدارس
 → ایجاد مدرسه
@@ -203,7 +203,7 @@ FastAPI برای موارد زیر حفظ می‌شود:
 → تأیید نهایی
 → اجرای Use Case
 → نمایش نتیجه و شناسه
-\`\`\`
+```
 
 قواعد فرم:
 
@@ -227,8 +227,8 @@ FastAPI برای موارد زیر حفظ می‌شود:
 
 ### 5.1 هویت Telegram
 
-- شناسه اصلی اتصال مدیر به ربات، عدد \`Telegram User ID\` است.
-- \`username\`، نام نمایشی و شماره تلفن فقط اطلاعات توصیفی‌اند و مبنای احراز هویت نیستند.
+- شناسه اصلی اتصال مدیر به ربات، عدد `Telegram User ID` است.
+- `username`، نام نمایشی و شماره تلفن فقط اطلاعات توصیفی‌اند و مبنای احراز هویت نیستند.
 - کاربر فقط در Private Chat مجاز است؛ استفاده از ربات مدیریتی در گروه یا کانال رد می‌شود.
 - پیام از Bot Account، حساب ناشناخته یا حساب مسدودشده پذیرفته نمی‌شود.
 - ثبت‌نام آزاد وجود ندارد.
@@ -256,15 +256,15 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 
 نمونه permission:
 
-- \`platform:tenants:read\`
-- \`platform:tenants:create\`
-- \`school:read\`
-- \`school:create\`
-- \`class:manage_members\`
-- \`content:publish\`
-- \`approval:decide\`
-- \`audit:read\`
-- \`security:revoke_sessions\`
+- `platform:tenants:read`
+- `platform:tenants:create`
+- `school:read`
+- `school:create`
+- `class:manage_members`
+- `content:publish`
+- `approval:decide`
+- `audit:read`
+- `security:revoke_sessions`
 
 ### 5.4 عملیات حساس
 
@@ -311,7 +311,7 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 ### 6.4 نقش و سیاست
 
 - Roleهای سیستمی محافظت‌شده و Roleهای سفارشی.
-- Permission با قالب \`resource:action\`.
+- Permission با قالب `resource:action`.
 - Scope، زمان، وضعیت عضویت، شرط امنیتی و مالکیت منبع.
 - نسخه‌بندی Policy و ثبت تغییر آن.
 - شبیه‌ساز تصمیم دسترسی در فاز بعد.
@@ -375,22 +375,22 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 
 موجودیت‌های اصلی در طول فازها:
 
-- \`tenants\`, \`organizations\`, \`schools\`
-- \`academic_years\`, \`class_groups\`, \`subjects\`
-- \`users\`, \`telegram_accounts\`, \`admin_pairing_tokens\`
-- \`memberships\`, \`roles\`, \`permissions\`, \`role_bindings\`
-- \`policies\`, \`policy_versions\`
-- \`content_items\`, \`content_revisions\`
-- \`workflow_definitions\`, \`workflow_instances\`, \`workflow_tasks\`
-- \`approval_decisions\`, \`invitations\`
-- \`channel_connections\`, \`message_templates\`, \`notification_jobs\`
-- \`job_runs\`, \`exports\`, \`audit_events\`
-- \`security_incidents\`, \`feature_flags\`, \`integration_credentials\`
-- \`outbox_events\`, \`processed_telegram_updates\`, \`pending_actions\`
+- `tenants`, `organizations`, `schools`
+- `academic_years`, `class_groups`, `subjects`
+- `users`, `telegram_accounts`, `admin_pairing_tokens`
+- `memberships`, `roles`, `permissions`, `role_bindings`
+- `policies`, `policy_versions`
+- `content_items`, `content_revisions`
+- `workflow_definitions`, `workflow_instances`, `workflow_tasks`
+- `approval_decisions`, `invitations`
+- `channel_connections`, `message_templates`, `notification_jobs`
+- `job_runs`, `exports`, `audit_events`
+- `security_incidents`, `feature_flags`, `integration_credentials`
+- `outbox_events`, `processed_telegram_updates`, `pending_actions`
 
 قواعد:
 
-- تمام Aggregateهای Tenant-owned دارای \`tenant_id\` هستند.
+- تمام Aggregateهای Tenant-owned دارای `tenant_id` هستند.
 - شناسه‌های داخلی UUID و زمان‌ها UTC هستند.
 - Telegram User ID با نوع عدد صحیح 64 بیتی ذخیره می‌شود.
 - Unique Constraint و Foreign Key باید ترکیب Tenant/School/Academic Year را نیز محافظت کنند؛ صرف FK روی UUID به‌تنهایی جلوی اتصال رکوردهای دو Tenant را نمی‌گیرد.
@@ -404,7 +404,7 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 
 ### 8.1 ایجاد Tenant
 
-\`\`\`text
+```text
 درخواست از منوی ربات
 → احراز هویت Telegram و Private Chat
 → استخراج Principal
@@ -415,11 +415,11 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 → اجرای CreateTenant در Transaction
 → Audit و Outbox
 → نمایش شناسه و نتیجه واقعی
-\`\`\`
+```
 
 ### 8.2 ایجاد مدرسه
 
-\`\`\`text
+```text
 انتخاب Tenant مجاز
 → ارزیابی school:create در Scope همان Tenant
 → انتخاب Organization در صورت وجود
@@ -429,11 +429,11 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 → تأیید
 → CreateSchool
 → Audit و نمایش نتیجه
-\`\`\`
+```
 
 ### 8.3 افزودن عضو
 
-\`\`\`text
+```text
 دعوت یا Import
 → تطبیق User و Telegram Identity در صورت نیاز
 → بررسی ظرفیت، تداخل و تاریخ اثر
@@ -442,11 +442,11 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 → ایجاد Membership
 → ثبت Outbox برای Sync
 → Audit و گزارش نتیجه
-\`\`\`
+```
 
 ### 8.4 عملیات انبوه
 
-\`\`\`text
+```text
 تعریف فایل/فیلتر
 → اعتبارسنجی و Preview تعداد و نمونه
 → گزارش خطاهای پیش‌بینی‌شده
@@ -455,7 +455,7 @@ User هویت سراسری پلتفرم است؛ Telegram Account فقط روش 
 → ثبت نتیجه هر ردیف
 → Retry فقط موارد شکست‌خورده
 → گزارش نهایی و Audit
-\`\`\`
+```
 
 ### 8.5 Rollback
 
@@ -487,7 +487,7 @@ Rollback به معنی حذف تاریخچه نیست. یک عملیات جبر�
 
 ## 10. API و قرارداد Integration
 
-API نسخه‌دار \`/api/v1\` حفظ می‌شود، اما کاربرد آن Integration و عملیات سیستمی کنترل‌شده است، نه رابط انسانی.
+API نسخه‌دار `/api/v1` حفظ می‌شود، اما کاربرد آن Integration و عملیات سیستمی کنترل‌شده است، نه رابط انسانی.
 
 قواعد قرارداد:
 
@@ -500,22 +500,22 @@ API نسخه‌دار \`/api/v1\` حفظ می‌شود، اما کاربرد آ�
 
 Eventهای پایه:
 
-- \`tenant.created\`
-- \`school.created\`
-- \`school.activated\`
-- \`class.created\`
-- \`membership.invited\`
-- \`membership.activated\`
-- \`content.submitted\`
-- \`workflow.task.assigned\`
-- \`approval.decided\`
-- \`content.published\`
-- \`notification.queued\`
-- \`notification.delivered\`
-- \`notification.failed\`
-- \`security.incident.opened\`
+- `tenant.created`
+- `school.created`
+- `school.activated`
+- `class.created`
+- `membership.invited`
+- `membership.activated`
+- `content.submitted`
+- `workflow.task.assigned`
+- `approval.decided`
+- `content.published`
+- `notification.queued`
+- `notification.delivered`
+- `notification.failed`
+- `security.incident.opened`
 
-Event باید شامل \`event_id\`, \`event_type\`, \`occurred_at\`, \`actor_id\`, \`tenant_id\`, \`aggregate_type\`, \`aggregate_id\`, \`correlation_id\`, \`schema_version\` و payload کنترل‌شده باشد.
+Event باید شامل `event_id`, `event_type`, `occurred_at`, `actor_id`, `tenant_id`, `aggregate_type`, `aggregate_id`, `correlation_id`, `schema_version` و payload کنترل‌شده باشد.
 
 ---
 
@@ -609,7 +609,7 @@ CI باید Backend lint/test، Bot lint/test، Migration و Integration Testه�
 
 - Telegram Communication Connections.
 - Template، Notification Queue، Retry و Delivery Report.
-- Outbox/Integration با \`classmate2\`.
+- Outbox/Integration با `classmate2`.
 - Import/Export و Jobهای قابل پیگیری.
 
 ### فاز پنج — گزارش، امنیت و Automation پیشرفته
