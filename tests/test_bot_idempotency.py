@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
