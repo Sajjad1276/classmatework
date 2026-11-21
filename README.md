@@ -32,20 +32,21 @@ PR شماره ۲: Draft، باز و ادغام‌نشده.
 - فرمان‌های /start، /menu، /back، /cancel، /invite، /help و /status.
 - Inline menu پویا بر اساس Permission.
 - فرم چندمرحله‌ای ساخت Tenant با اعتبارسنجی، Preview، تأیید، Back، Cancel و شناسه Flow برای رد Callbackهای قدیمی.
-- Use Caseهای مستقل برای ساخت/فهرست Tenant و عملیات پایه مدرسه، سال تحصیلی، کلاس و درس.
+- Use Caseهای مستقل برای ساخت/فهرست Tenant، School، Academic Year، Class و Subject.
+- فرم‌های تلگرام برای انتخاب Tenant/School و فهرست/ایجاد مدرسه، سال تحصیلی، کلاس و درس با Preview، Confirm، Back و Cancel.
 - RBAC با ارث‌بری از والد به فرزند، Deny-overrides-Allow و کنترل Membership.
 - Composite Foreign Key برای جلوگیری از اتصال School، Academic Year، Class و Subject به Tenant/School اشتباه.
 - Migrationهای هویت تلگرام و وضعیت پردازش Telegram Update.
 - جلوگیری از پردازش دوباره Update با ثبت Durable در PostgreSQL و Lease؛ Actionهای دامنه همچنان باید Idempotent بمانند.
 - CI بدون Frontend Build و دارای PostgreSQL 16 و Redis 7 واقعی برای Migration و تست‌های یکپارچگی.
-- آخرین CI برای Commit `d66416d76ad5b3220eae410ca85b2328190cab01` موفق است: Ruff، چهار Migration و ۲۵ تست با یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44931316097).
+- آخرین CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1` موفق است: Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44932267328).
 
 ### هنوز انجام‌نشده یا نیازمند تأیید
 
 - تست‌های واقعی علیه Telegram Bot API با Token اختصاصی و تأیید اجرای واقعی در محیط توسعه.
 - اجرای واقعی Bot با Token آزمایشی در Telegram و آزمون End-to-End هنوز انجام نشده است؛ CI موفق، جایگزین این آزمون نیست.
 - قطع اتصال Telegram، بازیابی مدیر، MFA/Step-up و سیاست تأیید دوم.
-- تکمیل CRUD مدرسه، سال تحصیلی، کلاس و درس در رابط Bot؛ Use Case پایه وجود دارد اما فرم‌های Bot هنوز کامل نیستند.
+- ویرایش/آرشیو موجودیت‌های آموزشی، Pagination و Search کامل در Bot هنوز باقی مانده‌اند؛ فرم‌های ایجاد و فهرست پایه پیاده‌سازی شده‌اند.
 - مدیریت Role/Permission از طریق Bot.
 - API احراز هویت‌شده Machine-to-Machine؛ در حال حاضر API عمومی فقط Health را ارائه می‌کند.
 - Audit correlation برای Telegram Update ایجاد شده، اما بازبینی کامل end-to-end و پوشش Readهای حساس باقی است.
