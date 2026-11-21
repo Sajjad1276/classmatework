@@ -5,7 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.application.errors import AccessDenied, ResourceConflict
-from app.application.tenants import create_tenant, list_tenants
+from app.application.tenants import (
+    create_tenant,
+    list_accessible_tenants,
+    list_tenants,
+)
 from app.db.base import Base
 from app.db.models import (
     AuditEvent,
@@ -14,6 +18,7 @@ from app.db.models import (
     RoleBinding,
     RolePermission,
     Tenant,
+    TenantMembership,
     User,
 )
 
@@ -74,6 +79,47 @@ async def test_create_and_list_tenant_use_cases_write_audit() -> None:
         )
         assert tenant.slug == "sample-tenant"
         assert tenant.status == "active"
+
+        tenant_roles = (
+            await db.execute(
+                select(Role).where(Role.tenant_id == tenant.id).order_by(Role.key)
+            )
+        ).scalars().all()
+        assert {role.key for role in tenant_roles} == {
+            "tenant_admin",
+            "tenant_viewer",
+        }
+        viewer_role = next(role for role in tenant_roles if role.key == "tenant_viewer")
+        viewer_permission_keys = (
+            await db.execute(
+                select(Permission.key)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id == viewer_role.id)
+            )
+        ).scalars().all()
+        assert viewer_permission_keys == ["school:read"]
+
+        tenant_user = User(display_name="Tenant Viewer", status="active")
+        db.add(tenant_user)
+        await db.flush()
+        db.add_all([
+            TenantMembership(
+                user_id=tenant_user.id,
+                tenant_id=tenant.id,
+                status="active",
+            ),
+            RoleBinding(
+                user_id=tenant_user.id,
+                role_id=viewer_role.id,
+                tenant_id=tenant.id,
+                scope_type="tenant",
+                scope_id=tenant.id,
+                created_by_id=owner.id,
+            ),
+        ])
+        await db.commit()
+        accessible = await list_accessible_tenants(db, actor_id=tenant_user.id)
+        assert [item.id for item in accessible] == [tenant.id]
 
         tenants = await list_tenants(db, actor_id=owner.id)
         assert [item.id for item in tenants] == [tenant.id]
