@@ -13,7 +13,6 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
-    Integer,
     String,
     Text,
     UniqueConstraint,
