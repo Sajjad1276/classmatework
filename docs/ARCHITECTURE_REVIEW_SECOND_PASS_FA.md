@@ -173,3 +173,14 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - تست‌ها مرز privilege ceiling، cross-tenant isolation، محرمانگی Telegram ID حساب‌های blocked و رفتار revoke را پوشش می‌دهند.
 - CI برای Commit 4980a075f3b75979d17921fc70c487d7d4ada3a1 موفق است: Ruff، پنج Migration PostgreSQL و 40 passed, 1 warning. [Run #356](https://github.com/Sajjad1276/classmatework/actions/runs/44937126858).
 - Gateهای باز: Bot API End-to-End واقعی، Step-up/MFA، unlink/recovery، نقش و Permission edit/archive، تعلیق/لغو Membership، Pagination/Search و M2M API auth.
+
+
+## 17. فهرست دعوت‌های باز و منقضی
+
+- Use Case `list_admin_invitations` فهرست دعوت‌های پذیرفته‌نشده را با Scope کنترل‌شده برمی‌گرداند.
+- Platform-wide listing نیازمند `platform:users:manage` و `platform:roles:assign` است.
+- Tenant listing نیازمند `membership:invite` و `role:manage` همان Tenant است و Query فقط `tenant_id` انتخاب‌شده را برمی‌گرداند.
+- نتیجه شامل UUID دعوت، نام دعوت‌شونده، Telegram ID مقصد، Role، Scope، زمان ساخت و انقضا و وضعیت pending/expired است؛ Token خام و digest در خروجی نیستند.
+- فرمان `/invites [TENANT_UUID]` و ثبت فرمان Bot اضافه شده‌اند. UUID نمایش‌داده‌شده با `/revoke-invite` قابل لغو است.
+- تست Tenant scope isolation، عدم افشای Token و نمایش منقضی‌شدن دعوت به مجموعهٔ تست‌ها اضافه شد.
+- CI برای Commit `ce1f7e90fa8fb0c30c8bb5f95d6da7204d8e99e6` موفق شد: Ruff، پنج Migration PostgreSQL و 42 passed, 1 warning. [Run #374](https://github.com/Sajjad1276/classmatework/actions/runs/44937709726).
