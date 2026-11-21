@@ -145,3 +145,18 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - PR2 همچنان Draft است و Merge نشده است.
 - Gateهای باز: آزمون واقعی Bot با Token آزمایشی، Unlink/recovery، Step-up/MFA، مدیریت نقش/عضویت، Update/Archive و Search/Pagination کامل، M2M integration auth و مرور کامل Audit readها.
 - هیچ Deploy یا تغییر تنظیمی در Railway و هیچ تغییری در `classmate2` انجام نشده است.
+
+
+## 15. دعوت نقش‌محور و واگذاری امن مجوز
+
+- نقص Pairing اولیه اصلاح شد: پذیرش دعوت فقط TelegramAccount را فعال نمی‌کند؛ RoleBinding و در Scope Tenant، TenantMembership نیز در همان تراکنش ساخته می‌شوند.
+- دعوت‌نامه با Role ID، Scope Type/ID و Tenant ID ذخیره می‌شود؛ Token خام فقط یک بار در deep-link برگردانده می‌شود و در DB فقط digest وجود دارد.
+- واگذاری از اصل no privilege escalation پیروی می‌کند: inviter باید permissionهای allow نقش هدف را در Scope مقصد داشته باشد.
+- در Platform scope، platform:users:manage و platform:roles:assign لازم است. در Tenant scope، membership:invite و role:manage در همان Tenant لازم است.
+- در زمان پذیرش دعوت نیز وضعیت و اختیار فعلی دعوت‌کننده و وجود/مجوزهای نقش دوباره بررسی می‌شوند؛ پس از سلب اختیار، لینک قبلی قابل استفاده نیست.
+- نقش‌های پایه Tenant عبارت‌اند از tenant_admin و tenant_viewer. Admin مجوزهای عملیاتی موجود مدرسه/ساختار آموزشی را دارد و viewer فقط school:read دارد؛ عضویت و Role management فقط به admin داده می‌شود.
+- /roles برای Platform با دسترسی سراسری و /roles TENANT_UUID برای مدیر Tenant با نمایش فقط نقش‌های همان Tenant اضافه شد.
+- /invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID NAME نقش و محدوده را صریح می‌گیرد. رابط فاز یک عمداً فقط platform و tenant را قبول می‌کند.
+- Migration 0005 ستون‌های Role/Scope، قید positive Telegram ID، قید scope shape، unique active invitation per target و Seed نقش‌های پیش‌فرض Tenantهای قبلی را اضافه می‌کند؛ دعوت‌نامه‌های قدیمی فاقد Role invalidated می‌شوند.
+- CI برای Commit 746c1be44488df498737bcf5b2dd385ea0799f93 سبز است: Ruff، پنج Migration PostgreSQL و 34 passed, 1 warning. [Run #317](https://github.com/Sajjad1276/classmatework/actions/runs/44936217541).
+- Gateهای باز همچنان شامل آزمون Bot واقعی در Telegram، MFA/Step-up، unlink/recovery، CRUD کامل Role/Permission و Membership، M2M auth و live E2E هستند.
