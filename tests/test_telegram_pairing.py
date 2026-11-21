@@ -549,3 +549,109 @@ async def test_expired_active_invitation_is_revoked_before_replacement() -> None
         assert len(active_invitations) == 1
 
     await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_invite_only_within_own_tenant() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        inviter = User(display_name="Tenant Manager", status="active")
+        tenant_one = Tenant(
+            slug=f"manager-one-{uuid4().hex[:8]}",
+            name="Manager One",
+            status="active",
+        )
+        tenant_two = Tenant(
+            slug=f"manager-two-{uuid4().hex[:8]}",
+            name="Manager Two",
+            status="active",
+        )
+        db.add_all([inviter, tenant_one, tenant_two])
+        await db.flush()
+
+        manager_role = await _create_role(
+            db,
+            key="tenant_manager",
+            tenant_id=tenant_one.id,
+            permission_keys=(
+                "membership:invite",
+                "role:manage",
+                "school:read",
+            ),
+        )
+        viewer_role = await _create_role(
+            db,
+            key="tenant_viewer_one",
+            tenant_id=tenant_one.id,
+            permission_keys=("school:read",),
+        )
+        other_tenant_role = await _create_role(
+            db,
+            key="tenant_viewer_two",
+            tenant_id=tenant_two.id,
+            permission_keys=("school:read",),
+        )
+        db.add_all(
+            [
+                TenantMembership(
+                    user_id=inviter.id,
+                    tenant_id=tenant_one.id,
+                    status="active",
+                ),
+                RoleBinding(
+                    user_id=inviter.id,
+                    role_id=manager_role.id,
+                    tenant_id=tenant_one.id,
+                    scope_type="tenant",
+                    scope_id=tenant_one.id,
+                    created_by_id=inviter.id,
+                ),
+            ]
+        )
+        await db.commit()
+
+        invitation = await _invite(
+            db,
+            actor=inviter,
+            telegram_user_id=823456789,
+            role_key=viewer_role.key,
+            scope_type="tenant",
+            scope_id=tenant_one.id,
+        )
+        account = await consume_admin_pairing(
+            db,
+            raw_token=invitation.raw_token,
+            telegram_user_id=823456789,
+            username=None,
+            first_name="Invited",
+            last_name="Viewer",
+        )
+        assert account.user_id == invitation.user_id
+        assert await has_permission(
+            db,
+            user_id=invitation.user_id,
+            permission_key="school:read",
+            tenant_id=tenant_one.id,
+            scope_type="tenant",
+            scope_id=tenant_one.id,
+        )
+
+        with pytest.raises(PairingNotAllowed):
+            await _invite(
+                db,
+                actor=inviter,
+                telegram_user_id=823456790,
+                role_key=other_tenant_role.key,
+                scope_type="tenant",
+                scope_id=tenant_two.id,
+            )
+
+        assert (
+            await db.execute(
+                select(AdminPairingToken.id).where(
+                    AdminPairingToken.target_telegram_user_id == 823456790
+                )
+            )
+        ).scalar_one_or_none() is None
+    await engine.dispose()
