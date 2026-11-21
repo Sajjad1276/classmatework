@@ -317,17 +317,34 @@ async def test_tenant_invitation_directory_is_limited_to_the_managers_tenant() -
         db.add(other_pairing)
         await db.commit()
 
+        expired_invite = await create_admin_pairing(
+            db,
+            actor_id=manager.id,
+            target_telegram_user_id=103_123_457,
+            display_name="Expired Tenant Invite",
+            role_key=tenant_role.key,
+            scope_type="tenant",
+            scope_id=tenant.id,
+        )
+        expired_pairing = await db.get(AdminPairingToken, expired_invite.pairing_id)
+        assert expired_pairing is not None
+        now = datetime.now(UTC)
+        expired_pairing.created_at = now - timedelta(minutes=2)
+        expired_pairing.expires_at = now - timedelta(minutes=1)
+        await db.commit()
+
         invitations = await list_admin_invitations(
             db,
             actor_id=manager.id,
             tenant_id=tenant.id,
         )
-        assert len(invitations) == 1
-        assert invitations[0].invitation_id == own_invite.pairing_id
-        assert invitations[0].target_telegram_user_id == 103_123_456
-        assert invitations[0].role_key == tenant_role.key
-        assert invitations[0].status == "pending"
-        assert not hasattr(invitations[0], "raw_token")
+        assert len(invitations) == 2
+        by_id = {item.invitation_id: item for item in invitations}
+        assert by_id[own_invite.pairing_id].target_telegram_user_id == 103_123_456
+        assert by_id[own_invite.pairing_id].role_key == tenant_role.key
+        assert by_id[own_invite.pairing_id].status == "pending"
+        assert by_id[expired_invite.pairing_id].status == "expired"
+        assert all(not hasattr(item, "raw_token") for item in invitations)
 
         with pytest.raises(AccessDenied):
             await list_admin_invitations(
