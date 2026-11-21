@@ -25,16 +25,17 @@ def upgrade() -> None:
     connection.execute(
         sa.text(
             """
-            DELETE FROM admin_pairing_tokens
+            UPDATE users
+            SET status = 'invitation_invalidated'
+            WHERE status = 'pending'
+              AND id IN (SELECT user_id FROM admin_pairing_tokens)
             """
         )
     )
     connection.execute(
         sa.text(
             """
-            DELETE FROM users
-            WHERE status = 'pending'
-              AND id NOT IN (SELECT user_id FROM telegram_accounts)
+            DELETE FROM admin_pairing_tokens
             """
         )
     )
