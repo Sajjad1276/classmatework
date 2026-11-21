@@ -66,7 +66,7 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - فایل‌های React/Vite از شاخه PR حذف شدند.
 - Makefile دیگر Frontend command ندارد.
 - CI دیگر Node/Frontend Build ندارد.
-- README و مستندات وضعیت واقعی را آشکار می‌کنند: Bot هنوز پیاده‌سازی نشده و Browser Auth فعلی مانع ادغام است.
+- README و مستندات وضعیت واقعی را آشکار می‌کنند: هسته Bot و اولین فرم‌های مدیریتی پیاده‌سازی شده‌اند؛ اجرای زنده Telegram و Gateهای باقی‌مانده مانع ادغام‌اند.
 - PR در وضعیت Draft باقی مانده است.
 
 ## 9. ترتیب اجرای موانع
@@ -105,16 +105,16 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - RBAC ارث‌بری والد به فرزند و Composite Foreign Keyهای جلوگیری از cross-tenant اضافه شدند.
 - Migration 0004 و Update Dedup Middleware برای ثبت Lease و جلوگیری از پردازش مجدد Telegram Update اضافه شده‌اند.
 - Correlation ID هر Update به Audit context منتقل می‌شود.
-- CI در یک اجرا Ruff و Migrationهای PostgreSQL را گذراند؛ تست Pairing انقضا به دلیل setup نامعتبر تست شکست خورد و اصلاح شد. اجرای CI پس از اصلاحات جدید باید جداگانه تأیید شود.
+- اجرای CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d` موفق شد: Ruff، چهار Migration PostgreSQL و 27 تست با یک Warning غیرمسدودکننده. Run: `44932471573`.
 - Bot در Telegram واقعی یا Railway هنوز Deploy/تست نشده و فاز ۱ همچنان باز است.
 
 
 ## 12. وضعیت تأیید کیفیت پس از سخت‌سازی Bot
 
-برای Commit `d66416d76ad5b3220eae410ca85b2328190cab01`، اجرای CI شماره 211 با موفقیت تمام شد:
+برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d`، اجرای CI شماره 242 با موفقیت تمام شد:
 - Ruff: All checks passed.
 - Migrationهای PostgreSQL: موفق.
-- Tests: 25 passed, 1 warning.
+- Tests: 27 passed, 1 warning.
 - Redis 7 و PostgreSQL 16 در CI به‌عنوان سرویس واقعی اجرا شدند.
 - Warning مربوط به Redis memory overcommit در کانتینر CI غیرمسدودکننده بود.
 - Bot هنوز با Token واقعی در Telegram یا Railway اجرا نشده؛ این آزمون خارج از CI و یکی از Gateهای باز فاز یک است.
@@ -128,6 +128,6 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - Tenant/School/Academic Year در Redis FSM به‌عنوان Context انتخابی نگهداری می‌شوند؛ هر Use Case پیش از تغییر دوباره Permission و مالکیت منبع را بررسی می‌کند.
 - فهرست Tenant قابل انتخاب است؛ فهرست School، Academic Year، Class و Subject از منوهای زمینه‌ای ارائه می‌شود.
 - عملیات ایجاد دارای Preview/Confirm و Callbackهای Back/Cancel وابسته به Flow Token است.
-- CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1` سبز است: Ruff، چهار Migration و 27 passed, 1 warning؛ [Run #235](https://github.com/Sajjad1276/classmatework/actions/runs/44932267328).
+- CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d` سبز است: Ruff، چهار Migration و 27 passed, 1 warning؛ [Run #242](https://github.com/Sajjad1276/classmatework/actions/runs/44932471573).
 - این موفقیت شامل اجرای واقعی Bot در Telegram نیست. Bot Token آزمایشی/اجرای End-to-End هنوز فراهم نشده است.
 - Update/Archive، Search/Pagination کامل، Role assignment، Unlink/recovery، Step-up/MFA و M2M integration در Gateهای بعدی باقی می‌مانند.
