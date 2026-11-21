@@ -9,6 +9,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
+from app.core.request_context import request_id_context
 from app.db.models import ProcessedTelegramUpdate
 
 
@@ -109,6 +110,7 @@ class TelegramUpdateDedupMiddleware(BaseMiddleware):
             await db.commit()
 
         data["telegram_update_id"] = update_id
+        correlation_token = request_id_context.set(f"tg-{update_id}")
         try:
             result = await handler(event, data)
         except Exception as exc:
@@ -124,6 +126,8 @@ class TelegramUpdateDedupMiddleware(BaseMiddleware):
                 )
                 await db.commit()
             raise
+        finally:
+            request_id_context.reset(correlation_token)
 
         async with self.session_factory() as db:
             completed_at = datetime.now(UTC)
