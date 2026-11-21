@@ -129,6 +129,7 @@ async def main() -> None:
                 BotCommand(command="cancel", description="لغو عملیات جاری"),
                 BotCommand(command="roles", description="فهرست نقش‌های قابل واگذاری"),
                 BotCommand(command="invite", description="دعوت مدیر با نقش مشخص"),
+                BotCommand(command="revoke-invite", description="لغو دعوت پذیرفته‌نشده"),
                 BotCommand(command="help", description="راهنمای ربات"),
                 BotCommand(command="status", description="وضعیت سرویس‌ها"),
             ]
