@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
+from app.bot.rate_limit import TelegramRateLimitMiddleware
 from app.bot.middleware import (
     DatabaseSessionMiddleware,
     PrivateChatOnlyMiddleware,
@@ -101,6 +102,7 @@ async def main() -> None:
 
         for observer in (dispatcher.message, dispatcher.callback_query):
             observer.outer_middleware(PrivateChatOnlyMiddleware())
+            observer.outer_middleware(TelegramRateLimitMiddleware(redis))
             observer.outer_middleware(DatabaseSessionMiddleware(session_factory))
             observer.outer_middleware(TelegramIdentityMiddleware())
 
