@@ -15,6 +15,9 @@ from app.db.models import (
     AcademicYear,
     ClassGroup,
     Organization,
+    Permission,
+    Role,
+    RolePermission,
     School,
     Subject,
     Tenant,
@@ -89,6 +92,95 @@ async def list_tenants(
     return tenants
 
 
+_TENANT_ROLE_TEMPLATES = {
+    "tenant_admin": (
+        "مدیر مجموعه",
+        (
+            "school:read",
+            "school:create",
+            "academic_year:create",
+            "class:create",
+            "subject:create",
+            "membership:read",
+            "membership:invite",
+            "role:manage",
+            "audit:read",
+        ),
+    ),
+    "school_admin": (
+        "مدیر مدرسه",
+        (
+            "school:read",
+            "academic_year:create",
+            "class:create",
+            "subject:create",
+        ),
+    ),
+    "school_viewer": (
+        "ناظر مدرسه",
+        ("school:read",),
+    ),
+}
+
+
+async def _seed_tenant_roles(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+) -> None:
+    """Create safe, tenant-local baseline roles for the first admin invitations."""
+    for role_key, (role_name, permission_keys) in _TENANT_ROLE_TEMPLATES.items():
+        role = (
+            await db.execute(
+                select(Role).where(
+                    Role.tenant_id == tenant_id,
+                    Role.key == role_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if role is None:
+            role = Role(
+                tenant_id=tenant_id,
+                key=role_key,
+                name=role_name,
+                is_system=True,
+            )
+            db.add(role)
+            await db.flush()
+
+        for permission_key in permission_keys:
+            permission = (
+                await db.execute(
+                    select(Permission).where(Permission.key == permission_key)
+                )
+            ).scalar_one_or_none()
+            if permission is None:
+                permission = Permission(
+                    key=permission_key,
+                    description=f"Baseline permission: {permission_key}",
+                )
+                db.add(permission)
+                await db.flush()
+
+            existing = (
+                await db.execute(
+                    select(RolePermission.id).where(
+                        RolePermission.role_id == role.id,
+                        RolePermission.permission_id == permission.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                db.add(
+                    RolePermission(
+                        role_id=role.id,
+                        permission_id=permission.id,
+                        effect="allow",
+                    )
+                )
+    await db.flush()
+
+
 async def create_tenant(
     db: AsyncSession,
     *,
@@ -137,6 +229,7 @@ async def create_tenant(
     )
     db.add(tenant)
     await _flush_or_conflict(db, "Tenant slug already exists.")
+    await _seed_tenant_roles(db, tenant_id=tenant.id)
     await record_event(
         db,
         event_type="tenant.created",
