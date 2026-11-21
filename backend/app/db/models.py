@@ -344,6 +344,25 @@ class RoleBinding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+
+class ProcessedTelegramUpdate(Base):
+    __tablename__ = "processed_telegram_updates"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('processing', 'completed', 'failed')",
+            name="ck_processed_telegram_updates_status",
+        ),
+        Index("ix_processed_telegram_updates_lease", "status", "lease_expires_at"),
+    )
+
+    update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default="processing", nullable=False)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (
