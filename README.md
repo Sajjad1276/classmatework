@@ -26,10 +26,10 @@ PR شماره ۲: Draft، باز و ادغام‌نشده.
 
 - هویت مدیر بر اساس Telegram User ID عددی؛ username فقط metadata است.
 - Bootstrap مالک پلتفرم از CLI با Telegram ID عددی.
-- Pairing یک‌بارمصرف مدیر جدید، محدود به Telegram ID مقصد، با Token خامِ ذخیره‌نشده و Audit.
+- Pairing یک‌بارمصرف با Role و Scope مشخص، محدود به Telegram ID مقصد، Hash-only و Audit؛ پذیرش دعوت RoleBinding و در Scope مجموعه Membership را به‌صورت اتمیک می‌سازد.
 - Bot Runtime با aiogram 3، Long Polling، Redis FSM و قفل توزیع‌شده برای جلوگیری از دو Poller هم‌زمان.
 - Private Chat guard و رد حساب ناشناس/تعلیق‌شده.
-- فرمان‌های /start، /menu، /back، /cancel، /invite، /help و /status.
+- فرمان‌های /start، /menu، /back، /cancel، /roles، /invite، /help و /status؛ فهرست نقش‌ها برای Platform یا Tenant مجاز.
 - Inline menu پویا بر اساس Permission.
 - فرم چندمرحله‌ای ساخت Tenant با اعتبارسنجی، Preview، تأیید، Back، Cancel و شناسه Flow برای رد Callbackهای قدیمی.
 - Use Caseهای مستقل برای ساخت/فهرست Tenant، School، Academic Year، Class و Subject.
@@ -39,7 +39,7 @@ PR شماره ۲: Draft، باز و ادغام‌نشده.
 - Migrationهای هویت تلگرام و وضعیت پردازش Telegram Update.
 - جلوگیری از پردازش دوباره Update با ثبت Durable در PostgreSQL و Lease؛ Actionهای دامنه همچنان باید Idempotent بمانند.
 - CI بدون Frontend Build و دارای PostgreSQL 16 و Redis 7 واقعی برای Migration و تست‌های یکپارچگی.
-- آخرین CI برای Commit `fcd542e67eab873bfb8b9bca626ce3d7388b2b27` موفق است: Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44932613037).
+- آخرین CI برای Commit 746c1be44488df498737bcf5b2dd385ea0799f93 موفق است: Ruff، پنج Migration PostgreSQL و ۳۴ تست با یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44936217541).
 
 ### هنوز انجام‌نشده یا نیازمند تأیید
 
@@ -47,7 +47,7 @@ PR شماره ۲: Draft، باز و ادغام‌نشده.
 - اجرای واقعی Bot با Token آزمایشی در Telegram و آزمون End-to-End هنوز انجام نشده است؛ CI موفق، جایگزین این آزمون نیست.
 - قطع اتصال Telegram، بازیابی مدیر، MFA/Step-up و سیاست تأیید دوم.
 - ویرایش/آرشیو موجودیت‌های آموزشی، Pagination و Search کامل در Bot هنوز باقی مانده‌اند؛ فرم‌های ایجاد و فهرست پایه پیاده‌سازی شده‌اند.
-- مدیریت Role/Permission از طریق Bot.
+- چرخه کامل مدیریت Role/Permission (ساخت/ویرایش/آرشیو و ماتریس مجوزها)؛ در حال حاضر فهرست نقش‌ها و واگذاری کنترل‌شده از طریق دعوت پیاده‌سازی شده‌اند.
 - API احراز هویت‌شده Machine-to-Machine؛ در حال حاضر API عمومی فقط Health را ارائه می‌کند.
 - Audit correlation برای Telegram Update ایجاد شده، اما بازبینی کامل end-to-end و پوشش Readهای حساس باقی است.
 - اتصال عملیاتی و Deploy در Railway انجام نشده است.
