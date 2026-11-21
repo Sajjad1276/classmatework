@@ -2,12 +2,12 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.types import Update
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
 from app.core.request_context import request_id_context
 from app.db.models import ProcessedTelegramUpdate
