@@ -12,6 +12,7 @@ from aiogram.types import BotCommand
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.bot.academic_router import router as academic_router
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
 from app.bot.middleware import (
     DatabaseSessionMiddleware,
@@ -20,7 +21,6 @@ from app.bot.middleware import (
 )
 from app.bot.rate_limit import TelegramRateLimitMiddleware
 from app.bot.router import router
-from app.bot.academic_router import router as academic_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.runtime import create_database_engine, create_redis_client, create_session_factory
