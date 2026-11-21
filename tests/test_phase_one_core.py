@@ -131,16 +131,6 @@ async def test_explicit_deny_overrides_allow() -> None:
     await engine.dispose()
 
 
-def test_argon2_password_hash_is_not_the_password() -> None:
-    password = "Correct-Horse-Battery-1"
-    encoded = hash_password(password)
-
-    assert encoded != password
-    assert encoded.startswith("$argon2id$")
-    assert verify_password(encoded, password)
-    assert not verify_password(encoded, "incorrect-password")
-    assert not needs_rehash(encoded)
-
 
 def test_audit_events_are_immutable_through_orm() -> None:
     with pytest.raises(RuntimeError, match="append-only"):
@@ -279,7 +269,6 @@ async def test_deny_on_descendant_overrides_inherited_parent_allow() -> None:
         user = User(
             email="deny-child@example.com",
             display_name="Deny Child",
-            password_hash=hash_password("a-long-test-password"),
         )
         db.add_all([tenant, user])
         await db.flush()
