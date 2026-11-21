@@ -42,6 +42,7 @@ from app.modules.identity.pairing import (
     PairingRejected,
     consume_admin_pairing,
     create_admin_pairing,
+    revoke_admin_pairing,
 )
 from app.modules.identity.principal import TelegramPrincipal
 
@@ -463,6 +464,7 @@ async def invite_command(
         "دعوت‌نامه یک‌بارمصرف با نقش و محدوده مشخص ساخته شد.\n\n"
         f"نام: {display_name}\n"
         f"Telegram ID مقصد: {telegram_user_id}\n"
+        f"شناسه دعوت: {invitation.pairing_id}\n"
         f"نقش: {invitation.role_key}\n"
         f"محدوده: {scope_label}\n"
         f"انقضا: {expires}\n\n"
@@ -470,6 +472,40 @@ async def invite_command(
         f"{pairing_link}\n\n"
         "با پذیرش لینک، نقش و عضویت فوق به‌صورت هم‌زمان فعال می‌شوند."
     )
+
+
+@router.message(Command("revoke-invite"))
+async def revoke_invite_command(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+) -> None:
+    parts = (message.text or "").strip().split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "قالب فرمان:\n/revoke-invite INVITATION_UUID\n\n"
+            "شناسه دعوت در پیام ایجاد دعوت‌نامه نمایش داده می‌شود."
+        )
+        return
+    try:
+        invitation_id = UUID(parts[1])
+        await revoke_admin_pairing(
+            db,
+            actor_id=principal.user.id,
+            pairing_id=invitation_id,
+        )
+    except ValueError:
+        await message.answer("شناسه دعوت معتبر نیست.")
+        return
+    except PairingNotAllowed:
+        await message.answer("مجوز لغو این دعوت‌نامه را ندارید.")
+        return
+    except PairingRejected:
+        await message.answer(
+            "دعوت‌نامه وجود ندارد، قبلاً لغو شده یا توسط کاربر پذیرفته شده است."
+        )
+        return
+    await message.answer("دعوت‌نامه لغو شد؛ لینک قبلی دیگر قابل استفاده نیست.")
 
 
 @router.callback_query(F.data == "tenant:list")
@@ -703,6 +739,7 @@ async def help_command(
         "/cancel — لغو فرم جاری\n"
         "/roles [TENANT_UUID] — فهرست نقش‌های قابل واگذاری\n"
         "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
+        "/revoke-invite INVITATION_UUID — لغو دعوت پذیرفته‌نشده\n"
         "/help — راهنما\n"
         "/status — بررسی سلامت اتصال‌ها\n\n"
         "گزینه‌های منو بر اساس مجوز شما نمایش داده می‌شوند.",
