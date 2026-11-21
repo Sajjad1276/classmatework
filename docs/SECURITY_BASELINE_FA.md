@@ -89,6 +89,7 @@
 - Bootstrap مالک پلتفرم با Telegram ID عددی و Pairing یک‌بارمصرف مدیران وجود دارد.
 - Private Chat Guard و رد User/TelegramAccount غیرفعال پیاده‌سازی شده است.
 - Redis FSM، قفل Poller، شناسه Flow برای Callbackهای Wizard، ثبت Durable پردازش Update و Rate Limit اتمیک پیام/Callback پیاده‌سازی شده‌اند؛ اختلال Redis باعث رد درخواست می‌شود.
+- Bot فرم‌های پایه انتخاب/ایجاد School، Academic Year، Class و Subject را با Use Caseهای دارای Permission و Tenant ownership اجرا می‌کند.
 - Telegram Update correlation به Audit context منتقل می‌شود.
 - RBAC ارث‌بری والد به فرزند و Deny-overrides-Allow دارد؛ Composite FK و RoleBinding Check Constraint در Migration 0002 تعریف شده‌اند.
 - Use Caseهای Tenant/School/Academic Year/Class/Subject در Application Layer وجود دارند؛ Bot فعلاً فهرست/ایجاد Tenant را به UI متصل کرده است.
@@ -96,7 +97,7 @@
 
 **موارد باز:**
 
-- CI برای Commit `d66416d76ad5b3220eae410ca85b2328190cab01` سبز شده است (Ruff، چهار Migration، ۲۵ تست و یک Warning غیرمسدودکننده).
+- CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1` سبز شده است (Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده). Run: `44932267328`.
 - اجرای واقعی Bot با Token معتبر و تست end-to-end هنوز انجام نشده است.
 - لغو اتصال، بازیابی مدیر و Step-up/MFA کامل نیست.
 - مدیریت Role/Permission و فرم‌های کامل CRUD آموزشی در Bot هنوز تکمیل نشده‌اند.
