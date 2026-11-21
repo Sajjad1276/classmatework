@@ -25,6 +25,7 @@ from app.application.errors import (
 )
 from app.application.tenant_access import (
     create_tenant_role,
+    list_admin_invitations,
     list_platform_roles,
     list_tenant_members,
     list_tenant_roles,
@@ -464,6 +465,72 @@ async def members_command(
     await message.answer("\n\n".join(lines))
 
 
+@router.message(Command("invites"))
+async def invitations_command(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+) -> None:
+    parts = (message.text or "").strip().split(maxsplit=1)
+    tenant_id: UUID | None = None
+    if len(parts) == 2:
+        try:
+            tenant_id = UUID(parts[1])
+        except ValueError:
+            await message.answer("قالب فرمان: /invites [TENANT_UUID]")
+            return
+
+    try:
+        invitations = await list_admin_invitations(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            limit=50,
+        )
+    except AccessDenied:
+        await message.answer(
+            "مجوز مشاهده دعوت‌های این محدوده را ندارید. "
+            "برای Tenant از /invites TENANT_UUID استفاده کنید."
+        )
+        return
+    except ApplicationError as exc:
+        await message.answer(str(exc))
+        return
+
+    if not invitations:
+        await message.answer("دعوت‌نامه باز یا منقضی‌نشده‌ای در این محدوده پیدا نشد.")
+        return
+
+    heading = (
+        f"دعوت‌های مجموعه {tenant_id}"
+        if tenant_id is not None
+        else "دعوت‌های مدیران پلتفرم و مجموعه‌ها"
+    )
+    lines = [f"{heading}\n"]
+    for index, invitation in enumerate(invitations, start=1):
+        scope_label = (
+            "Platform"
+            if invitation.scope_type == "platform"
+            else f"Tenant {invitation.tenant_id}"
+        )
+        status_label = (
+            "منقضی‌شده — نیازمند صدور مجدد"
+            if invitation.status == "expired"
+            else "منتظر پذیرش"
+        )
+        lines.append(
+            f"{index}. {invitation.display_name}\n"
+            f"   Invitation ID: {invitation.invitation_id}\n"
+            f"   Telegram ID: {invitation.target_telegram_user_id}\n"
+            f"   Role: {invitation.role_key}\n"
+            f"   Scope: {scope_label}\n"
+            f"   وضعیت: {status_label}\n"
+            f"   انقضا: {invitation.expires_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"   لغو: /revoke-invite {invitation.invitation_id}"
+        )
+    await message.answer("\n\n".join(lines))
+
+
 @router.message(Command("invite"))
 async def invite_command(
     message: Message,
@@ -826,6 +893,7 @@ async def help_command(
         "/role-create TENANT_UUID KEY PERMISSIONS | NAME — ساخت نقش محدود به اختیارات شما\n"
         "/members TENANT_UUID — فهرست اعضای فعال مجموعه\n"
         "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
+        "/invites [TENANT_UUID] — فهرست دعوت‌های باز و منقضی‌شده\n"
         "/revoke-invite INVITATION_UUID — لغو دعوت پذیرفته‌نشده\n"
         "/help — راهنما\n"
         "/status — بررسی سلامت اتصال‌ها\n\n"
