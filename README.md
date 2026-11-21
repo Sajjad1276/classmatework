@@ -29,17 +29,17 @@ PR شماره ۲: Draft، باز و ادغام‌نشده.
 - Pairing یک‌بارمصرف با Role و Scope مشخص، محدود به Telegram ID مقصد، Hash-only و Audit؛ پذیرش دعوت RoleBinding و در Scope مجموعه Membership را به‌صورت اتمیک می‌سازد.
 - Bot Runtime با aiogram 3، Long Polling، Redis FSM و قفل توزیع‌شده برای جلوگیری از دو Poller هم‌زمان.
 - Private Chat guard و رد حساب ناشناس/تعلیق‌شده.
-- فرمان‌های /start، /menu، /back، /cancel، /roles، /role-create، /members، /member-suspend، /invite، /invites، /revoke-invite، /help و /status.
+- فرمان‌های /start، /menu، /back، /cancel، /roles، /role-create، /members، /member-suspend، /member-reactivate، /invite، /invites، /revoke-invite، /help و /status.
 - Inline menu پویا بر اساس Permission.
 - فرم چندمرحله‌ای ساخت Tenant با اعتبارسنجی، Preview، تأیید، Back، Cancel و شناسه Flow برای رد Callbackهای قدیمی.
-- Use Caseهای مستقل برای ساخت/فهرست Tenant، School، Academic Year، Class، Subject، نقش‌های Tenant، فهرست اعضای فعال، تعلیق کنترل‌شدهٔ عضویت و فهرست دعوت‌های باز/منقضی.
+- Use Caseهای مستقل برای ساخت/فهرست Tenant، School، Academic Year، Class، Subject، نقش‌های Tenant، فهرست اعضای فعال، تعلیق و فعال‌سازی مجدد کنترل‌شدهٔ عضویت و فهرست دعوت‌های باز/منقضی.
 - فرم‌های تلگرام برای انتخاب Tenant/School و فهرست/ایجاد مدرسه، سال تحصیلی، کلاس و درس با Preview، Confirm، Back و Cancel.
 - RBAC با ارث‌بری از والد به فرزند، Deny-overrides-Allow و کنترل Membership.
 - Composite Foreign Key برای جلوگیری از اتصال School، Academic Year، Class و Subject به Tenant/School اشتباه.
 - Migrationهای هویت تلگرام و وضعیت پردازش Telegram Update.
 - جلوگیری از پردازش دوباره Update با ثبت Durable در PostgreSQL و Lease؛ Actionهای دامنه همچنان باید Idempotent بمانند.
 - CI بدون Frontend Build و دارای PostgreSQL 16 و Redis 7 واقعی برای Migration و تست‌های یکپارچگی.
-- آخرین CI برای Commit dcd0ed2b0bb2102bbb72805b2a4178ca72ddcc89 موفق است: Ruff، شش Migration PostgreSQL و ۴۵ تست با یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44938276215).
+- آخرین CI برای Commit 85eb8e32a90e2203c5d578c426a9f6d7d8d912e7 موفق است: Ruff، شش Migration PostgreSQL و ۴۷ تست با یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44938684499).
 
 ### هنوز انجام‌نشده یا نیازمند تأیید
 
