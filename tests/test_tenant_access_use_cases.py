@@ -5,12 +5,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.application.errors import AccessDenied
+from app.application.errors import AccessDenied, InvalidApplicationInput
 from app.application.tenant_access import (
     create_tenant_role,
     list_admin_invitations,
     list_tenant_members,
     list_tenant_roles,
+    preview_tenant_member_suspension,
+    suspend_tenant_member,
 )
 from app.db.base import Base
 from app.db.models import (
@@ -25,6 +27,7 @@ from app.db.models import (
     TenantMembership,
     User,
 )
+from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import create_admin_pairing
 
 
@@ -368,4 +371,168 @@ async def test_platform_invitation_directory_requires_global_assignment_authorit
                 actor_id=manager.id,
                 tenant_id=None,
             )
+    await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_suspending_regular_member_ends_only_that_tenant_membership_and_roles() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, member = await _seed_manager_and_member(db)
+
+        preview = await preview_tenant_member_suspension(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            member_user_id=member.id,
+        )
+        assert preview.user_id == member.id
+        assert preview.display_name == "School Teacher"
+        assert not preview.is_tenant_admin
+
+        result = await suspend_tenant_member(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            member_user_id=member.id,
+            reason="Repeated violation of tenant access policy",
+        )
+        assert result.user_id == member.id
+        assert result.ended_role_bindings == 1
+
+        membership = (
+            await db.execute(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.id,
+                    TenantMembership.user_id == member.id,
+                )
+            )
+        ).scalar_one()
+        assert membership.status == "suspended"
+        assert membership.ends_at is not None
+
+        binding = (
+            await db.execute(
+                select(RoleBinding).where(
+                    RoleBinding.tenant_id == tenant.id,
+                    RoleBinding.user_id == member.id,
+                )
+            )
+        ).scalar_one()
+        assert binding.ends_at is not None
+
+        assert not await has_permission(
+            db,
+            user_id=member.id,
+            permission_key="school:read",
+            tenant_id=tenant.id,
+            scope_type="tenant",
+            scope_id=tenant.id,
+        )
+        remaining = await list_tenant_members(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+        )
+        assert [row.user_id for row in remaining] == [manager.id]
+
+        audit = (
+            await db.execute(
+                select(AuditEvent.event_type).where(
+                    AuditEvent.event_type == "membership.tenant_member_suspended"
+                )
+            )
+        ).scalars().all()
+        assert audit == ["membership.tenant_member_suspended"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_cannot_suspend_themselves() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, _ = await _seed_manager_and_member(db)
+        with pytest.raises(InvalidApplicationInput):
+            await suspend_tenant_member(
+                db,
+                actor_id=manager.id,
+                tenant_id=tenant.id,
+                member_user_id=manager.id,
+                reason="Self suspension should never be allowed",
+            )
+
+        membership = (
+            await db.execute(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.id,
+                    TenantMembership.user_id == manager.id,
+                )
+            )
+        ).scalar_one()
+        assert membership.status == "active"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_suspend_the_last_active_tenant_admin() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, last_admin, _ = await _seed_manager_and_member(db)
+        membership_manage = (
+            await db.execute(
+                select(Permission).where(Permission.key == "membership:manage")
+            )
+        ).scalar_one()
+        operator = User(display_name="Membership Operator", status="active")
+        operator_role = Role(
+            tenant_id=tenant.id,
+            key=f"membership_operator_{uuid4().hex[:8]}",
+            name="Membership Operator",
+            is_system=False,
+        )
+        db.add_all([operator, operator_role])
+        await db.flush()
+        db.add_all(
+            [
+                RolePermission(
+                    role_id=operator_role.id,
+                    permission_id=membership_manage.id,
+                    effect="allow",
+                ),
+                RoleBinding(
+                    user_id=operator.id,
+                    role_id=operator_role.id,
+                    tenant_id=tenant.id,
+                    scope_type="tenant",
+                    scope_id=tenant.id,
+                    created_by_id=last_admin.id,
+                ),
+                TenantMembership(
+                    user_id=operator.id,
+                    tenant_id=tenant.id,
+                    status="active",
+                ),
+            ]
+        )
+        await db.commit()
+
+        with pytest.raises(InvalidApplicationInput, match="آخرین مدیر فعال"):
+            await suspend_tenant_member(
+                db,
+                actor_id=operator.id,
+                tenant_id=tenant.id,
+                member_user_id=last_admin.id,
+                reason="Attempt to suspend the only tenant administrator",
+            )
+
+        still_active = (
+            await db.execute(
+                select(TenantMembership.status).where(
+                    TenantMembership.tenant_id == tenant.id,
+                    TenantMembership.user_id == last_admin.id,
+                )
+            )
+        ).scalar_one()
+        assert still_active == "active"
     await engine.dispose()
