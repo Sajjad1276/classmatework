@@ -34,6 +34,7 @@ def _as_utc(value: datetime) -> datetime:
 
 @dataclass(frozen=True, slots=True)
 class PairingInvitation:
+    pairing_id: UUID
     user_id: UUID
     telegram_user_id: int
     role_key: str
@@ -308,6 +309,7 @@ async def create_admin_pairing(
     )
     await db.commit()
     return PairingInvitation(
+        pairing_id=pairing.id,
         user_id=user.id,
         telegram_user_id=target_telegram_user_id,
         role_key=role.key,
@@ -440,3 +442,68 @@ async def consume_admin_pairing(
     )
     await db.commit()
     return account
+
+
+
+async def revoke_admin_pairing(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    pairing_id: UUID,
+) -> None:
+    pairing = (
+        await db.execute(
+            select(AdminPairingToken)
+            .where(AdminPairingToken.id == pairing_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if pairing is None or pairing.consumed_at is not None or pairing.revoked_at is not None:
+        raise PairingRejected
+
+    actor = await db.get(User, actor_id)
+    if actor is None or actor.status != "active":
+        raise PairingNotAllowed
+
+    # A creator may always revoke their own pending invite. Revocation by another
+    # administrator requires current assignment authority at the invitation scope.
+    if pairing.created_by_id != actor_id:
+        tenant_id = await _resolve_invitation_scope(
+            db,
+            scope_type=pairing.scope_type,
+            scope_id=pairing.scope_id,
+        )
+        await _require_assignment_authority(
+            db,
+            actor_id=actor_id,
+            scope_type=pairing.scope_type,
+            tenant_id=tenant_id,
+        )
+
+    now = datetime.now(UTC)
+    pairing.revoked_at = now
+    pending_user = await db.get(User, pairing.user_id)
+    if pending_user is not None and pending_user.status == "pending":
+        pending_user.status = (
+            "invitation_expired"
+            if _as_utc(pairing.expires_at) <= now
+            else "invitation_revoked"
+        )
+
+    await record_event(
+        db,
+        event_type="identity.telegram_pairing.revoked",
+        actor_id=actor_id,
+        tenant_id=pairing.tenant_id,
+        aggregate_type="user",
+        aggregate_id=pairing.user_id,
+        event_data={
+            "pairing_token_id": str(pairing.id),
+            "target_telegram_user_id": pairing.target_telegram_user_id,
+            "role_id": str(pairing.role_id),
+            "scope_type": pairing.scope_type,
+            "scope_id": str(pairing.scope_id) if pairing.scope_id else None,
+            "created_by_id": str(pairing.created_by_id),
+        },
+    )
+    await db.commit()
