@@ -443,3 +443,138 @@ async def create_subject(
     await _commit_or_conflict(db, "Subject code already exists for this school.")
     await db.refresh(subject)
     return subject
+
+
+
+async def list_academic_years(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    limit: int = 50,
+) -> list[AcademicYear]:
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Academic year page size must be between 1 and 100.")
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="school:read",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    result = await db.execute(
+        select(AcademicYear)
+        .where(
+            AcademicYear.tenant_id == tenant_id,
+            AcademicYear.school_id == school_id,
+        )
+        .order_by(AcademicYear.starts_on.desc(), AcademicYear.name)
+        .limit(limit)
+    )
+    years = list(result.scalars().all())
+    await record_event(
+        db,
+        event_type="academic_year.directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="academic_year_directory",
+        event_data={
+            "school_id": str(school_id),
+            "returned_count": len(years),
+            "limit": limit,
+        },
+    )
+    await db.commit()
+    return years
+
+
+async def list_classes(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    academic_year_id: UUID | None = None,
+    limit: int = 50,
+) -> list[ClassGroup]:
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Class page size must be between 1 and 100.")
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="school:read",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    statement = select(ClassGroup).where(
+        ClassGroup.tenant_id == tenant_id,
+        ClassGroup.school_id == school_id,
+    )
+    if academic_year_id is not None:
+        statement = statement.where(ClassGroup.academic_year_id == academic_year_id)
+    result = await db.execute(
+        statement.order_by(ClassGroup.name, ClassGroup.code).limit(limit)
+    )
+    classes = list(result.scalars().all())
+    await record_event(
+        db,
+        event_type="class.directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="class_directory",
+        event_data={
+            "school_id": str(school_id),
+            "academic_year_id": str(academic_year_id) if academic_year_id else None,
+            "returned_count": len(classes),
+            "limit": limit,
+        },
+    )
+    await db.commit()
+    return classes
+
+
+async def list_subjects(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    limit: int = 50,
+) -> list[Subject]:
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Subject page size must be between 1 and 100.")
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="school:read",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    result = await db.execute(
+        select(Subject)
+        .where(
+            Subject.tenant_id == tenant_id,
+            Subject.school_id == school_id,
+        )
+        .order_by(Subject.name, Subject.code)
+        .limit(limit)
+    )
+    subjects = list(result.scalars().all())
+    await record_event(
+        db,
+        event_type="subject.directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="subject_directory",
+        event_data={
+            "school_id": str(school_id),
+            "returned_count": len(subjects),
+            "limit": limit,
+        },
+    )
+    await db.commit()
+    return subjects
