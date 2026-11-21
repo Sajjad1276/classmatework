@@ -726,3 +726,235 @@ async def suspend_tenant_member(
         ended_role_bindings=len(bindings),
         reason=normalized_reason,
     )
+
+
+
+@dataclass(frozen=True, slots=True)
+class TenantMemberReactivationPreview:
+    user_id: UUID
+    display_name: str
+    role_key: str
+    permission_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TenantMemberReactivationResult:
+    user_id: UUID
+    display_name: str
+    tenant_id: UUID
+    role_key: str
+    reactivated_at: datetime
+
+
+async def _validate_reactivation(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    member_user_id: UUID,
+    role_key: str,
+    lock: bool,
+) -> tuple[TenantMembership, User, Role, tuple[str, ...]]:
+    tenant_statement = select(Tenant).where(
+        Tenant.id == tenant_id,
+        Tenant.status == "active",
+    )
+    if lock:
+        tenant_statement = tenant_statement.with_for_update()
+    tenant = (await db.execute(tenant_statement)).scalar_one_or_none()
+    if tenant is None:
+        raise ResourceNotFound("مجموعه فعال پیدا نشد.")
+
+    membership_statement = select(TenantMembership).where(
+        TenantMembership.tenant_id == tenant_id,
+        TenantMembership.user_id == member_user_id,
+        TenantMembership.status == "suspended",
+    )
+    if lock:
+        membership_statement = membership_statement.with_for_update()
+    membership = (
+        await db.execute(membership_statement)
+    ).scalar_one_or_none()
+    if membership is None:
+        raise ResourceNotFound("عضویت تعلیق‌شده‌ای برای این کاربر در مجموعه پیدا نشد.")
+
+    user = await db.get(User, member_user_id)
+    if user is None or user.status != "active":
+        raise ResourceNotFound("حساب کاربر فعال نیست.")
+    account = (
+        await db.execute(
+            select(TelegramAccount.id).where(
+                TelegramAccount.user_id == member_user_id,
+                TelegramAccount.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if account is None:
+        raise ResourceConflict(
+            "حساب تلگرام این کاربر فعال نیست؛ ابتدا فرآیند اتصال مجدد تلگرام را تکمیل کنید."
+        )
+    if actor_id == member_user_id:
+        raise InvalidApplicationInput("مدیر نمی‌تواند عضویت خودش را دوباره فعال کند.")
+
+    normalized_role_key = role_key.strip().lower()
+    role = (
+        await db.execute(
+            select(Role).where(
+                Role.tenant_id == tenant_id,
+                Role.key == normalized_role_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if role is None:
+        raise ResourceNotFound("نقش انتخاب‌شده در این مجموعه وجود ندارد.")
+
+    permission_rows = (
+        await db.execute(
+            select(Permission.key, RolePermission.effect)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == role.id)
+            .order_by(Permission.key)
+        )
+    ).all()
+    allow_keys = tuple(key for key, effect in permission_rows if effect == "allow")
+    if not allow_keys:
+        raise InvalidApplicationInput("نقش انتخاب‌شده هیچ مجوز فعالی ندارد.")
+
+    for permission_key in allow_keys:
+        allowed = await has_permission(
+            db,
+            user_id=actor_id,
+            permission_key=permission_key,
+            tenant_id=tenant_id,
+            scope_type="tenant",
+            scope_id=tenant_id,
+        )
+        if not allowed:
+            raise AccessDenied
+
+    return membership, user, role, allow_keys
+
+
+async def preview_tenant_member_reactivation(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    member_user_id: UUID,
+    role_key: str,
+) -> TenantMemberReactivationPreview:
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="membership:manage",
+    )
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    _, user, role, permission_keys = await _validate_reactivation(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        member_user_id=member_user_id,
+        role_key=role_key,
+        lock=False,
+    )
+    return TenantMemberReactivationPreview(
+        user_id=user.id,
+        display_name=user.display_name,
+        role_key=role.key,
+        permission_keys=permission_keys,
+    )
+
+
+async def reactivate_tenant_member(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    member_user_id: UUID,
+    role_key: str,
+    reason: str,
+) -> TenantMemberReactivationResult:
+    normalized_reason = reason.strip()
+    if not 10 <= len(normalized_reason) <= 500:
+        raise InvalidApplicationInput(
+            "دلیل فعال‌سازی مجدد باید بین ۱۰ تا ۵۰۰ نویسه باشد."
+        )
+
+    # Serialize tenant membership lifecycle changes and re-check authority at commit time.
+    await db.execute(
+        select(Tenant.id)
+        .where(Tenant.id == tenant_id)
+        .with_for_update()
+    )
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="membership:manage",
+    )
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    membership, user, role, permission_keys = await _validate_reactivation(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        member_user_id=member_user_id,
+        role_key=role_key,
+        lock=True,
+    )
+
+    now = datetime.now(UTC)
+    membership.status = "active"
+    membership.starts_at = now
+    membership.ends_at = None
+    binding = RoleBinding(
+        user_id=member_user_id,
+        role_id=role.id,
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+        starts_at=now,
+        created_by_id=actor_id,
+    )
+    db.add(binding)
+    await db.flush()
+
+    await record_event(
+        db,
+        event_type="membership.tenant_member_reactivated",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="membership",
+        aggregate_id=membership.id,
+        event_data={
+            "member_user_id": str(member_user_id),
+            "role_id": str(role.id),
+            "role_key": role.key,
+            "permission_keys": list(permission_keys),
+            "reason": normalized_reason,
+        },
+    )
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ResourceConflict(
+            "عضویت فعال دیگری برای این کاربر در مجموعه وجود دارد."
+        ) from exc
+    return TenantMemberReactivationResult(
+        user_id=user.id,
+        display_name=user.display_name,
+        tenant_id=tenant_id,
+        role_key=role.key,
+        reactivated_at=now,
+    )
