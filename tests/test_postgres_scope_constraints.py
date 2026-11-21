@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+
 from app.db.runtime import create_database_engine
 
 
@@ -138,7 +139,7 @@ async def test_postgres_rejects_invalid_role_binding_scope_shapes() -> None:
     if not database_url:
         pytest.skip("TEST_POSTGRES_URL is not configured.")
 
-    engine = create_async_engine(database_url)
+    engine = create_database_engine(database_url)
     tenant_a, tenant_b = uuid4(), uuid4()
     user_id, role_id = uuid4(), uuid4()
     now = datetime.now(timezone.utc)
@@ -238,7 +239,7 @@ async def test_postgres_enforces_pairing_scope_and_one_open_invite_per_target() 
     if not database_url:
         pytest.skip("TEST_POSTGRES_URL is not configured.")
 
-    engine = create_async_engine(database_url)
+    engine = create_database_engine(database_url)
     tenant_id, user_id, role_id = uuid4(), uuid4(), uuid4()
     now = datetime.now(timezone.utc)
     target_telegram_id = 8_123_456_789
