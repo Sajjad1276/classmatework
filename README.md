@@ -39,7 +39,7 @@ PR شماره ۲: Draft، باز و ادغام‌نشده.
 - Migrationهای هویت تلگرام و وضعیت پردازش Telegram Update.
 - جلوگیری از پردازش دوباره Update با ثبت Durable در PostgreSQL و Lease؛ Actionهای دامنه همچنان باید Idempotent بمانند.
 - CI بدون Frontend Build و دارای PostgreSQL 16 و Redis 7 واقعی برای Migration و تست‌های یکپارچگی.
-- آخرین CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1` موفق است: Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44932267328).
+- آخرین CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d` موفق است: Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44932471573).
 
 ### هنوز انجام‌نشده یا نیازمند تأیید
 
