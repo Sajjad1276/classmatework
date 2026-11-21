@@ -131,6 +131,7 @@ async def main() -> None:
                 BotCommand(command="role-create", description="ساخت نقش در مجموعه"),
                 BotCommand(command="members", description="فهرست اعضای مجموعه"),
                 BotCommand(command="invite", description="دعوت مدیر با نقش مشخص"),
+                BotCommand(command="invites", description="فهرست دعوت‌های باز"),
                 BotCommand(command="revoke-invite", description="لغو دعوت پذیرفته‌نشده"),
                 BotCommand(command="help", description="راهنمای ربات"),
                 BotCommand(command="status", description="وضعیت سرویس‌ها"),
