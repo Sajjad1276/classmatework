@@ -9,7 +9,7 @@ The phase-one schema is delivered through four ordered migrations:
 
 Apply migrations after provisioning PostgreSQL:
 
-    alembic -c backend/alembic.ini upgrade head
+    PYTHONPATH=backend alembic -c backend/alembic.ini upgrade head
 
 ## First platform owner
 
