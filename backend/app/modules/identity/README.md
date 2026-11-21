@@ -11,6 +11,7 @@
 - Every update resolves the active TelegramAccount and active User before routing.
 - Tenant membership, RoleBinding scope and time validity are checked by the authorization layer for each domain use case.
 - A disabled User or unlinked/blocked TelegramAccount is rejected on the next update.
+- Bot Token is configured as a Pydantic SecretStr and must be present/non-empty before polling starts.
 
 ## Bootstrap and pairing
 
@@ -25,7 +26,7 @@
 ## Bot sessions and update state
 
 - Browser Cookie Sessions and CSRF are removed.
-- Redis stores FSM state with TTL and the bot poller uses a Redis lease so two pollers do not run concurrently.
+- Redis stores FSM state with TTL, maintains the single-poller lease, and applies separate atomic per-sender message/callback rate limits (defaults: 30 messages and 45 callbacks per 60 seconds). Rate limiting fails closed if Redis is unavailable.
 - PostgreSQL stores pending pairing tokens and processed Telegram Update status/leases.
 - Wizard callbacks are bound to a per-flow token; an old confirmation/back/cancel button cannot affect a later flow.
 - Telegram Update IDs are recorded to suppress duplicate deliveries. This is not a substitute for idempotent domain use cases: a crash after a domain commit but before Update completion can still require the use case's own idempotency protection.
