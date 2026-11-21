@@ -1,4 +1,4 @@
-.PHONY: install dev test lint format api frontend
+.PHONY: install dev test lint format api
 
 install:
 	python -m pip install -r requirements-dev.txt
@@ -17,6 +17,3 @@ lint:
 
 format:
 	ruff check --fix backend tests
-
-frontend:
-	cd frontend && npm install && npm run dev
