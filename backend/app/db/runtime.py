@@ -7,6 +7,12 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+# ClassMate Work shares the Railway Postgres *server* with other services,
+# but it must never share their tables. Every connection is pinned to this
+# application's own schema.
+DATABASE_SCHEMA = "classmatework"
+DATABASE_SEARCH_PATH = f"{DATABASE_SCHEMA},public"
+
 
 def normalize_async_database_url(database_url: str) -> str:
     """Use asyncpg for PostgreSQL URLs consumed by SQLAlchemy async engines.
@@ -26,6 +32,7 @@ def create_database_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(
         normalize_async_database_url(database_url),
         pool_pre_ping=True,
+        connect_args={"server_settings": {"search_path": DATABASE_SEARCH_PATH}},
     )
 
 
