@@ -7,15 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     AdminPairingToken,
-    ClassGroup,
-    Organization,
     Permission,
     Role,
     RoleBinding,
     RolePermission,
-    School,
     TelegramAccount,
-    Tenant,
     TenantMembership,
     User,
 )
@@ -68,47 +64,23 @@ async def _resolve_invitation_scope(
     scope_type: str,
     scope_id: UUID | None,
 ) -> UUID | None:
+    """Resolve only the assignment scopes exposed by the phase-one bot UI."""
     if scope_type == "platform":
         if scope_id is not None:
             raise ValueError("Platform scope must not have a scope ID.")
         return None
+    if scope_type != "tenant" or scope_id is None:
+        raise ValueError("Phase one invitations support only platform or tenant scope.")
 
-    if scope_id is None:
-        raise ValueError("A scope ID is required for non-platform invitations.")
-
-    if scope_type == "tenant":
-        tenant_id = scope_id
-    elif scope_type == "organization":
-        tenant_id = (
-            await db.execute(
-                select(Organization.tenant_id).where(Organization.id == scope_id)
-            )
-        ).scalar_one_or_none()
-    elif scope_type == "school":
-        tenant_id = (
-            await db.execute(select(School.tenant_id).where(School.id == scope_id))
-        ).scalar_one_or_none()
-    elif scope_type == "class":
-        tenant_id = (
-            await db.execute(
-                select(ClassGroup.tenant_id).where(ClassGroup.id == scope_id)
-            )
-        ).scalar_one_or_none()
-    else:
-        raise ValueError("Unsupported role scope.")
-
-    if tenant_id is None:
-        raise ValueError("The requested scope does not exist.")
     ancestors = await resolve_scope_ancestors(
         db,
-        tenant_id=tenant_id,
-        scope_type=scope_type,
+        tenant_id=scope_id,
+        scope_type="tenant",
         scope_id=scope_id,
     )
     if ancestors is None:
-        raise ValueError("The requested scope is not active or does not belong to a valid tenant.")
-    return tenant_id
-
+        raise ValueError("The requested tenant is not active.")
+    return scope_id
 
 async def _resolve_assignable_role(
     db: AsyncSession,
