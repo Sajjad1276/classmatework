@@ -7,11 +7,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.application.errors import AccessDenied
 from app.application.tenant_access import (
     create_tenant_role,
+    list_admin_invitations,
     list_tenant_members,
     list_tenant_roles,
 )
 from app.db.base import Base
 from app.db.models import (
+    AdminPairingToken,
     AuditEvent,
     Permission,
     Role,
@@ -22,6 +24,7 @@ from app.db.models import (
     TenantMembership,
     User,
 )
+from app.modules.identity.pairing import create_admin_pairing
 
 
 async def _database():
@@ -252,5 +255,98 @@ async def test_member_directory_hides_blocked_telegram_id_and_rejects_other_tena
                 db,
                 actor_id=manager.id,
                 tenant_id=other_tenant.id,
+            )
+    await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_tenant_invitation_directory_is_limited_to_the_managers_tenant() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, _ = await _seed_manager_and_member(db)
+        tenant_role = (
+            await db.execute(
+                select(Role).where(
+                    Role.tenant_id == tenant.id,
+                    Role.key.like("tenant_member_%"),
+                )
+            )
+        ).scalar_one()
+        own_invite = await create_admin_pairing(
+            db,
+            actor_id=manager.id,
+            target_telegram_user_id=103_123_456,
+            display_name="Own Tenant Invite",
+            role_key=tenant_role.key,
+            scope_type="tenant",
+            scope_id=tenant.id,
+        )
+
+        other_tenant = Tenant(
+            slug=f"another-{uuid4().hex[:8]}",
+            name="Another Tenant",
+            status="active",
+        )
+        other_user = User(
+            display_name="Other Tenant Invite",
+            status="pending",
+            email=None,
+            password_hash=None,
+        )
+        other_role = Role(
+            tenant_id=None,
+            key=f"other_invite_{uuid4().hex[:8]}",
+            name="Other Invite Role",
+            is_system=False,
+        )
+        db.add_all([other_tenant, other_user, other_role])
+        await db.flush()
+        other_role.tenant_id = other_tenant.id
+        other_pairing = AdminPairingToken(
+            user_id=other_user.id,
+            target_telegram_user_id=104_123_456,
+            token_hash=uuid4().hex + uuid4().hex,
+            role_id=other_role.id,
+            tenant_id=other_tenant.id,
+            scope_type="tenant",
+            scope_id=other_tenant.id,
+            created_by_id=manager.id,
+            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        )
+        db.add(other_pairing)
+        await db.commit()
+
+        invitations = await list_admin_invitations(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+        )
+        assert len(invitations) == 1
+        assert invitations[0].invitation_id == own_invite.pairing_id
+        assert invitations[0].target_telegram_user_id == 103_123_456
+        assert invitations[0].role_key == tenant_role.key
+        assert invitations[0].status == "pending"
+        assert not hasattr(invitations[0], "raw_token")
+
+        with pytest.raises(AccessDenied):
+            await list_admin_invitations(
+                db,
+                actor_id=manager.id,
+                tenant_id=other_tenant.id,
+            )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_platform_invitation_directory_requires_global_assignment_authority() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, _ = await _seed_manager_and_member(db)
+        with pytest.raises(AccessDenied):
+            await list_admin_invitations(
+                db,
+                actor_id=manager.id,
+                tenant_id=None,
             )
     await engine.dispose()
