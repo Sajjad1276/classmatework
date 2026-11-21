@@ -73,18 +73,18 @@
 
 ## 5. Gate پذیرش فاز ۱
 
-- [ ] CI آخرین Commit: Ruff، Migration PostgreSQL و همه تست‌ها سبز.
-- [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند.
+- [x] CI برای Commit `d66416d76ad5b3220eae410ca85b2328190cab01`: Ruff، چهار Migration PostgreSQL و ۲۵ تست سبز (یک Warning غیرمسدودکننده Redis). Run: `44931316097`.
+- [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
 - [ ] کاربر ناشناس، حساب تعلیق‌شده، حساب Unlinked و Group/Channel رد شوند.
-- [ ] Pairing برای Telegram ID نادرست، Token منقضی و Token مصرف‌شده رد شود.
-- [ ] Callback قدیمی از Flow قبلی بی‌اثر باشد.
-- [ ] Update تکراری اجرا نشود و شکست قابل Retry کنترل‌شده داشته باشد.
-- [ ] Role/Scope inheritance، Deny و Cross-tenant با تست PostgreSQL اثبات شوند.
+- [x] Pairing برای Telegram ID نادرست، Token منقضی و Token مصرف‌شده در تست‌ها رد می‌شود.
+- [x] Callback قدیمی از Flow قبلی با Flow Token در Wizard ساخت Tenant بی‌اثر است.
+- [x] Update تکراری در تست Dedup اجرا نمی‌شود و Update شکست‌خورده پس از آزادشدن Lease قابل Retry است.
+- [x] Role/Scope inheritance، Deny و Cross-tenant با تست‌های Policy و PostgreSQL اثبات شده‌اند.
 - [ ] فرم‌های ساخت School/Academic Year/Class/Subject از Bot کامل شوند.
 - [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
 - [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
 - [ ] API Integration به شکل امن از هویت Telegram جدا شود.
-- [ ] CI و Runbook بدون Frontend باشد.
+- [x] CI و Runbook بدون Frontend است؛ CI فعلی Backend/PostgreSQL/Redis را اجرا می‌کند.
 - [ ] هیچ Deploy یا تغییری در classmate2 انجام نشده باشد.
 
 **تا بسته‌شدن تمام Gateها PR2 باید Draft باقی بماند و Merge نشود.**
