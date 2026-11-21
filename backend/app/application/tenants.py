@@ -107,17 +107,8 @@ _TENANT_ROLE_TEMPLATES = {
             "audit:read",
         ),
     ),
-    "school_admin": (
-        "مدیر مدرسه",
-        (
-            "school:read",
-            "academic_year:create",
-            "class:create",
-            "subject:create",
-        ),
-    ),
-    "school_viewer": (
-        "ناظر مدرسه",
+    "tenant_viewer": (
+        "ناظر مجموعه",
         ("school:read",),
     ),
 }
