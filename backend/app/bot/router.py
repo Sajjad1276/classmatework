@@ -378,9 +378,9 @@ async def role_create_command(
 
     left, display_name = text_value.split("|", maxsplit=1)
     parts = left.split()
-    if len(parts) != 3:
+    if len(parts) != 4 or parts[0].split("@", maxsplit=1)[0] != "/role-create":
         await message.answer(
-            "قالب فرمان:\n"
+            "قالب فرمان:\\n"
             "/role-create TENANT_UUID ROLE_KEY PERMISSION1,PERMISSION2 | نام نمایشی نقش"
         )
         return
