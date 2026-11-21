@@ -44,7 +44,12 @@ async def _create_platform_owner(telegram_user_id: int, display_name: str) -> No
                 await db.execute(
                     select(RoleBinding.id)
                     .join(Role, Role.id == RoleBinding.role_id)
-                    .where(Role.key == "platform_owner", RoleBinding.scope_type == "platform")
+                    .where(
+                        Role.key == "platform_owner",
+                        Role.tenant_id.is_(None),
+                        RoleBinding.scope_type == "platform",
+                        RoleBinding.tenant_id.is_(None),
+                    )
                     .limit(1)
                 )
             ).scalar_one_or_none()
