@@ -1,4 +1,5 @@
 from redis.asyncio import Redis
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -7,9 +8,23 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
+def normalize_async_database_url(database_url: str) -> str:
+    """Use asyncpg for PostgreSQL URLs consumed by SQLAlchemy async engines.
+
+    Railway's generated DATABASE_URL may specify the psycopg dialect, while
+    this service deliberately ships asyncpg. Normalizing at the application
+    boundary keeps runtime startup and Alembic on the same async driver.
+    """
+    url = make_url(database_url)
+    if url.get_backend_name() == "postgresql" and url.get_driver_name() != "asyncpg":
+        url = url.set(drivername="postgresql+asyncpg")
+        return url.render_as_string(hide_password=False)
+    return database_url
+
+
 def create_database_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(
-        database_url,
+        normalize_async_database_url(database_url),
         pool_pre_ping=True,
     )
 
