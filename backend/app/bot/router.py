@@ -301,31 +301,58 @@ async def roles_command(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
-    allowed = await has_permission(
-        db,
-        user_id=principal.user.id,
-        permission_key="platform:roles:assign",
-        tenant_id=None,
-        scope_type="platform",
-        scope_id=None,
-    )
-    if not allowed:
-        await message.answer("مجوز مشاهده و واگذاری نقش‌ها را ندارید.")
-        return
+    parts = (message.text or "").strip().split(maxsplit=1)
+    tenant_id: UUID | None = None
+    if len(parts) == 2:
+        try:
+            tenant_id = UUID(parts[1])
+        except ValueError:
+            await message.answer("قالب فرمان: /roles [TENANT_UUID]")
+            return
+        allowed = await has_permission(
+            db,
+            user_id=principal.user.id,
+            permission_key="role:manage",
+            tenant_id=tenant_id,
+            scope_type="tenant",
+            scope_id=tenant_id,
+        )
+        if not allowed:
+            await message.answer("مجوز مشاهده نقش‌های این مجموعه را ندارید.")
+            return
+        role_filter = Role.tenant_id == tenant_id
+        heading = f"نقش‌های مجموعه {tenant_id}"
+    else:
+        allowed = await has_permission(
+            db,
+            user_id=principal.user.id,
+            permission_key="platform:roles:assign",
+            tenant_id=None,
+            scope_type="platform",
+            scope_id=None,
+        )
+        if not allowed:
+            await message.answer(
+                "برای مشاهده نقش‌های مجموعه، /roles TENANT_UUID را اجرا کنید."
+            )
+            return
+        role_filter = True
+        heading = "نقش‌های قابل واگذاری در پلتفرم"
 
     rows = (
         await db.execute(
             select(Role, Tenant.name)
             .outerjoin(Tenant, Tenant.id == Role.tenant_id)
+            .where(role_filter)
             .order_by(Role.tenant_id, Role.key)
             .limit(100)
         )
     ).all()
     if not rows:
-        await message.answer("هنوز هیچ نقشی در سامانه تعریف نشده است.")
+        await message.answer("هنوز هیچ نقشی در این محدوده تعریف نشده است.")
         return
 
-    output = ["نقش‌های قابل واگذاری\n"]
+    output = [f"{heading}\n"]
     for role, tenant_name in rows:
         permission_rows = (
             await db.execute(
@@ -674,7 +701,7 @@ async def help_command(
         "/menu — منوی اصلی\n"
         "/back — بازگشت یک مرحله در فرم\n"
         "/cancel — لغو فرم جاری\n"
-        "/roles — فهرست نقش‌های قابل واگذاری\n"
+        "/roles [TENANT_UUID] — فهرست نقش‌های قابل واگذاری\n"
         "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
         "/help — راهنما\n"
         "/status — بررسی سلامت اتصال‌ها\n\n"
