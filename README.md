@@ -37,12 +37,13 @@ PR شماره ۲: Draft، باز و ادغام‌نشده.
 - Composite Foreign Key برای جلوگیری از اتصال School، Academic Year، Class و Subject به Tenant/School اشتباه.
 - Migrationهای هویت تلگرام و وضعیت پردازش Telegram Update.
 - جلوگیری از پردازش دوباره Update با ثبت Durable در PostgreSQL و Lease؛ Actionهای دامنه همچنان باید Idempotent بمانند.
-- CI بدون Frontend Build و دارای PostgreSQL واقعی برای Migration و تست‌های یکپارچگی.
+- CI بدون Frontend Build و دارای PostgreSQL 16 و Redis 7 واقعی برای Migration و تست‌های یکپارچگی.
+- آخرین CI برای Commit `d66416d76ad5b3220eae410ca85b2328190cab01` موفق است: Ruff، چهار Migration و ۲۵ تست با یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44931316097).
 
 ### هنوز انجام‌نشده یا نیازمند تأیید
 
 - تست‌های واقعی علیه Telegram Bot API با Token اختصاصی و تأیید اجرای واقعی در محیط توسعه.
-- تست نهایی CI روی آخرین Commit این شاخه؛ وضعیت آخرین اجرا باید در Actions بررسی شود.
+- اجرای واقعی Bot با Token آزمایشی در Telegram و آزمون End-to-End هنوز انجام نشده است؛ CI موفق، جایگزین این آزمون نیست.
 - قطع اتصال Telegram، بازیابی مدیر، MFA/Step-up و سیاست تأیید دوم.
 - تکمیل CRUD مدرسه، سال تحصیلی، کلاس و درس در رابط Bot؛ Use Case پایه وجود دارد اما فرم‌های Bot هنوز کامل نیستند.
 - مدیریت Role/Permission از طریق Bot.
