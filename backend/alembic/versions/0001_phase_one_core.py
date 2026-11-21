@@ -6,8 +6,8 @@ Create Date: 2026-11-21
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "0001_phase_one_core"
 down_revision: Union[str, None] = None
