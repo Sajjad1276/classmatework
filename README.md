@@ -77,6 +77,7 @@ Routeهای مدیریتی فعلی در PR2 موقت‌اند و تا انتق�
 
 - طراحی مرجع Telegram-first: `docs/SYSTEM_DESIGN_FA.md`
 - بازبینی دو مرحله‌ای معماری: `docs/ARCHITECTURE_REVIEW_FA.md`
+- یافته‌های تکمیلی دور دوم کد و Migration: `docs/ARCHITECTURE_REVIEW_SECOND_PASS_FA.md`
 - تصمیم‌های فاز صفر: `docs/PHASE_ZERO_DECISIONS_FA.md`
 - خط مبنای امنیت: `docs/SECURITY_BASELINE_FA.md`
 - قرارداد API فاز صفر: `docs/PHASE_ZERO_API_FA.md`
