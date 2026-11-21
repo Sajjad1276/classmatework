@@ -284,21 +284,83 @@ async def cancel_command(
     )
 
 
+@router.message(Command("roles"))
+async def roles_command(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+) -> None:
+    allowed = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="platform:roles:assign",
+        tenant_id=None,
+        scope_type="platform",
+        scope_id=None,
+    )
+    if not allowed:
+        await message.answer("مجوز مشاهده و واگذاری نقش‌ها را ندارید.")
+        return
+
+    rows = (
+        await db.execute(
+            select(Role, Tenant.name)
+            .outerjoin(Tenant, Tenant.id == Role.tenant_id)
+            .order_by(Role.tenant_id, Role.key)
+            .limit(100)
+        )
+    ).all()
+    if not rows:
+        await message.answer("هنوز هیچ نقشی در سامانه تعریف نشده است.")
+        return
+
+    output = ["نقش‌های قابل واگذاری\n"]
+    for role, tenant_name in rows:
+        permission_rows = (
+            await db.execute(
+                select(Permission.key, RolePermission.effect)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id == role.id)
+                .order_by(Permission.key)
+            )
+        ).all()
+        permissions = ", ".join(
+            f"{'-' if effect == 'deny' else '+'}{key}"
+            for key, effect in permission_rows
+        ) or "بدون مجوز"
+        scope_label = "Platform" if role.tenant_id is None else (
+            f"{tenant_name or 'Tenant'} · {role.tenant_id}"
+        )
+        output.append(
+            f"• {role.key} — {role.name}\n"
+            f"  محدوده: {scope_label}\n"
+            f"  مجوزها: {permissions}"
+        )
+
+    await message.answer("\n\n".join(output))
+
+
 @router.message(Command("invite"))
 async def invite_command(
     message: Message,
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
-    parts = (message.text or "").strip().split(maxsplit=2)
-    if len(parts) != 3:
+    parts = (message.text or "").strip().split(maxsplit=5)
+    if len(parts) != 6:
         await message.answer(
-            "قالب فرمان:\n/invite TELEGRAM_ID نام مدیر\n\n"
-            "Telegram ID باید عددی باشد و نام مدیر را بعد از آن وارد کنید."
+            "قالب دعوت مدیر:\n"
+            "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام مدیر\n\n"
+            "نمونه نقش سراسری:\n"
+            "/invite 123456789 platform_owner platform - مدیر پلتفرم\n\n"
+            "نمونه نقش مدیر یک مجموعه:\n"
+            "/invite 123456789 tenant_admin tenant TENANT_UUID مدیر مجموعه\n\n"
+            "برای دیدن نقش‌ها ابتدا /roles را اجرا کنید.\n"
+            "در این نسخه فقط محدوده platform و tenant پشتیبانی می‌شود."
         )
         return
 
-    raw_telegram_id, display_name = parts[1], parts[2]
+    raw_telegram_id, role_key, scope_type, raw_scope_id, display_name = parts
     if not raw_telegram_id.isdigit():
         await message.answer("Telegram ID باید فقط شامل رقم باشد.")
         return
@@ -307,6 +369,22 @@ async def invite_command(
     if telegram_user_id <= 0 or telegram_user_id > 9_223_372_036_854_775_807:
         await message.answer("Telegram ID در محدوده معتبر نیست.")
         return
+
+    if scope_type not in {"platform", "tenant"}:
+        await message.answer("در فاز فعلی scope_type فقط platform یا tenant است.")
+        return
+
+    if scope_type == "platform":
+        if raw_scope_id != "-":
+            await message.answer("برای Platform scope، مقدار SCOPE_ID باید - باشد.")
+            return
+        scope_id = None
+    else:
+        try:
+            scope_id = UUID(raw_scope_id)
+        except ValueError:
+            await message.answer("برای Tenant scope باید UUID معتبر Tenant را وارد کنید.")
+            return
 
     bot_info = await message.bot.get_me()
     if not bot_info.username:
@@ -322,23 +400,37 @@ async def invite_command(
             actor_id=principal.user.id,
             target_telegram_user_id=telegram_user_id,
             display_name=display_name,
+            role_key=role_key,
+            scope_type=scope_type,
+            scope_id=scope_id,
         )
     except PairingNotAllowed:
-        await message.answer("مجوز ایجاد دعوت‌نامه مدیریتی را ندارید.")
+        await message.answer(
+            "مجوز واگذاری این نقش را ندارید؛ نقش درخواستی ممکن است "
+            "مجوزی فراتر از سطح دسترسی فعلی شما داشته باشد."
+        )
         return
     except ValueError as exc:
         await message.answer(str(exc))
         return
+
     pairing_link = f"https://t.me/{bot_info.username}?start={invitation.raw_token}"
     expires = invitation.expires_at.strftime("%Y-%m-%d %H:%M UTC")
+    scope_label = (
+        "کل پلتفرم"
+        if invitation.scope_type == "platform"
+        else f"مجموعه {invitation.tenant_id}"
+    )
     await message.answer(
-        "دعوت‌نامه یک‌بارمصرف ساخته شد.\n\n"
+        "دعوت‌نامه یک‌بارمصرف با نقش و محدوده مشخص ساخته شد.\n\n"
         f"نام: {display_name}\n"
         f"Telegram ID مقصد: {telegram_user_id}\n"
+        f"نقش: {invitation.role_key}\n"
+        f"محدوده: {scope_label}\n"
         f"انقضا: {expires}\n\n"
         "این لینک را فقط برای همان شخص بفرستید:\n"
         f"{pairing_link}\n\n"
-        "لینک پس از یک بار استفاده یا پایان زمان اعتبار، دیگر قابل استفاده نیست."
+        "با پذیرش لینک، نقش و عضویت فوق به‌صورت هم‌زمان فعال می‌شوند."
     )
 
 
@@ -571,7 +663,8 @@ async def help_command(
         "/menu — منوی اصلی\n"
         "/back — بازگشت یک مرحله در فرم\n"
         "/cancel — لغو فرم جاری\n"
-        "/invite TELEGRAM_ID نام — دعوت مدیر جدید (نیازمند مجوز)\n"
+        "/roles — فهرست نقش‌های قابل واگذاری\n"
+        "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
         "/help — راهنما\n"
         "/status — بررسی سلامت اتصال‌ها\n\n"
         "گزینه‌های منو بر اساس مجوز شما نمایش داده می‌شوند.",
