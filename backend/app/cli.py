@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from getpass import getpass
 
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.db.models import AuditEvent, Permission, Role, RoleBinding, RolePermission, User
+from app.db.models import (
+    AuditEvent,
+    Permission,
+    Role,
+    RoleBinding,
+    RolePermission,
+    TelegramAccount,
+    Tenant,
+    User,
+)
 from app.db.runtime import create_database_engine, create_session_factory
-from app.modules.identity.passwords import hash_password
 
 PLATFORM_PERMISSIONS = {
     "platform:tenants:read": "Read platform tenant directory",
@@ -28,7 +35,7 @@ PLATFORM_PERMISSIONS = {
 }
 
 
-async def _create_platform_owner(email: str, display_name: str, password: str) -> None:
+async def _create_platform_owner(telegram_user_id: int, display_name: str) -> None:
     settings = get_settings()
     engine = create_database_engine(settings.database_url)
     factory = create_session_factory(engine)
@@ -43,21 +50,35 @@ async def _create_platform_owner(email: str, display_name: str, password: str) -
                 )
             ).scalar_one_or_none()
             if existing_owner is not None:
-                raise RuntimeError("A platform owner is already configured; refusing to create another.")
+                raise RuntimeError(
+                    "A platform owner is already configured; refusing to create another."
+                )
 
-            existing_user = (
-                await db.execute(select(User.id).where(User.email == email))
+            existing_account = (
+                await db.execute(
+                    select(TelegramAccount.id).where(
+                        TelegramAccount.telegram_user_id == telegram_user_id
+                    )
+                )
             ).scalar_one_or_none()
-            if existing_user is not None:
-                raise RuntimeError("This email already belongs to a user.")
+            if existing_account is not None:
+                raise RuntimeError("This Telegram account is already linked to a user.")
 
             user = User(
-                email=email,
+                email=None,
                 display_name=display_name,
-                password_hash=hash_password(password),
+                password_hash=None,
                 status="active",
             )
             db.add(user)
+            await db.flush()
+
+            account = TelegramAccount(
+                user_id=user.id,
+                telegram_user_id=telegram_user_id,
+                status="active",
+            )
+            db.add(account)
             await db.flush()
 
             role = (
@@ -92,7 +113,13 @@ async def _create_platform_owner(email: str, display_name: str, password: str) -
                     )
                 ).scalar_one_or_none()
                 if assigned is None:
-                    db.add(RolePermission(role_id=role.id, permission_id=permission.id, effect="allow"))
+                    db.add(
+                        RolePermission(
+                            role_id=role.id,
+                            permission_id=permission.id,
+                            effect="allow",
+                        )
+                    )
 
             db.add(
                 RoleBinding(
@@ -108,14 +135,17 @@ async def _create_platform_owner(email: str, display_name: str, password: str) -
                 AuditEvent(
                     tenant_id=None,
                     actor_id=user.id,
-                    event_type="identity.platform_owner.bootstrap_created",
+                    event_type="identity.platform_owner.telegram_bootstrap",
                     aggregate_type="user",
                     aggregate_id=user.id,
-                    event_data={"provisioning": "interactive_cli"},
+                    event_data={
+                        "provisioning": "interactive_cli",
+                        "telegram_account_id": str(account.id),
+                    },
                 )
             )
             await db.commit()
-            print(f"Platform owner created: {email}")
+            print("Platform owner created and linked to the supplied Telegram account.")
     finally:
         await engine.dispose()
 
@@ -126,17 +156,16 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "create-platform-owner":
-        email = input("Owner email: ").strip().lower()
+        raw_telegram_id = input("Owner Telegram numeric ID: ").strip()
         display_name = input("Owner display name: ").strip()
-        password = getpass("Password (minimum 12 characters): ")
-        confirmation = getpass("Confirm password: ")
-        if password != confirmation:
-            raise SystemExit("Passwords do not match.")
-        if len(password) < 12:
-            raise SystemExit("Password must contain at least 12 characters.")
-        if not email or not display_name:
-            raise SystemExit("Email and display name are required.")
-        asyncio.run(_create_platform_owner(email, display_name, password))
+        if not raw_telegram_id.isdigit():
+            raise SystemExit("Telegram User ID must contain digits only.")
+        telegram_user_id = int(raw_telegram_id)
+        if telegram_user_id <= 0 or telegram_user_id > 9_223_372_036_854_775_807:
+            raise SystemExit("Telegram User ID is outside the supported positive 64-bit range.")
+        if not display_name or len(display_name) > 160:
+            raise SystemExit("Display name is required and must be at most 160 characters.")
+        asyncio.run(_create_platform_owner(telegram_user_id, display_name))
 
 
 if __name__ == "__main__":
