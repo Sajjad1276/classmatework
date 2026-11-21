@@ -1,6 +1,6 @@
 # ClassMate Work
 
-سامانه مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛ منطق آموزشی/دانش‌آموزی در مخزن جداگانه \`classmate2\` باقی می‌ماند و از طریق قراردادهای کنترل‌شده API/Event متصل می‌شود.
+سامانه مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛ منطق آموزشی/دانش‌آموزی در مخزن جداگانه `classmate2` باقی می‌ماند و از طریق قراردادهای کنترل‌شده API/Event متصل می‌شود.
 
 ## تصمیم قطعی رابط مدیریت
 
@@ -14,8 +14,8 @@
 
 ## وضعیت پیاده‌سازی — شفاف
 
-- Phase 0 زیرساخت اولیه را در \`main\` دارد.
-- بازطراحی مرجع Telegram-first در شاخه \`phase-1/core-identity-access\` انجام شده است.
+- Phase 0 زیرساخت اولیه را در `main` دارد.
+- بازطراحی مرجع Telegram-first در شاخه `phase-1/core-identity-access` انجام شده است.
 - PR شماره ۲ هنوز Draft و ادغام‌نشده است.
 - **ربات مدیریتی هنوز پیاده‌سازی نشده است.**
 - کد فعلی PR2 هنوز بخشی از احراز هویت مرورگری (ایمیل/گذرواژه، Cookie، CSRF و Session مرورگر) و منطق کسب‌وکار داخل Routeها دارد؛ این کد با تصمیم نهایی محصول هم‌راستا نیست و پیش از ادغام باید بازنویسی/جایگزین شود.
@@ -28,8 +28,8 @@
 
 | Service | وظیفه |
 |---|---|
-| \`classmatework-api\` | FastAPI، Health Check و APIهای سرویس‌به‌سرویس |
-| \`classmatework-admin-bot\` | ربات مدیریتی تلگرام با Long Polling |
+| `classmatework-api` | FastAPI، Health Check و APIهای سرویس‌به‌سرویس |
+| `classmatework-admin-bot` | ربات مدیریتی تلگرام با Long Polling |
 | PostgreSQL | ذخیره‌سازی اصلی |
 | Redis | FSM، Rate Limit، TTL و قفل‌ها |
 
@@ -41,11 +41,11 @@ API و Bot دو فرایند با وظایف جدا هستند، نه دو Worke
 
 نیازمندی‌ها: Python 3.12+، Docker Compose.
 
-1. فایل نمونه محیط را کپی کنید: \`cp .env.example .env\`
-2. زیرساخت و API فعلی را اجرا کنید: \`docker compose up --build\`
+1. فایل نمونه محیط را کپی کنید: `cp .env.example .env`
+2. زیرساخت و API فعلی را اجرا کنید: `docker compose up --build`
 3. Migrationهای موجود را اجرا کنید:
 
-   \`alembic -c backend/alembic.ini upgrade head\`
+   `alembic -c backend/alembic.ini upgrade head`
 
 4. CLI فعلی ایجاد مالک پلتفرم هنوز بر پایه ایمیل/گذرواژه است و **Bootstrap نهایی Telegram-first محسوب نمی‌شود**؛ برای محیط واقعی از آن به‌عنوان روش نهایی ایجاد مدیر استفاده نکنید.
 
@@ -55,8 +55,8 @@ API روی پورت 8000 در دسترس است. در وضعیت فعلی، ای
 
 | روش | مسیر | کاربرد |
 |---|---|---|
-| GET | \`/api/v1/health/live\` | زنده‌بودن Process |
-| GET | \`/api/v1/health/ready\` | آمادگی PostgreSQL و Redis |
+| GET | `/api/v1/health/live` | زنده‌بودن Process |
+| GET | `/api/v1/health/ready` | آمادگی PostgreSQL و Redis |
 
 Routeهای مدیریتی فعلی در PR2 موقت‌اند و تا انتقال به Use Caseهای مشترک و هویت تلگرام نباید به‌عنوان قرارداد نهایی معرفی یا برای مدیریت واقعی استفاده شوند.
 
@@ -70,14 +70,14 @@ Routeهای مدیریتی فعلی در PR2 موقت‌اند و تا انتق�
 6. Update و عملیات حساس باید در برابر Replay و اجرای تکراری مقاوم باشند.
 7. هر تغییر مدیریتی قابل ممیزی است؛ Audit append-only باقی می‌ماند.
 8. هیچ secret، Bot Token یا داده واقعی کاربران وارد Git، Log یا Callback نمی‌شود.
-9. هیچ تغییر یا Deploy در \`classmate2\` از این مخزن انجام نمی‌شود.
+9. هیچ تغییر یا Deploy در `classmate2` از این مخزن انجام نمی‌شود.
 10. قابلیت ناقص یا بدون Handler، Use Case، مجوز و تست در منوی مدیر نمایش داده نمی‌شود.
 
 ## اسناد مرجع
 
-- طراحی مرجع Telegram-first: \`docs/SYSTEM_DESIGN_FA.md\`
-- بازبینی دو مرحله‌ای معماری: \`docs/ARCHITECTURE_REVIEW_FA.md\`
-- تصمیم‌های فاز صفر: \`docs/PHASE_ZERO_DECISIONS_FA.md\`
-- خط مبنای امنیت: \`docs/SECURITY_BASELINE_FA.md\`
-- قرارداد API فاز صفر: \`docs/PHASE_ZERO_API_FA.md\`
-- وضعیت و موانع فاز یک: \`docs/PHASE_ONE_IMPLEMENTATION_FA.md\`
+- طراحی مرجع Telegram-first: `docs/SYSTEM_DESIGN_FA.md`
+- بازبینی دو مرحله‌ای معماری: `docs/ARCHITECTURE_REVIEW_FA.md`
+- تصمیم‌های فاز صفر: `docs/PHASE_ZERO_DECISIONS_FA.md`
+- خط مبنای امنیت: `docs/SECURITY_BASELINE_FA.md`
+- قرارداد API فاز صفر: `docs/PHASE_ZERO_API_FA.md`
+- وضعیت و موانع فاز یک: `docs/PHASE_ONE_IMPLEMENTATION_FA.md`
