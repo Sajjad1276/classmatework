@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -42,7 +43,10 @@ class Tenant(Base):
 
 class Organization(Base):
     __tablename__ = "organizations"
-    __table_args__ = (UniqueConstraint("tenant_id", "slug", name="uq_organizations_tenant_slug"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "slug", name="uq_organizations_tenant_slug"),
+        UniqueConstraint("tenant_id", "id", name="uq_organizations_tenant_id_id"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(
@@ -56,7 +60,16 @@ class Organization(Base):
 
 class School(Base):
     __tablename__ = "schools"
-    __table_args__ = (UniqueConstraint("tenant_id", "code", name="uq_schools_tenant_code"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_schools_tenant_code"),
+        UniqueConstraint("tenant_id", "id", name="uq_schools_tenant_id_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_id"],
+            ["organizations.tenant_id", "organizations.id"],
+            name="fk_schools_tenant_organization",
+            ondelete="RESTRICT",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(
@@ -73,7 +86,16 @@ class School(Base):
 
 class AcademicYear(Base):
     __tablename__ = "academic_years"
-    __table_args__ = (UniqueConstraint("tenant_id", "school_id", "name", name="uq_academic_year_school_name"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "school_id", "name", name="uq_academic_year_school_name"),
+        UniqueConstraint("tenant_id", "school_id", "id", name="uq_academic_years_tenant_school_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id"],
+            ["schools.tenant_id", "schools.id"],
+            name="fk_academic_years_tenant_school",
+            ondelete="RESTRICT",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(
@@ -93,6 +115,18 @@ class ClassGroup(Base):
     __tablename__ = "class_groups"
     __table_args__ = (
         UniqueConstraint("tenant_id", "school_id", "academic_year_id", "code", name="uq_class_groups_code"),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id"],
+            ["schools.tenant_id", "schools.id"],
+            name="fk_class_groups_tenant_school",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id", "academic_year_id"],
+            ["academic_years.tenant_id", "academic_years.school_id", "academic_years.id"],
+            name="fk_class_groups_tenant_school_year",
+            ondelete="RESTRICT",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -114,7 +148,15 @@ class ClassGroup(Base):
 
 class Subject(Base):
     __tablename__ = "subjects"
-    __table_args__ = (UniqueConstraint("tenant_id", "school_id", "code", name="uq_subjects_school_code"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "school_id", "code", name="uq_subjects_school_code"),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id"],
+            ["schools.tenant_id", "schools.id"],
+            name="fk_subjects_tenant_school",
+            ondelete="RESTRICT",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(
