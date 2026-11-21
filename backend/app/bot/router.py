@@ -29,7 +29,9 @@ from app.application.tenant_access import (
     list_platform_roles,
     list_tenant_members,
     list_tenant_roles,
+    preview_tenant_member_reactivation,
     preview_tenant_member_suspension,
+    reactivate_tenant_member,
     suspend_tenant_member,
 )
 from app.application.tenants import (
@@ -60,6 +62,10 @@ class TenantCreation(StatesGroup):
 
 
 class MemberSuspension(StatesGroup):
+    confirm = State()
+
+
+class MemberReactivation(StatesGroup):
     confirm = State()
 
 
@@ -701,6 +707,178 @@ async def member_suspend_cancel_callback(
         await callback.message.answer("درخواست تعلیق لغو شد؛ تغییری در عضویت انجام نشد.")
 
 
+@router.message(Command("member-reactivate"))
+async def member_reactivate_command(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    text_value = (message.text or "").strip()
+    if "|" not in text_value:
+        await message.answer(
+            "قالب فرمان:\n"
+            "/member-reactivate TENANT_UUID USER_UUID ROLE_KEY | دلیل فعال‌سازی مجدد\n\n"
+            "حساب تلگرام کاربر باید فعال باشد و دلیل حداقل ۱۰ نویسه داشته باشد."
+        )
+        return
+
+    left, reason = text_value.split("|", maxsplit=1)
+    parts = left.split()
+    if len(parts) != 4 or parts[0].split("@", maxsplit=1)[0] != "/member-reactivate":
+        await message.answer(
+            "قالب فرمان:\n"
+            "/member-reactivate TENANT_UUID USER_UUID ROLE_KEY | دلیل فعال‌سازی مجدد"
+        )
+        return
+
+    try:
+        tenant_id = UUID(parts[1])
+        member_user_id = UUID(parts[2])
+        preview = await preview_tenant_member_reactivation(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=member_user_id,
+            role_key=parts[3],
+        )
+    except AccessDenied:
+        await message.answer(
+            "مجوز فعال‌سازی عضویت یا واگذاری یکی از مجوزهای نقش انتخاب‌شده را ندارید."
+        )
+        return
+    except (ValueError, ApplicationError) as exc:
+        await message.answer(str(exc) or "شناسه‌ها یا نقش انتخاب‌شده معتبر نیستند.")
+        return
+
+    normalized_reason = reason.strip()
+    if not 10 <= len(normalized_reason) <= 500:
+        await message.answer("دلیل فعال‌سازی مجدد باید بین ۱۰ تا ۵۰۰ نویسه باشد.")
+        return
+
+    flow_token = secrets.token_urlsafe(9)
+    await state.clear()
+    await state.update_data(
+        flow_name="member_reactivate",
+        flow_token=flow_token,
+        reactivate_tenant_id=str(tenant_id),
+        reactivate_member_user_id=str(member_user_id),
+        reactivate_role_key=preview.role_key,
+        reactivate_reason=normalized_reason,
+    )
+    await state.set_state(MemberReactivation.confirm)
+    permissions = ", ".join(preview.permission_keys)
+    await message.answer(
+        "پیش‌نمایش فعال‌سازی مجدد عضویت\n\n"
+        f"نام عضو: {preview.display_name}\n"
+        f"User ID: {preview.user_id}\n"
+        f"Tenant: {tenant_id}\n"
+        f"نقش جدید: {preview.role_key}\n"
+        f"مجوزهای نقش: {permissions}\n"
+        f"دلیل: {normalized_reason}\n\n"
+        "نقش‌های قبلی برنمی‌گردند؛ نقش انتخاب‌شده به‌عنوان RoleBinding جدید ثبت می‌شود.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="تأیید فعال‌سازی",
+                        callback_data=f"member:reactivate:confirm:{flow_token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="لغو",
+                        callback_data=f"member:reactivate:cancel:{flow_token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("member:reactivate:confirm:"))
+async def member_reactivate_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberReactivation.confirm.state
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+        or data.get("flow_name") != "member_reactivate"
+    ):
+        await callback.answer(
+            "این تأیید متعلق به درخواست قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
+
+    try:
+        tenant_id = UUID(data["reactivate_tenant_id"])
+        member_user_id = UUID(data["reactivate_member_user_id"])
+        result = await reactivate_tenant_member(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=member_user_id,
+            role_key=data.get("reactivate_role_key", ""),
+            reason=data.get("reactivate_reason", ""),
+        )
+    except AccessDenied:
+        await state.clear()
+        await callback.answer(
+            "مجوز فعال‌سازی مجدد یا واگذاری نقش را ندارید.",
+            show_alert=True,
+        )
+        return
+    except (ValueError, ApplicationError) as exc:
+        await state.clear()
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer("عضویت دوباره فعال شد.")
+    if callback.message is not None:
+        await callback.message.answer(
+            "عضویت با موفقیت دوباره فعال شد.\n\n"
+            f"عضو: {result.display_name}\n"
+            f"Tenant: {result.tenant_id}\n"
+            f"نقش جدید: {result.role_key}\n"
+            f"زمان: {result.reactivated_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"دلیل: {data.get('reactivate_reason', '')}"
+        )
+
+
+@router.callback_query(F.data.startswith("member:reactivate:cancel:"))
+async def member_reactivate_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberReactivation.confirm.state
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+        or data.get("flow_name") != "member_reactivate"
+    ):
+        await callback.answer(
+            "این دکمه متعلق به درخواست قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer("فعال‌سازی لغو شد.")
+    if callback.message is not None:
+        await callback.message.answer(
+            "درخواست فعال‌سازی مجدد لغو شد؛ تغییری در عضویت انجام نشد."
+        )
+
+
 @router.message(Command("invite"))
 async def invite_command(
     message: Message,
@@ -1063,6 +1241,7 @@ async def help_command(
         "/role-create TENANT_UUID KEY PERMISSIONS | NAME — ساخت نقش محدود به اختیارات شما\n"
         "/members TENANT_UUID — فهرست اعضای فعال مجموعه\n"
         "/member-suspend TENANT_UUID USER_UUID | REASON — تعلیق عضو پس از تأیید\n"
+        "/member-reactivate TENANT_UUID USER_UUID ROLE_KEY | REASON — فعال‌سازی مجدد با نقش مشخص\n"
         "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
         "/invites [TENANT_UUID] — فهرست دعوت‌های باز و منقضی‌شده\n"
         "/revoke-invite INVITATION_UUID — لغو دعوت پذیرفته‌نشده\n"
