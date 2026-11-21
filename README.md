@@ -1,93 +1,83 @@
 # ClassMate Work
 
-سامانه‌ی مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛
-منطق آموزشی/دانش‌آموزی در مخزن جداگانه‌ی classmate2 باقی می‌ماند.
+سامانه مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛ منطق آموزشی/دانش‌آموزی در مخزن جداگانه \`classmate2\` باقی می‌ماند و از طریق قراردادهای کنترل‌شده API/Event متصل می‌شود.
 
-## وضعیت فعلی
+## تصمیم قطعی رابط مدیریت
 
-- Phase 0 ادغام شده و CI پایه سبز است.
-- Phase 1 در شاخه phase-1/core-identity-access در حال توسعه است.
-- Backend: FastAPI modular monolith با API نسخه‌دار در /api/v1.
-- Persistence: PostgreSQL/SQLAlchemy و migration با Alembic.
-- Cache/rate limit foundation: Redis.
-- Admin shell: React + TypeScript + RTL.
-- Identity: Argon2id و نشست opaque سمت سرور.
-- Authorization: RBAC scope-aware با تقدم deny بر allow.
-- Audit: رویدادهای append-only با trigger دیتابیس در PostgreSQL.
+**رابط انسانی مدیریت فقط ربات اختصاصی تلگرام است.** این پروژه پنل وب مدیریتی، سایت ادمین، React، Telegram Web App یا ورود مدیریتی از مرورگر ندارد.
 
-## اجرای محلی
+- ربات تلگرام: رابط منوها، فرم‌ها، تأییدها و گزارش‌های مدیر.
+- FastAPI: Health Check و APIهای داخلی/یکپارچه‌سازی؛ نه پنل انسانی.
+- Application Use Cases: منطق مشترک و مستقل از Telegram Handler یا HTTP Route.
+- PostgreSQL: منبع اصلی داده و Audit.
+- Redis: State فرم‌های ربات، TTL، قفل کوتاه‌مدت و Rate Limit.
 
-نیازمندی‌ها: Python 3.12+، Node.js 22+، npm و Docker Compose.
+## وضعیت پیاده‌سازی — شفاف
 
-1. فایل نمونه را کپی کنید: cp .env.example .env
-2. سرویس‌ها و API را اجرا کنید: docker compose up --build
-3. migrationهای فعلی را اجرا کنید:
+- Phase 0 زیرساخت اولیه را در \`main\` دارد.
+- بازطراحی مرجع Telegram-first در شاخه \`phase-1/core-identity-access\` انجام شده است.
+- PR شماره ۲ هنوز Draft و ادغام‌نشده است.
+- **ربات مدیریتی هنوز پیاده‌سازی نشده است.**
+- کد فعلی PR2 هنوز بخشی از احراز هویت مرورگری (ایمیل/گذرواژه، Cookie، CSRF و Session مرورگر) و منطق کسب‌وکار داخل Routeها دارد؛ این کد با تصمیم نهایی محصول هم‌راستا نیست و پیش از ادغام باید بازنویسی/جایگزین شود.
+- تا زمان تکمیل Bot Adapter، Telegram Identity، Application Use Cases و تست‌های مربوطه، قابلیت عملیاتی مدیریتی آماده استفاده نیست.
+- هیچ ادعایی مبنی بر اتصال یا Deploy ربات در Railway وجود ندارد.
 
-   alembic -c backend/alembic.ini upgrade head
+## معماری استقرار هدف
 
-4. اولین مالک پلتفرم را به‌صورت تعاملی ایجاد کنید:
+در همان Railway Project موجود، بدون ساخت Project جدید:
 
-   PYTHONPATH=backend python -m app.cli create-platform-owner
+| Service | وظیفه |
+|---|---|
+| \`classmatework-api\` | FastAPI، Health Check و APIهای سرویس‌به‌سرویس |
+| \`classmatework-admin-bot\` | ربات مدیریتی تلگرام با Long Polling |
+| PostgreSQL | ذخیره‌سازی اصلی |
+| Redis | FSM، Rate Limit، TTL و قفل‌ها |
 
-5. رابط وب را در ترمینال جداگانه اجرا کنید:
+API و Bot دو فرایند با وظایف جدا هستند، نه دو Worker تکراری. هر دو از کد مشترک و دیتابیس مشترک استفاده می‌کنند. در فاز اولیه فقط یک Replica از Bot Poller مجاز است. Worker عمومی جداگانه تا وقتی نیاز واقعی و صف پایدار تعریف نشده اضافه نمی‌شود.
 
-   cd frontend && npm install && npm run dev
+**توجه:** جدول بالا معماری هدف است؛ سرویس Bot و Start Command آن هنوز ایجاد/Deploy نشده‌اند. هیچ تنظیم Railway با این بازنگری تغییر نکرده است.
 
-API روی http://localhost:8000 و رابط وب روی http://localhost:5173 در دسترس خواهد بود.
+## اجرای محلی زیرساخت فعلی
 
-در ویندوز، فرمان PYTHONPATH را با تنظیم معادل محیطی سیستم خود اجرا کنید یا از محیط مجازی backend استفاده کنید.
+نیازمندی‌ها: Python 3.12+، Docker Compose.
 
-## APIهای فعلی
+1. فایل نمونه محیط را کپی کنید: \`cp .env.example .env\`
+2. زیرساخت و API فعلی را اجرا کنید: \`docker compose up --build\`
+3. Migrationهای موجود را اجرا کنید:
+
+   \`alembic -c backend/alembic.ini upgrade head\`
+
+4. CLI فعلی ایجاد مالک پلتفرم هنوز بر پایه ایمیل/گذرواژه است و **Bootstrap نهایی Telegram-first محسوب نمی‌شود**؛ برای محیط واقعی از آن به‌عنوان روش نهایی ایجاد مدیر استفاده نکنید.
+
+API روی پورت 8000 در دسترس است. در وضعیت فعلی، این اجرا به معنی آماده‌بودن ربات مدیریتی نیست.
+
+## APIهای زیرساختی فعلی
 
 | روش | مسیر | کاربرد |
-| --- | --- | --- |
-| GET | /api/v1/health/live | زنده‌بودن process |
-| GET | /api/v1/health/ready | آمادگی PostgreSQL و Redis |
-| POST | /api/v1/auth/login | ورود با ایمیل و گذرواژه |
-| POST | /api/v1/auth/logout | ابطال نشست جاری؛ نیازمند CSRF |
-| GET | /api/v1/me | هویت و عضویت‌های فعال کاربر |
-| GET/POST | /api/v1/tenants | فهرست/ایجاد tenant با مجوز platform |
-| GET/POST | /api/v1/schools | فهرست/ایجاد مدرسه در tenant انتخاب‌شده |
-| POST | /api/v1/academic-years | ایجاد سال تحصیلی |
-| POST | /api/v1/classes | ایجاد کلاس |
-| POST | /api/v1/subjects | ایجاد درس |
-| GET | /api/v1/audit-events | خواندن audit در tenant |
+|---|---|---|
+| GET | \`/api/v1/health/live\` | زنده‌بودن Process |
+| GET | \`/api/v1/health/ready\` | آمادگی PostgreSQL و Redis |
 
-Endpointهای tenant با هدر X-Tenant-ID tenant انتخابی را دریافت می‌کنند. Backend عضویت و permission را جداگانه ارزیابی می‌کند؛ مقدار ارسالی client به‌تنهایی مجوز نیست.
+Routeهای مدیریتی فعلی در PR2 موقت‌اند و تا انتقال به Use Caseهای مشترک و هویت تلگرام نباید به‌عنوان قرارداد نهایی معرفی یا برای مدیریت واقعی استفاده شوند.
 
-## Migration
+## اصول غیرقابل نقض
 
-برای ایجاد migration پس از تغییر مدل‌ها:
+1. رابط انسانی مدیریت فقط Bot تلگرام است؛ وب‌پنل در دامنه محصول نیست.
+2. Telegram User ID عددی و استخراج‌شده از Update معتبر، شناسه اتصال است؛ username هویت یا مجوز نیست.
+3. فقط Private Chat مجاز است؛ مدیریت از گروه/کانال رد می‌شود.
+4. دکمه، Callback Data، Tenant ID و پیام کاربر به‌تنهایی مجوز نیستند؛ Backend باید هر بار Policy و Scope را بررسی کند.
+5. Telegram Handler و FastAPI Route مستقیماً منطق دامنه یا ORM را اجرا نمی‌کنند؛ Use Case مالک منطق است.
+6. Update و عملیات حساس باید در برابر Replay و اجرای تکراری مقاوم باشند.
+7. هر تغییر مدیریتی قابل ممیزی است؛ Audit append-only باقی می‌ماند.
+8. هیچ secret، Bot Token یا داده واقعی کاربران وارد Git، Log یا Callback نمی‌شود.
+9. هیچ تغییر یا Deploy در \`classmate2\` از این مخزن انجام نمی‌شود.
+10. قابلیت ناقص یا بدون Handler، Use Case، مجوز و تست در منوی مدیر نمایش داده نمی‌شود.
 
-    alembic -c backend/alembic.ini revision --autogenerate -m "describe schema change"
+## اسناد مرجع
 
-فایل تولیدشده باید بازبینی و در محیط توسعه آزمایش شود. سپس:
-
-    alembic -c backend/alembic.ini upgrade head
-
-## کنترل کیفیت
-
-    ruff check backend tests
-    pytest
-    cd frontend && npm install && npm run build
-
-## مرزهای امنیتی
-
-- ثبت‌نام عمومی یا حساب مدیر پیش‌فرض وجود ندارد.
-- اولین مالک پلتفرم فقط با فرمان تعاملی CLI ساخته می‌شود.
-- گذرواژه‌ها با Argon2id هش می‌شوند و توکن خام نشست در دیتابیس ذخیره نمی‌شود.
-- نشست مرورگر HttpOnly است؛ درخواست‌های تغییردهنده‌ی احراز‌شده CSRF token می‌خواهند.
-- ورود با Redis rate-limited و حساب پس از تلاش‌های مکرر ناموفق موقتاً قفل می‌شود.
-- tenant context از X-Tenant-ID قابل انتخاب است، اما scope و membership در backend کنترل می‌شود.
-- audit در PostgreSQL در برابر UPDATE و DELETE قفل شده است.
-- MFA/TOTP، invitation lifecycle و مدیریت نقش از UI هنوز در صف فاز یک هستند.
-- secret واقعی یا داده‌ی production نباید وارد Git شود.
-- classmate2 مستقل باقی می‌ماند و از این مخزن تغییر نمی‌گیرد.
-
-## اسناد
-
-- طراحی مرجع: docs/SYSTEM_DESIGN_FA.md
-- تصمیم‌های فاز صفر: docs/PHASE_ZERO_DECISIONS_FA.md
-- خط مبنای امنیتی: docs/SECURITY_BASELINE_FA.md
-- قرارداد API فاز صفر: docs/PHASE_ZERO_API_FA.md
-- اجرای فاز یک: docs/PHASE_ONE_IMPLEMENTATION_FA.md
+- طراحی مرجع Telegram-first: \`docs/SYSTEM_DESIGN_FA.md\`
+- بازبینی دو مرحله‌ای معماری: \`docs/ARCHITECTURE_REVIEW_FA.md\`
+- تصمیم‌های فاز صفر: \`docs/PHASE_ZERO_DECISIONS_FA.md\`
+- خط مبنای امنیت: \`docs/SECURITY_BASELINE_FA.md\`
+- قرارداد API فاز صفر: \`docs/PHASE_ZERO_API_FA.md\`
+- وضعیت و موانع فاز یک: \`docs/PHASE_ONE_IMPLEMENTATION_FA.md\`
