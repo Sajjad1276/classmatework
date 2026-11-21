@@ -186,6 +186,7 @@ async def test_expired_pairing_token_cannot_be_consumed() -> None:
                 last_name=None,
             )
 
-        assert await db.get(TelegramAccount, invite.user_id) is None
+        linked = (await db.execute(select(TelegramAccount.id).where(TelegramAccount.user_id == invite.user_id))).scalar_one_or_none()
+        assert linked is None
 
     await engine.dispose()
