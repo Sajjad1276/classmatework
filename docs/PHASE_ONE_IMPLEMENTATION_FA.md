@@ -63,6 +63,7 @@
 - Deny-overrides-Allow در تمام مسیرهای ارث‌بری.
 - عضویت Tenant و بازه‌های Role Binding هر بار کنترل شوند.
 - قیود ترکیبی دیتابیس/Domain برای تضمین هم‌خوانی Tenant، School، Academic Year و Class.
+- هم‌تراز کردن Check Constraint مربوط به RoleBinding در ORM و Migration؛ Migration فعلی از مدل ضعیف‌تر است و باید با تست PostgreSQL اصلاح شود.
 - تست‌های منفی cross-tenant و دسترسی غیرمجاز با Callback دستکاری‌شده.
 
 ### E. Telegram Safety و Audit
