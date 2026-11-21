@@ -19,7 +19,7 @@ from app.db.models import (
 _SCOPE_TYPES = {"tenant", "organization", "school", "class"}
 
 
-async def _resolve_scope_ancestors(
+async def resolve_scope_ancestors(
     db: AsyncSession,
     *,
     tenant_id: UUID,
@@ -154,7 +154,7 @@ async def has_permission(
         role_tenant_predicate = Role.tenant_id.is_(None)
         ancestors: list[tuple[str, UUID]] = []
     else:
-        ancestors = await _resolve_scope_ancestors(
+        ancestors = await resolve_scope_ancestors(
             db,
             tenant_id=tenant_id,
             scope_type=scope_type,
