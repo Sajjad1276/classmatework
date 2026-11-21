@@ -7,6 +7,11 @@ from aiogram.types import CallbackQuery, Chat, Message, User
 from app.bot.rate_limit import TelegramRateLimitMiddleware
 
 
+class StubCallbackQuery(CallbackQuery):
+    async def answer(self, *_args, **_kwargs):
+        return True
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.counts: dict[str, int] = {}
@@ -33,7 +38,7 @@ def _message(user_id: int = 1234) -> Message:
 
 def _callback(user_id: int = 1234) -> CallbackQuery:
     message = _message(user_id)
-    return CallbackQuery(
+    return StubCallbackQuery(
         id="callback-id",
         from_user=message.from_user,
         chat_instance="private-chat",
