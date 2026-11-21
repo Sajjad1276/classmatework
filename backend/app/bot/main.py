@@ -146,14 +146,38 @@ async def main() -> None:
     try:
         await redis.ping()
         async with engine.connect() as connection:
-            ready = await connection.execute(
-                text("SELECT to_regclass('processed_telegram_updates')")
-            )
-            if ready.scalar_one_or_none() is None:
-                raise RuntimeError(
-                    "ClassMate Work database is not migrated; processed_telegram_updates is missing."
+            diagnostic = await connection.execute(
+                text(
+                    "SELECT current_database() AS database, "
+                    "current_schema() AS schema, "
+                    "current_setting('search_path') AS search_path, "
+                    f"to_regclass('{DATABASE_SCHEMA}.processed_telegram_updates')::text AS processed_table, "
+                    f"to_regclass('{DATABASE_SCHEMA}.alembic_version')::text AS version_table"
                 )
-        logger.info("ClassMate Work database ready; schema=%s", DATABASE_SCHEMA)
+            )
+            database_state = diagnostic.mappings().one()
+            if database_state["processed_table"] is None:
+                raise RuntimeError(
+                    "ClassMate Work migration check failed: "
+                    f"database_state={dict(database_state)}"
+                )
+            if database_state["version_table"] is None:
+                raise RuntimeError(
+                    "ClassMate Work Alembic version table is missing: "
+                    f"database_state={dict(database_state)}"
+                )
+            versions = (
+                await connection.execute(
+                    text(f"SELECT version_num FROM {DATABASE_SCHEMA}.alembic_version")
+                )
+            ).scalars().all()
+        logger.info(
+            "ClassMate Work database ready; database=%s schema=%s search_path=%s migrations=%s",
+            database_state["database"],
+            DATABASE_SCHEMA,
+            database_state["search_path"],
+            versions,
+        )
 
         await _acquire_poller_lock(redis, token)
 
