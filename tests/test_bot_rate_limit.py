@@ -7,6 +7,11 @@ from aiogram.types import CallbackQuery, Chat, Message, User
 from app.bot.rate_limit import TelegramRateLimitMiddleware
 
 
+class StubMessage(Message):
+    async def answer(self, *_args, **_kwargs):
+        return True
+
+
 class StubCallbackQuery(CallbackQuery):
     async def answer(self, *_args, **_kwargs):
         return True
@@ -27,7 +32,7 @@ class BrokenRedis:
 
 
 def _message(user_id: int = 1234) -> Message:
-    return Message(
+    return StubMessage(
         message_id=1,
         date=datetime.now(UTC),
         chat=Chat(id=user_id, type=ChatType.PRIVATE),
