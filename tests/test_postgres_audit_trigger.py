@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
+
 from app.db.runtime import create_database_engine
 
 
