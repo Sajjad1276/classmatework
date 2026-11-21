@@ -19,10 +19,11 @@
 ### هویت و امنیت Bot
 - User و TelegramAccount با Telegram ID عددی.
 - Bootstrap مالک با CLI.
-- Pairing مدیر جدید با Token یک‌بارمصرف، hash‌شده، کوتاه‌عمر و محدود به Telegram ID هدف.
+- Pairing مدیر جدید با Token یک‌بارمصرف، Hash-only، کوتاه‌عمر و محدود به Telegram ID هدف؛ دعوت‌نامه Role و Scope صریح دارد و پذیرش آن RoleBinding و در Scope Tenant عضویت را اتمیک می‌سازد.
 - Private Chat guard، رد حساب ناشناس یا غیرفعال.
 - Redis FSM و قفل Poller تک‌نمونه‌ای.
 - Telegram Update dedup با Lease پایدار در PostgreSQL.
+- Rate Limit اتمیک Redis برای پیام و Callback با رفتار Fail-Closed.
 - Callbackهای Wizard به Flow Token متصل‌اند تا Callback قدیمی روی فرم جدید اثر نگذارد.
 - Audit correlation با شناسه tg-UPDATE_ID.
 
@@ -47,13 +48,14 @@
 - 0002: scope constraints و composite tenant integrity.
 - 0003: TelegramAccount و Pairing Token؛ حذف Browser Sessions.
 - 0004: processed_telegram_updates برای Replay suppression.
+- 0005: Role/Scope در دعوت‌نامه، قید مثبت بودن Telegram ID، جلوگیری از دعوت فعال تکراری و Seed نقش‌های پایه Tenantهای موجود.
 
 ## 3. مواردی که هنوز نباید پیاده‌سازی‌شده اعلام شوند
 
 - Bot هنوز با Bot Token واقعی در Telegram یا Railway آزمایش/Deploy نشده است.
 - Invite/Pairing در تست‌ها بررسی شده؛ تحویل واقعی لینک به مدیر دعوت‌شده هنوز end-to-end تست نشده است.
 - Unlink/recovery، MFA/step-up و مدیریت نشست/دستگاه هنوز کامل نیست.
-- Role assignment و مدیریت مجوزها از UI تلگرام هنوز در دست توسعه است.
+- فهرست نقش‌ها (/roles) و دعوت نقش‌محور (/invite) آماده است؛ CRUD کامل Role، مدیریت مستقل Permission و فهرست/تعلیق/لغو عضویت هنوز باقی است.
 - فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند؛ Update/Archive، Search و Pagination کامل هنوز باقی است.
 - Audit explorer، گزارش، جست‌وجوی سراسری و داشبورد در فازهای بعدی تکمیل می‌شوند.
 - Machine-to-Machine authentication برای Integration API هنوز پیاده‌سازی نشده است.
@@ -67,22 +69,23 @@
 3. بر اساس Permission منوی درست را ببیند.
 4. Tenantها را فهرست کند.
 5. Tenant جدید را با Preview و Confirmation بسازد.
-6. مدیر جدید را با Pairing یک‌بارمصرف دعوت کند (دعوت به‌تنهایی Role مدیریتی اضافه نمی‌کند).
+6. مدیر جدید را با Pairing یک‌بارمصرف همراه Role و Scope دعوت کند؛ در Scope Tenant، Membership و RoleBinding هنگام پذیرش ساخته می‌شوند.
 7. سلامت اتصال Database و Redis را از Bot بررسی کند.
 8. از Back/Cancel/Menu و رفتار Callback منقضی استفاده کند.
 
-برای بستن کامل فاز، Update/Archive، Search/Pagination، لغو اتصال مدیر، ماتریس کامل Role/Scope، Integration identity و تست‌های عملی Bot نیز باید تکمیل شوند.
+برای بستن کامل فاز، Update/Archive، Search/Pagination، لغو اتصال مدیر، مدیریت کامل Role/Membership، Integration identity و تست‌های عملی Bot نیز باید تکمیل شوند.
 
 ## 5. Gate پذیرش فاز ۱
 
-- [x] CI برای Commit `fcd542e67eab873bfb8b9bca626ce3d7388b2b27`: Ruff، چهار Migration PostgreSQL و ۲۷ تست سبز (یک Warning غیرمسدودکننده). Run: `44932613037`.
+- [x] CI برای Commit 746c1be44488df498737bcf5b2dd385ea0799f93: Ruff، پنج Migration PostgreSQL و ۳۴ تست سبز (یک Warning غیرمسدودکننده). Run: 44936217541.
 - [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
 - [x] تست‌های middleware برای Private Chat و رد مسیرهای خارج از هویت فعال اضافه شده‌اند؛ آزمون End-to-End حساب Unlinked/تعلیق‌شده با Bot واقعی هنوز لازم است.
-- [x] Pairing برای Telegram ID نادرست، Token منقضی و Token مصرف‌شده در تست‌ها رد می‌شود.
+- [x] Pairing با Role/Scope، جلوگیری از escalation، رد Telegram ID اشتباه، Token منقضی/مصرف‌شده و رد دعوت در صورت لغو اختیار دعوت‌کننده تست شده است.
 - [x] Callback قدیمی از Flow قبلی با Flow Token در Wizard ساخت Tenant بی‌اثر است.
 - [x] Update تکراری در تست Dedup اجرا نمی‌شود و Update شکست‌خورده پس از آزادشدن Lease قابل Retry است.
 - [x] Role/Scope inheritance، Deny و Cross-tenant با تست‌های Policy و PostgreSQL اثبات شده‌اند.
 - [x] فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند.
+- [x] فهرست نقش‌ها و دعوت نقش‌محور برای Scopeهای Platform و Tenant پیاده‌سازی شده؛ مدیر Tenant فقط داخل Tenant خودش می‌تواند دعوت صادر کند.
 - [ ] اجرای End-to-End فرم‌های ساختار آموزشی با Bot Token آزمایشی و بررسی دستی خطاها/Back/Cancel.
 - [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
 - [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
