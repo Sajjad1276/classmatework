@@ -229,3 +229,141 @@ async def test_postgres_rejects_invalid_role_binding_scope_shapes() -> None:
                     )
 
     await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_postgres_enforces_pairing_scope_and_one_open_invite_per_target() -> None:
+    database_url = os.getenv("TEST_POSTGRES_URL")
+    if not database_url:
+        pytest.skip("TEST_POSTGRES_URL is not configured.")
+
+    engine = create_async_engine(database_url)
+    tenant_id, user_id, role_id = uuid4(), uuid4(), uuid4()
+    now = datetime.now(timezone.utc)
+    target_telegram_id = 8_123_456_789
+
+    async with engine.connect() as connection:
+        async with connection.begin():
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO tenants
+                        (id, slug, name, status, timezone, locale, created_at)
+                    VALUES
+                        (CAST(:id AS uuid), :slug, 'Pairing Scope Tenant', 'active',
+                         'Asia/Tehran', 'fa-IR', :now)
+                    """
+                ),
+                {
+                    "id": str(tenant_id),
+                    "slug": f"pairing-scope-{tenant_id.hex[:8]}",
+                    "now": now,
+                },
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO users
+                        (id, email, display_name, password_hash, status,
+                         failed_login_attempts, created_at, updated_at)
+                    VALUES
+                        (CAST(:id AS uuid), :email, 'Pairing Test', NULL,
+                         'pending', 0, :now, :now)
+                    """
+                ),
+                {
+                    "id": str(user_id),
+                    "email": f"{user_id.hex}@pairing.example.test",
+                    "now": now,
+                },
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO roles
+                        (id, tenant_id, key, name, is_system, created_at)
+                    VALUES
+                        (CAST(:id AS uuid), CAST(:tenant AS uuid),
+                         'tenant_admin_test', 'Tenant Admin Test', TRUE, :now)
+                    """
+                ),
+                {"id": str(role_id), "tenant": str(tenant_id), "now": now},
+            )
+
+            valid_values = {
+                "id": str(uuid4()),
+                "user": str(user_id),
+                "target": target_telegram_id,
+                "token": uuid4().hex + uuid4().hex,
+                "role": str(role_id),
+                "tenant": str(tenant_id),
+                "scope": str(tenant_id),
+                "created_by": str(user_id),
+                "created": now,
+                "expires": now + __import__("datetime").timedelta(minutes=15),
+            }
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO admin_pairing_tokens
+                        (id, user_id, target_telegram_user_id, token_hash, role_id,
+                         tenant_id, scope_type, scope_id, created_by_id, expires_at,
+                         consumed_at, revoked_at, created_at)
+                    VALUES
+                        (CAST(:id AS uuid), CAST(:user AS uuid), :target, :token,
+                         CAST(:role AS uuid), CAST(:tenant AS uuid), 'tenant',
+                         CAST(:scope AS uuid), CAST(:created_by AS uuid), :expires,
+                         NULL, NULL, :created)
+                    """
+                ),
+                valid_values,
+            )
+
+            with pytest.raises(IntegrityError):
+                async with connection.begin_nested():
+                    duplicate_values = dict(valid_values)
+                    duplicate_values["id"] = str(uuid4())
+                    duplicate_values["token"] = uuid4().hex + uuid4().hex
+                    await connection.execute(
+                        text(
+                            """
+                            INSERT INTO admin_pairing_tokens
+                                (id, user_id, target_telegram_user_id, token_hash, role_id,
+                                 tenant_id, scope_type, scope_id, created_by_id, expires_at,
+                                 consumed_at, revoked_at, created_at)
+                            VALUES
+                                (CAST(:id AS uuid), CAST(:user AS uuid), :target, :token,
+                                 CAST(:role AS uuid), CAST(:tenant AS uuid), 'tenant',
+                                 CAST(:scope AS uuid), CAST(:created_by AS uuid), :expires,
+                                 NULL, NULL, :created)
+                            """
+                        ),
+                        duplicate_values,
+                    )
+
+            with pytest.raises(IntegrityError):
+                async with connection.begin_nested():
+                    invalid_values = dict(valid_values)
+                    invalid_values["id"] = str(uuid4())
+                    invalid_values["target"] = target_telegram_id + 1
+                    invalid_values["token"] = uuid4().hex + uuid4().hex
+                    invalid_values["scope"] = str(uuid4())
+                    await connection.execute(
+                        text(
+                            """
+                            INSERT INTO admin_pairing_tokens
+                                (id, user_id, target_telegram_user_id, token_hash, role_id,
+                                 tenant_id, scope_type, scope_id, created_by_id, expires_at,
+                                 consumed_at, revoked_at, created_at)
+                            VALUES
+                                (CAST(:id AS uuid), CAST(:user AS uuid), :target, :token,
+                                 CAST(:role AS uuid), CAST(:tenant AS uuid), 'tenant',
+                                 CAST(:scope AS uuid), CAST(:created_by AS uuid), :expires,
+                                 NULL, NULL, :created)
+                            """
+                        ),
+                        invalid_values,
+                    )
+
+    await engine.dispose()
