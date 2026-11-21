@@ -75,7 +75,7 @@ async def main() -> None:
     session_factory: async_sessionmaker[AsyncSession] = create_session_factory(engine)
     redis = create_redis_client(settings.redis_url)
     token = secrets.token_urlsafe(32)
-    bot = Bot(token=settings.telegram_bot_token)
+    bot = Bot(token=settings.telegram_bot_token.get_secret_value())
     storage = RedisStorage.from_url(
         settings.redis_url,
         state_ttl=timedelta(seconds=settings.bot_fsm_ttl_seconds),
@@ -84,7 +84,10 @@ async def main() -> None:
     dispatcher = Dispatcher(storage=storage)
     dispatcher["redis"] = redis
     dispatcher.update.outer_middleware(
-        TelegramUpdateDedupMiddleware(session_factory)
+        TelegramUpdateDedupMiddleware(
+                session_factory,
+                lease_ttl=timedelta(seconds=settings.bot_update_lease_seconds),
+            )
     )
 
     try:
@@ -102,7 +105,12 @@ async def main() -> None:
 
         for observer in (dispatcher.message, dispatcher.callback_query):
             observer.outer_middleware(PrivateChatOnlyMiddleware())
-            observer.outer_middleware(TelegramRateLimitMiddleware(redis))
+            observer.outer_middleware(TelegramRateLimitMiddleware(
+                redis,
+                message_limit=settings.bot_message_rate_limit,
+                callback_limit=settings.bot_callback_rate_limit,
+                window_seconds=settings.bot_rate_limit_window_seconds,
+            ))
             observer.outer_middleware(DatabaseSessionMiddleware(session_factory))
             observer.outer_middleware(TelegramIdentityMiddleware())
 
