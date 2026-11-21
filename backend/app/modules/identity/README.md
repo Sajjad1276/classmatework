@@ -40,10 +40,13 @@
 ## Implemented bot slice
 
 - Private Chat guard and Telegram account resolution.
-- /start, /menu, /back, /cancel, /roles, /invite, /help and /status.
+- /start, /menu, /back, /cancel, /roles, /role-create, /members, /invite, /revoke-invite, /help and /status.
 - Account details and a permission-filtered main menu.
 - Role directory for platform owners and tenant managers (tenant managers see only their own tenant's roles).
+- Tenant-local custom role creation; every allow permission must already be held by the creator at the same tenant scope.
+- Active member directory with current tenant role bindings; Telegram IDs for blocked/unlinked accounts are hidden.
 - Role-aware invitation from the Platform or from the same Tenant; a tenant manager cannot invite into another Tenant.
+- Revocation of pending invitations by the creator or an administrator with current assignment authority; a consumed invitation cannot be revoked through this command.
 - Tenant list/select and a multi-step tenant creation wizard with validation, preview, confirm, back, cancel and stale-callback protection.
 - Tenant-scoped school list/create forms.
 - School-scoped academic-year list/create forms.
@@ -54,7 +57,7 @@
 ## Not yet complete
 
 - Telegram unlink/recovery lifecycle and step-up/MFA.
-- Full Role CRUD, global/tenant permission registry management, user directory, membership listing/suspension/revocation and invitation revocation.
+- Role edit/archive, independent permission-registry management, member suspension/revocation and member-directory pagination.
 - Update/archive forms, complete pagination/search and automated end-to-end Bot API tests.
 - Complete school/academic CRUD forms in the bot.
 - Live Telegram API verification with a real bot token and production deployment.
