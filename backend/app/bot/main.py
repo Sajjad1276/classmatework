@@ -67,7 +67,10 @@ async def _run_polling(dispatcher: Dispatcher, bot: Bot) -> None:
 
 async def main() -> None:
     settings = get_settings()
-    if not settings.telegram_bot_token:
+    if (
+        settings.telegram_bot_token is None
+        or not settings.telegram_bot_token.get_secret_value().strip()
+    ):
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required to run the admin bot.")
 
     configure_logging(settings.log_level)
