@@ -50,6 +50,7 @@
 - 0003: TelegramAccount و Pairing Token؛ حذف Browser Sessions.
 - 0004: processed_telegram_updates برای Replay suppression.
 - 0005: Role/Scope در Pairing، قید مثبت بودن Telegram ID، یکتایی دعوت فعال و Seed نقش‌های پیش‌فرض Tenant.
+- 0006: افزودن Permission مستقل membership:manage و اعطای آن به tenant_adminهای موجود.
 - 0005: Role/Scope در دعوت‌نامه، قید مثبت بودن Telegram ID، جلوگیری از دعوت فعال تکراری و Seed نقش‌های پایه Tenantهای موجود.
 
 ## 3. مواردی که هنوز نباید پیاده‌سازی‌شده اعلام شوند
@@ -57,7 +58,7 @@
 - Bot هنوز با Bot Token واقعی در Telegram یا Railway آزمایش/Deploy نشده است.
 - Invite/Pairing در تست‌ها بررسی شده؛ تحویل واقعی لینک به مدیر دعوت‌شده هنوز end-to-end تست نشده است.
 - Unlink/recovery، MFA/step-up و مدیریت نشست/دستگاه هنوز کامل نیست.
-- فهرست نقش‌ها (/roles) و دعوت نقش‌محور (/invite) آماده است؛ CRUD کامل Role، مدیریت مستقل Permission و فهرست/تعلیق/لغو عضویت هنوز باقی است.
+- فهرست نقش‌ها (/roles) و دعوت نقش‌محور (/invite) آماده است؛ CRUD کامل Role، مدیریت مستقل Permission و فهرست/تعلیق عضویت با دلیل اجباری، تأیید صریح و حفاظت از آخرین مدیر فعال پیاده‌سازی شده است؛ لغو کامل و بازیابی عضویت هنوز باقی است.
 - فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند؛ Update/Archive، Search و Pagination کامل هنوز باقی است.
 - Audit explorer، گزارش، جست‌وجوی سراسری و داشبورد در فازهای بعدی تکمیل می‌شوند.
 - Machine-to-Machine authentication برای Integration API هنوز پیاده‌سازی نشده است.
@@ -79,7 +80,7 @@
 
 ## 5. Gate پذیرش فاز ۱
 
-- [x] CI برای Commit ce1f7e90fa8fb0c30c8bb5f95d6da7204d8e99e6: Ruff، پنج Migration PostgreSQL و ۴۲ تست سبز (یک Warning غیرمسدودکننده). Run: 44937709726.
+- [x] CI برای Commit dcd0ed2b0bb2102bbb72805b2a4178ca72ddcc89: Ruff، شش Migration PostgreSQL و ۴۵ تست سبز (یک Warning غیرمسدودکننده). Run: 44938276215.
 - [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
 - [x] تست‌های middleware برای Private Chat و رد مسیرهای خارج از هویت فعال اضافه شده‌اند؛ آزمون End-to-End حساب Unlinked/تعلیق‌شده با Bot واقعی هنوز لازم است.
 - [x] Pairing با Role/Scope، جلوگیری از escalation، رد Telegram ID اشتباه، Token منقضی/مصرف‌شده و رد دعوت در صورت لغو اختیار دعوت‌کننده تست شده است.
@@ -89,6 +90,7 @@
 - [x] فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند.
 - [x] فهرست نقش‌ها، ساخت نقش سفارشی با Permission ceiling، فهرست اعضای فعال، فهرست دعوت‌نامه‌های باز/منقضی و لغو دعوت‌نامهٔ پذیرفته‌نشده پیاده‌سازی شده‌اند.
 - [x] مدیر Tenant فقط می‌تواند در محدودهٔ خودش نقش واگذار کند، اعضا و دعوت‌ها را ببیند و دعوت صادر/لغو کند.
+- [x] تعلیق عضو با دلیل اجباری، تأیید دومرحله‌ای و جلوگیری از تعلیق خود/آخرین مدیر فعال.
 - [ ] اجرای End-to-End فرم‌های ساختار آموزشی با Bot Token آزمایشی و بررسی دستی خطاها/Back/Cancel.
 - [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
 - [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
