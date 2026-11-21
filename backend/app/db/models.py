@@ -241,7 +241,21 @@ class AdminPairingToken(Base):
     __table_args__ = (
         UniqueConstraint("token_hash", name="uq_admin_pairing_token_hash"),
         CheckConstraint("expires_at > created_at", name="ck_admin_pairing_expiry"),
+        CheckConstraint(
+            "(scope_type = 'platform' AND tenant_id IS NULL AND scope_id IS NULL) OR "
+            "(scope_type = 'tenant' AND tenant_id IS NOT NULL AND tenant_id = scope_id) OR "
+            "(scope_type IN ('organization', 'school', 'class') "
+            "AND tenant_id IS NOT NULL AND scope_id IS NOT NULL)",
+            name="ck_admin_pairing_scope",
+        ),
         Index("ix_admin_pairing_target_expiry", "target_telegram_user_id", "expires_at"),
+        Index(
+            "uq_admin_pairing_active_target",
+            "target_telegram_user_id",
+            unique=True,
+            postgresql_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
+            sqlite_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -250,6 +264,14 @@ class AdminPairingToken(Base):
     )
     target_telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    role_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
+    )
+    tenant_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=True
+    )
+    scope_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    scope_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_by_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
     )
