@@ -972,6 +972,53 @@ async def class_list_callback(
         )
 
 
+
+
+@router.callback_query(F.data == "class:create-selected")
+async def class_create_selected_year_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, school_id, year_id = await _context_ids(state)
+        if school_id is None or year_id is None:
+            raise ResourceNotFound("ابتدا سال تحصیلی را انتخاب کنید.")
+        if not await _has_school_permission(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            permission="class:create",
+        ):
+            raise AccessDenied
+        years = await list_academic_years(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            limit=100,
+        )
+        if not any(item.id == year_id for item in years):
+            raise ResourceNotFound("سال تحصیلی در مدرسه انتخاب‌شده پیدا نشد.")
+    except ApplicationError as exc:
+        await callback.answer(str(exc) or "دسترسی ندارید.", show_alert=True)
+        return
+    await _start_flow(
+        state,
+        flow_name="class",
+        first_state=StructureWizard.class_name,
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _render_step(
+            callback.message,
+            state=state,
+            step_name=StructureWizard.class_name.state,
+        )
+
+
 @router.callback_query(F.data == "class:choose-year")
 async def class_choose_year_callback(
     callback: CallbackQuery,
