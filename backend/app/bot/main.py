@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 _LOCK_KEY = "classmatework:admin-bot:poller-lock"
 _LOCK_TTL_SECONDS = 45
+_LOCK_ACQUIRE_TIMEOUT_SECONDS = 90
+_LOCK_RETRY_INTERVAL_SECONDS = 1
 _LOCK_RENEW_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('expire', KEYS[1], ARGV[2])
@@ -41,6 +43,42 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+
+
+async def _acquire_poller_lock(redis: Redis, token: str) -> None:
+    """Wait for the previous Railway replica to release its polling lease.
+
+    During a rolling deploy the old replica may still own the lock when the
+    replacement starts. Failing immediately would turn a healthy handover
+    into a crash loop. The bounded wait is longer than the lease TTL so that
+    an abruptly terminated owner can also expire safely.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _LOCK_ACQUIRE_TIMEOUT_SECONDS
+    next_notice = loop.time()
+
+    while True:
+        acquired = await redis.set(
+            _LOCK_KEY,
+            token,
+            nx=True,
+            ex=_LOCK_TTL_SECONDS,
+        )
+        if acquired:
+            logger.info("Admin bot poller lock acquired.")
+            return
+
+        now = loop.time()
+        if now >= deadline:
+            raise RuntimeError(
+                "Timed out waiting for the previous admin bot poller to release its lock."
+            )
+
+        if now >= next_notice:
+            logger.info("Previous admin bot poller still holds the lock; waiting for handover.")
+            next_notice = now + 10
+
+        await asyncio.sleep(_LOCK_RETRY_INTERVAL_SECONDS)
 
 
 async def _renew_poller_lock(redis: Redis, token: str) -> None:
@@ -96,16 +134,7 @@ async def main() -> None:
 
     try:
         await redis.ping()
-        acquired = await redis.set(
-            _LOCK_KEY,
-            token,
-            nx=True,
-            ex=_LOCK_TTL_SECONDS,
-        )
-        if not acquired:
-            raise RuntimeError(
-                "Another admin bot poller is already active for this Telegram bot token."
-            )
+        await _acquire_poller_lock(redis, token)
 
         for observer in (dispatcher.message, dispatcher.callback_query):
             observer.outer_middleware(PrivateChatOnlyMiddleware())
