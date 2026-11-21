@@ -5,13 +5,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.application.errors import AccessDenied, InvalidApplicationInput
+from app.application.errors import AccessDenied, InvalidApplicationInput, ResourceConflict
 from app.application.tenant_access import (
     create_tenant_role,
     list_admin_invitations,
     list_tenant_members,
     list_tenant_roles,
+    preview_tenant_member_reactivation,
     preview_tenant_member_suspension,
+    reactivate_tenant_member,
     suspend_tenant_member,
 )
 from app.db.base import Base
@@ -535,4 +537,132 @@ async def test_operator_cannot_suspend_the_last_active_tenant_admin() -> None:
             )
         ).scalar_one()
         assert still_active == "active"
+    await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_suspended_member_can_be_reactivated_with_a_fresh_scoped_role_binding() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, member = await _seed_manager_and_member(db)
+        old_binding = (
+            await db.execute(
+                select(RoleBinding).where(
+                    RoleBinding.user_id == member.id,
+                    RoleBinding.tenant_id == tenant.id,
+                )
+            )
+        ).scalar_one()
+        old_binding_id = old_binding.id
+
+        await suspend_tenant_member(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            member_user_id=member.id,
+            reason="Temporary access suspension for investigation",
+        )
+        preview = await preview_tenant_member_reactivation(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            member_user_id=member.id,
+            role_key=old_binding and (
+                await db.execute(
+                    select(Role.key)
+                    .join(RoleBinding, RoleBinding.role_id == Role.id)
+                    .where(RoleBinding.id == old_binding_id)
+                )
+            ).scalar_one(),
+        )
+        assert preview.user_id == member.id
+        assert preview.permission_keys == ("school:read",)
+
+        reactivated = await reactivate_tenant_member(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            member_user_id=member.id,
+            role_key=preview.role_key,
+            reason="Investigation completed and access approved",
+        )
+        assert reactivated.user_id == member.id
+        assert reactivated.role_key == preview.role_key
+
+        membership = (
+            await db.execute(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.id,
+                    TenantMembership.user_id == member.id,
+                )
+            )
+        ).scalar_one()
+        assert membership.status == "active"
+        assert membership.ends_at is None
+
+        bindings = (
+            await db.execute(
+                select(RoleBinding).where(
+                    RoleBinding.user_id == member.id,
+                    RoleBinding.tenant_id == tenant.id,
+                )
+            )
+        ).scalars().all()
+        assert len(bindings) == 2
+        previous = next(binding for binding in bindings if binding.id == old_binding_id)
+        current = next(binding for binding in bindings if binding.id != old_binding_id)
+        assert previous.ends_at is not None
+        assert current.ends_at is None
+        assert current.role_id == old_binding.role_id
+
+        assert await has_permission(
+            db,
+            user_id=member.id,
+            permission_key="school:read",
+            tenant_id=tenant.id,
+            scope_type="tenant",
+            scope_id=tenant.id,
+        )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reactivation_requires_active_telegram_link_and_role_permissions() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, member = await _seed_manager_and_member(db)
+        await suspend_tenant_member(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            member_user_id=member.id,
+            reason="Temporary member suspension for test",
+        )
+        account = (
+            await db.execute(
+                select(TelegramAccount).where(TelegramAccount.user_id == member.id)
+            )
+        ).scalar_one()
+        account.status = "blocked"
+        await db.commit()
+
+        with pytest.raises(ResourceConflict, match="تلگرام"):
+            await preview_tenant_member_reactivation(
+                db,
+                actor_id=manager.id,
+                tenant_id=tenant.id,
+                member_user_id=member.id,
+                role_key=f"tenant_member_{uuid4().hex[:8]}",
+            )
+
+        with pytest.raises(ResourceConflict, match="تلگرام"):
+            await reactivate_tenant_member(
+                db,
+                actor_id=manager.id,
+                tenant_id=tenant.id,
+                member_user_id=member.id,
+                role_key="does_not_matter",
+                reason="Attempt reactivation with a blocked Telegram link",
+            )
     await engine.dispose()
