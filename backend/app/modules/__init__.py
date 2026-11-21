@@ -1,0 +1,1 @@
+"""Domain modules. Cross-module access must go through public application contracts."""

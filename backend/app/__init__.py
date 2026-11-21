@@ -1,0 +1,1 @@
+"""ClassMate Work application package."""

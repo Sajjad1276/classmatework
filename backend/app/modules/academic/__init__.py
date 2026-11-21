@@ -1,0 +1,1 @@
+"""Academic structure domain boundary: schools, years, classes and subjects."""
