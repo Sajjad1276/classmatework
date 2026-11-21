@@ -12,6 +12,10 @@ from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from app.db.models import ProcessedTelegramUpdate
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 class TelegramUpdateDedupMiddleware(BaseMiddleware):
     """Use a durable DB lease to suppress duplicate Telegram Update deliveries.
 
@@ -92,7 +96,7 @@ class TelegramUpdateDedupMiddleware(BaseMiddleware):
                     return None
                 if (
                     existing.status == "processing"
-                    and existing.lease_expires_at > now
+                    and _as_utc(existing.lease_expires_at) > now
                 ):
                     await db.commit()
                     return None
