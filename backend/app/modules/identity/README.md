@@ -17,9 +17,14 @@
 
 - Public self-registration is disabled.
 - The first Platform Owner is provisioned by CLI using a numeric Telegram User ID verified outside the bot.
-- Additional administrators are invited with a random, one-time, short-lived pairing token.
+- Additional administrators are invited with a random, one-time, short-lived pairing token that is bound to an explicit Role and Scope.
 - Only a SHA-256 digest of the pairing token is stored; the raw token is shown once in the generated deep link.
-- Pairing is bound to the exact target Telegram User ID and an unexpired pending User record.
+- Pairing is bound to the exact target Telegram User ID, selected role, platform/tenant scope and an unexpired pending User record.
+- Accepting a platform invitation creates a RoleBinding; accepting a tenant invitation atomically creates TelegramAccount, TenantMembership and RoleBinding.
+- Platform assignment requires platform user-management and role-assignment permissions. Tenant assignment requires membership-invite and role-manage permissions in that same tenant; every granted allow permission must also be held by the inviter at the destination scope.
+- At acceptance, inviter status, assignment authority, role state and scope are revalidated. If authority was revoked, the invitation is rejected.
+- Active invitations per Telegram ID are unique; expired invitations are revoked and their pending User is marked invitation_expired before a replacement is issued.
+- Phase-one UI intentionally supports only platform and tenant invitation scopes; school/class-level invitations are not exposed yet.
 - Pair creation and consumption are audited.
 - Recovery of the platform owner after losing the Telegram account still requires a controlled out-of-band procedure; it is not implemented yet.
 
@@ -35,8 +40,10 @@
 ## Implemented bot slice
 
 - Private Chat guard and Telegram account resolution.
-- /start, /menu, /back, /cancel, /invite, /help and /status.
+- /start, /menu, /back, /cancel, /roles, /invite, /help and /status.
 - Account details and a permission-filtered main menu.
+- Role directory for platform owners and tenant managers (tenant managers see only their own tenant's roles).
+- Role-aware invitation from the Platform or from the same Tenant; a tenant manager cannot invite into another Tenant.
 - Tenant list/select and a multi-step tenant creation wizard with validation, preview, confirm, back, cancel and stale-callback protection.
 - Tenant-scoped school list/create forms.
 - School-scoped academic-year list/create forms.
@@ -47,7 +54,7 @@
 ## Not yet complete
 
 - Telegram unlink/recovery lifecycle and step-up/MFA.
-- Full role assignment and user/membership management.
+- Full Role CRUD, global/tenant permission registry management, user directory, membership listing/suspension/revocation and invitation revocation.
 - Update/archive forms, complete pagination/search and automated end-to-end Bot API tests.
 - Complete school/academic CRUD forms in the bot.
 - Live Telegram API verification with a real bot token and production deployment.
