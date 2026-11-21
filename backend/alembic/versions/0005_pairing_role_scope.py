@@ -106,6 +106,7 @@ def upgrade() -> None:
                 "subject:create",
                 "membership:read",
                 "membership:invite",
+                "membership:manage",
                 "role:manage",
             ),
         ),
