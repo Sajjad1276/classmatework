@@ -93,6 +93,8 @@
 - مدیر Tenant فقط با membership:invite و role:manage در همان Tenant دعوت صادر می‌کند؛ Platform owner به مجوزهای سراسری نیاز دارد.
 - PostgreSQL قید مثبت بودن Telegram ID، Scope shape و یکتایی دعوت فعال برای هر Telegram ID را enforce می‌کند.
 - Bot فرم‌های پایه انتخاب/ایجاد School، Academic Year، Class و Subject را با Use Caseهای دارای Permission و Tenant ownership اجرا می‌کند.
+- فرمان‌های /role-create و /members از Use Caseهای دارای Permission استفاده می‌کنند؛ نقش سفارشی فقط Permissionهای در اختیار سازنده را می‌گیرد و فهرست اعضا فقط افراد فعال همان Tenant را نشان می‌دهد.
+- /revoke-invite دعوت‌نامهٔ Pending را با Audit لغو می‌کند؛ دعوت پذیرفته‌شده از این مسیر قابل لغو نیست.
 - Telegram Update correlation به Audit context منتقل می‌شود.
 - RBAC ارث‌بری والد به فرزند و Deny-overrides-Allow دارد؛ Composite FK و RoleBinding Check Constraint در Migration 0002 تعریف شده‌اند.
 - Use Caseهای Tenant/School/Academic Year/Class/Subject در Application Layer وجود دارند؛ Bot فرم‌های پایه فهرست/ایجاد Tenant، School، Academic Year، Class و Subject را اجرا می‌کند.
@@ -100,10 +102,10 @@
 
 **موارد باز:**
 
-- CI برای Commit 746c1be44488df498737bcf5b2dd385ea0799f93 سبز شده است (Ruff، پنج Migration PostgreSQL، ۳۴ تست و یک Warning غیرمسدودکننده). Run: 44936217541.
+- CI برای Commit 4980a075f3b75979d17921fc70c487d7d4ada3a1 سبز شده است (Ruff، پنج Migration PostgreSQL، ۴۰ تست و یک Warning غیرمسدودکننده). Run: 44937126858.
 - اجرای واقعی Bot با Token معتبر و تست end-to-end هنوز انجام نشده است.
 - لغو اتصال، بازیابی مدیر و Step-up/MFA کامل نیست.
-- چرخه کامل CRUD Role/Permission، مدیریت فهرست/تعلیق/لغو Membership و فرم‌های Update/Archive موجودیت‌های آموزشی در Bot هنوز تکمیل نشده‌اند.
+- ویرایش/آرشیو Role، مدیریت مستقل Permission Registry، تعلیق/لغو عضویت و فرم‌های Update/Archive موجودیت‌های آموزشی در Bot هنوز تکمیل نشده‌اند.
 - Integration API و Service Authentication برای اتصال آینده به classmate2 هنوز ساخته نشده‌اند.
 - Audit readهای حساس و Correlation end-to-end هنوز نیازمند بازبینی گسترده‌اند.
 
