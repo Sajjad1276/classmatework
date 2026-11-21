@@ -1,0 +1,1 @@
+"""Membership and invitation lifecycle domain boundary."""
