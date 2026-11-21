@@ -18,7 +18,6 @@ from app.db.models import (
     User,
 )
 from app.modules.access.policy import has_permission
-from app.modules.identity.passwords import hash_password, needs_rehash, verify_password
 
 
 @pytest.mark.asyncio
@@ -34,7 +33,6 @@ async def test_tenant_permission_requires_membership_and_is_tenant_scoped() -> N
         user = User(
             email="manager@example.com",
             display_name="Tenant Manager",
-            password_hash=hash_password("a-long-test-password"),
         )
         db.add_all([tenant_one, tenant_two, user])
         await db.flush()
@@ -99,7 +97,6 @@ async def test_explicit_deny_overrides_allow() -> None:
         user = User(
             email="reviewer@example.com",
             display_name="Reviewer",
-            password_hash=hash_password("another-long-password"),
         )
         db.add_all([tenant, user])
         await db.flush()
@@ -165,7 +162,6 @@ async def test_tenant_role_inherits_permission_to_school_descendant() -> None:
         user = User(
             email="tenant-admin@example.com",
             display_name="Tenant Admin",
-            password_hash=hash_password("a-long-test-password"),
         )
         db.add_all([tenant, user])
         await db.flush()
@@ -213,7 +209,6 @@ async def test_school_role_inherits_to_its_class_but_not_sibling_school() -> Non
         user = User(
             email="school-admin@example.com",
             display_name="School Admin",
-            password_hash=hash_password("a-long-test-password"),
         )
         db.add_all([tenant, user])
         await db.flush()
