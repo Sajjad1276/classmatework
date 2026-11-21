@@ -129,15 +129,18 @@ async def main() -> None:
 
         if heartbeat_task in done:
             await heartbeat_task
-            polling_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await polling_task
-        else:
-            heartbeat_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await heartbeat_task
-            await polling_task
+        await polling_task
     finally:
+        for task in (locals().get("polling_task"), locals().get("heartbeat_task")):
+            if task is not None and not task.done():
+                task.cancel()
+        pending_tasks = [
+            task
+            for task in (locals().get("polling_task"), locals().get("heartbeat_task"))
+            if task is not None
+        ]
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
         with suppress(Exception):
             await redis.eval(_LOCK_RELEASE_SCRIPT, 1, _LOCK_KEY, token)
         await storage.close()
