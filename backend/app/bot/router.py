@@ -1,4 +1,3 @@
-from datetime import UTC
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
