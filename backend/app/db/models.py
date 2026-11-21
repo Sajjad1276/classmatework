@@ -219,6 +219,7 @@ class TelegramAccount(Base):
         UniqueConstraint("user_id", name="uq_telegram_accounts_user"),
         UniqueConstraint("telegram_user_id", name="uq_telegram_accounts_telegram_user"),
         CheckConstraint("status IN ('active', 'unlinked', 'blocked')", name="ck_telegram_accounts_status"),
+        Index("ix_telegram_accounts_status", "status"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
