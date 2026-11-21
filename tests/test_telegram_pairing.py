@@ -172,7 +172,9 @@ async def test_expired_pairing_token_cannot_be_consumed() -> None:
                 )
             )
         ).scalar_one()
-        pairing.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        now = datetime.now(UTC)
+        pairing.created_at = now - timedelta(minutes=2)
+        pairing.expires_at = now - timedelta(minutes=1)
         await db.commit()
 
         with pytest.raises(PairingRejected):
