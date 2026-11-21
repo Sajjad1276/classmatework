@@ -17,7 +17,7 @@
 - حساب Bot، فرستنده ناشناس، کاربر Pair نشده، کاربر تعلیق‌شده و اتصال ابطال‌شده رد می‌شوند.
 - ثبت‌نام آزاد وجود ندارد.
 - Bootstrap اولیه Platform Owner باید به Telegram User ID مشخص و تأییدشده متصل باشد.
-- Pairing مدیر بعدی با Token تصادفی یک‌بارمصرف، hash‌شده، کوتاه‌عمر و قابل ممیزی انجام می‌شود.
+- Pairing مدیر بعدی با Token تصادفی یک‌بارمصرف، hash‌شده، کوتاه‌عمر و قابل ممیزی انجام می‌شود؛ Role و Scope در رکورد دعوت ذخیره می‌شوند.
 - از ارسال Token/OTP در URL، Callback Data، Log یا Audit اجتناب می‌شود؛ هیچ secret خامی ذخیره نمی‌شود.
 - قطع Telegram Link یا تعلیق کاربر باید پیش از Update بعدی اثر کند.
 
@@ -89,6 +89,9 @@
 - Bootstrap مالک پلتفرم با Telegram ID عددی و Pairing یک‌بارمصرف مدیران وجود دارد.
 - Private Chat Guard و رد User/TelegramAccount غیرفعال پیاده‌سازی شده است.
 - Redis FSM، قفل Poller، شناسه Flow برای Callbackهای Wizard، ثبت Durable پردازش Update و Rate Limit اتمیک پیام/Callback پیاده‌سازی شده‌اند؛ اختلال Redis باعث رد درخواست می‌شود.
+- واگذاری نقش با اصل no privilege escalation کنترل می‌شود: inviter باید تمام allow permissionهای نقش هدف را در scope مقصد داشته باشد؛ مجوز واگذاری و scope در زمان صدور و پذیرش دوباره بررسی می‌شوند.
+- مدیر Tenant فقط با membership:invite و role:manage در همان Tenant دعوت صادر می‌کند؛ Platform owner به مجوزهای سراسری نیاز دارد.
+- PostgreSQL قید مثبت بودن Telegram ID، Scope shape و یکتایی دعوت فعال برای هر Telegram ID را enforce می‌کند.
 - Bot فرم‌های پایه انتخاب/ایجاد School، Academic Year، Class و Subject را با Use Caseهای دارای Permission و Tenant ownership اجرا می‌کند.
 - Telegram Update correlation به Audit context منتقل می‌شود.
 - RBAC ارث‌بری والد به فرزند و Deny-overrides-Allow دارد؛ Composite FK و RoleBinding Check Constraint در Migration 0002 تعریف شده‌اند.
@@ -97,10 +100,10 @@
 
 **موارد باز:**
 
-- CI برای Commit `fcd542e67eab873bfb8b9bca626ce3d7388b2b27` سبز شده است (Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده). Run: `44932613037`.
+- CI برای Commit 746c1be44488df498737bcf5b2dd385ea0799f93 سبز شده است (Ruff، پنج Migration PostgreSQL، ۳۴ تست و یک Warning غیرمسدودکننده). Run: 44936217541.
 - اجرای واقعی Bot با Token معتبر و تست end-to-end هنوز انجام نشده است.
 - لغو اتصال، بازیابی مدیر و Step-up/MFA کامل نیست.
-- مدیریت Role/Permission و فرم‌های کامل CRUD آموزشی در Bot هنوز تکمیل نشده‌اند.
+- چرخه کامل CRUD Role/Permission، مدیریت فهرست/تعلیق/لغو Membership و فرم‌های Update/Archive موجودیت‌های آموزشی در Bot هنوز تکمیل نشده‌اند.
 - Integration API و Service Authentication برای اتصال آینده به classmate2 هنوز ساخته نشده‌اند.
 - Audit readهای حساس و Correlation end-to-end هنوز نیازمند بازبینی گسترده‌اند.
 
