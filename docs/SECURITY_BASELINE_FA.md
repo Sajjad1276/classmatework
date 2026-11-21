@@ -96,6 +96,7 @@
 - فرمان‌های /role-create و /members از Use Caseهای دارای Permission استفاده می‌کنند؛ نقش سفارشی فقط Permissionهای در اختیار سازنده را می‌گیرد و فهرست اعضا فقط افراد فعال همان Tenant را نشان می‌دهد.
 - فرمان /invites فهرست دعوت‌های باز و منقضی را به‌صورت Platform-wide یا فقط Tenant-scoped نشان می‌دهد؛ شناسه، Role، مقصد و انقضا را نمایش می‌دهد و هرگز raw token را برنمی‌گرداند.
 - تعلیق Membership با مجوز مستقل membership:manage، دلیل اجباری و تأیید صریح انجام می‌شود؛ self-suspension و تعلیق آخرین مدیر فعال رد می‌شوند. تعلیق فقط Tenant هدف را تغییر می‌دهد و TelegramAccount/عضویت سایر Tenantها حفظ می‌شود.
+- فعال‌سازی مجدد با Role انتخابی، کنترل permission ceiling، دلیل اجباری، تأیید صریح و بررسی TelegramAccount فعال انجام می‌شود؛ RoleBinding تازه ساخته می‌شود و Roleهای قبلی احیا نمی‌شوند.
 - /revoke-invite دعوت‌نامهٔ Pending را با Audit لغو می‌کند؛ دعوت پذیرفته‌شده از این مسیر قابل لغو نیست.
 - Telegram Update correlation به Audit context منتقل می‌شود.
 - RBAC ارث‌بری والد به فرزند و Deny-overrides-Allow دارد؛ Composite FK و RoleBinding Check Constraint در Migration 0002 تعریف شده‌اند.
