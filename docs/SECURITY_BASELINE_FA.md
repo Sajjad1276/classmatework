@@ -7,11 +7,11 @@
 - رابط انسانی فقط ربات اختصاصی تلگرام است.
 - FastAPI برای Health Check و Integration API است؛ نباید Telegram User ID دلخواه را بدون احراز منبع، هویت مدیر تلقی کند.
 - منطق Authorization در Backend/Use Case است؛ Inline Keyboard و Callback Handler صرفاً ورودی غیرقابل اعتمادند.
-- \`classmate2\` یک مرز اعتماد خارجی است و فقط با قرارداد Machine-to-Machine متصل می‌شود.
+- `classmate2` یک مرز اعتماد خارجی است و فقط با قرارداد Machine-to-Machine متصل می‌شود.
 
 ## 2. هویت و احراز مدیر
 
-- هویت Telegram از \`Update.from.id\` در Update معتبر استخراج می‌شود.
+- هویت Telegram از `Update.from.id` در Update معتبر استخراج می‌شود.
 - شناسه عددی Telegram پایدارتر از username است؛ username و نام نمایشی فقط metadata هستند.
 - فقط Private Chat پذیرفته می‌شود؛ گروه و کانال برای عملیات مدیریتی ممنوع است.
 - حساب Bot، فرستنده ناشناس، کاربر Pair نشده، کاربر تعلیق‌شده و اتصال ابطال‌شده رد می‌شوند.
@@ -75,7 +75,7 @@
 
 - Telegram User Identity و Service Identity دو هویت جدا هستند.
 - هر Service Credential دارای Audience، Scope، زمان اعتبار، چرخش و امکان ابطال است.
-- API نباید با Header دلخواه \`X-Telegram-User-ID\` به Caller هویت مدیریتی بدهد.
+- API نباید با Header دلخواه `X-Telegram-User-ID` به Caller هویت مدیریتی بدهد.
 - Webhook دارای Signature/تاریخ/Replay Protection است.
 - Payload و Event نسخه‌بندی و اعتبارسنجی می‌شوند.
 - هیچ secret یا تغییر تنظیمی در classmate2 از این پروژه اعمال نمی‌شود.
@@ -92,7 +92,7 @@
 
 ## 10. کنترل‌های پایه محیط
 
-- Secret واقعی در Git نیست؛ \`.env.example\` فقط مقدار توسعه غیرحساس دارد.
+- Secret واقعی در Git نیست؛ `.env.example` فقط مقدار توسعه غیرحساس دارد.
 - تصویر Runtime با کاربر غیرریشه اجرا می‌شود.
 - Readiness فقط وضعیت وابستگی‌ها را می‌دهد، نه جزئیات Secret.
 - Migrationها قبل از اعمال در محیط اشتراکی بازبینی و در CI آزمایش می‌شوند.
