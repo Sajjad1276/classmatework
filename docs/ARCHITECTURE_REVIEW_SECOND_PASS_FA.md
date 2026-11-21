@@ -128,6 +128,20 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - Tenant/School/Academic Year در Redis FSM به‌عنوان Context انتخابی نگهداری می‌شوند؛ هر Use Case پیش از تغییر دوباره Permission و مالکیت منبع را بررسی می‌کند.
 - فهرست Tenant قابل انتخاب است؛ فهرست School، Academic Year، Class و Subject از منوهای زمینه‌ای ارائه می‌شود.
 - عملیات ایجاد دارای Preview/Confirm و Callbackهای Back/Cancel وابسته به Flow Token است.
-- CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d` سبز است: Ruff، چهار Migration و 27 passed, 1 warning؛ [Run #242](https://github.com/Sajjad1276/classmatework/actions/runs/44932471573).
+- CI برای Commit `fcd542e67eab873bfb8b9bca626ce3d7388b2b27` سبز است: Ruff، چهار Migration و 27 passed, 1 warning؛ [Run #249](https://github.com/Sajjad1276/classmatework/actions/runs/44932613037).
 - این موفقیت شامل اجرای واقعی Bot در Telegram نیست. Bot Token آزمایشی/اجرای End-to-End هنوز فراهم نشده است.
 - Update/Archive، Search/Pagination کامل، Role assignment، Unlink/recovery، Step-up/MFA و M2M integration در Gateهای بعدی باقی می‌مانند.
+
+
+## 14. وضعیت مرجع و نهایی پس از بازبینی آخر
+
+این بخش بر snapshotهای تاریخی بالاتر اولویت دارد:
+
+- Bot Adapter و Runtime با aiogram 3 در شاخه وجود دارد؛ اجرای زنده در Telegram هنوز انجام نشده است.
+- منوی مدیریتی Tenant/School و Wizardهای پایه فهرست/ایجاد مدرسه، سال تحصیلی، کلاس و درس در شاخه پیاده‌سازی شده‌اند.
+- Application Use Case و Policy قبل از هر Write مالکیت منبع و Permission را دوباره بررسی می‌کنند.
+- Browser Auth و Frontend از محصول حذف شده‌اند.
+- CI برای Head فعلی `fcd542e67eab873bfb8b9bca626ce3d7388b2b27` موفق است: Ruff، چهار Migration و 27 تست موفق با یک Warning. [Run #249](https://github.com/Sajjad1276/classmatework/actions/runs/44932613037).
+- PR2 همچنان Draft است و Merge نشده است.
+- Gateهای باز: آزمون واقعی Bot با Token آزمایشی، Unlink/recovery، Step-up/MFA، مدیریت نقش/عضویت، Update/Archive و Search/Pagination کامل، M2M integration auth و مرور کامل Audit readها.
+- هیچ Deploy یا تغییر تنظیمی در Railway و هیچ تغییری در `classmate2` انجام نشده است.
