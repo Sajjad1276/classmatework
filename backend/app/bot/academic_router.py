@@ -34,6 +34,7 @@ from app.application.tenants import (
     list_classes,
     list_schools,
     list_subjects,
+    list_tenants,
 )
 from app.db.models import AcademicYear, ClassGroup, School, Subject, Tenant
 from app.modules.access.policy import has_permission
@@ -346,26 +347,47 @@ async def _show_year_menu(
     ):
         await message.answer("سال تحصیلی در مدرسه انتخاب‌شده پیدا نشد.")
         return
-    rows = [
-        [
-            InlineKeyboardButton(
-                text="فهرست کلاس‌های این سال",
-                callback_data="class:list",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="ایجاد کلاس در این سال",
-                callback_data="class:create-selected",
-            )
-        ],
+    can_read = await _has_school_permission(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        school_id=school_id,
+        permission="school:read",
+    )
+    can_create_class = await _has_school_permission(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        school_id=school_id,
+        permission="class:create",
+    )
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_read:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="فهرست کلاس‌های این سال",
+                    callback_data="class:list",
+                )
+            ]
+        )
+    if can_create_class:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="ایجاد کلاس در این سال",
+                    callback_data="class:create-selected",
+                )
+            ]
+        )
+    rows.append(
         [
             InlineKeyboardButton(
                 text="بازگشت به مدرسه",
                 callback_data="school:menu",
             )
-        ],
-    ]
+        ]
+    )
     await message.answer(
         f"سال تحصیلی: {year.name}\n"
         f"شروع: {year.starts_on.isoformat()}\n"
@@ -538,13 +560,29 @@ async def tenant_switch_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
-    state: FSMContext,
 ) -> None:
-    await _clear_flow(state)
+    try:
+        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     await callback.answer()
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{tenant.name} · {tenant.slug}",
+                callback_data=f"tenant:open:{tenant.id}",
+            )
+        ]
+        for tenant in tenants
+    ]
+    rows.append(
+        [InlineKeyboardButton(text="منوی اصلی", callback_data="structure:root")]
+    )
     if callback.message is not None:
         await callback.message.answer(
-            "برای انتخاب مجموعه از منوی اصلی، فهرست مجموعه‌ها را باز کنید.",
+            "مجموعه موردنظر را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
 
