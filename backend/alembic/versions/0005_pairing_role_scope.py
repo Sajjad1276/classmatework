@@ -89,6 +89,101 @@ def upgrade() -> None:
         ),
     )
 
+    tenant_role_templates = {
+        "tenant_admin": (
+            "مدیر مجموعه",
+            (
+                "school:read",
+                "school:create",
+                "academic_year:create",
+                "class:create",
+                "subject:create",
+                "membership:read",
+                "membership:invite",
+                "role:manage",
+                "audit:read",
+            ),
+        ),
+        "tenant_viewer": ("ناظر مجموعه", ("school:read",)),
+    }
+    tenant_ids = connection.execute(
+        sa.text("SELECT id FROM tenants WHERE status = 'active'")
+    ).scalars().all()
+
+    for tenant_id in tenant_ids:
+        for role_key, (role_name, permission_keys) in tenant_role_templates.items():
+            role_id = connection.execute(
+                sa.text(
+                    """
+                    SELECT id FROM roles
+                    WHERE tenant_id = :tenant_id AND key = :role_key
+                    LIMIT 1
+                    """
+                ),
+                {"tenant_id": tenant_id, "role_key": role_key},
+            ).scalar_one_or_none()
+            if role_id is None:
+                role_id = uuid4()
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO roles (id, tenant_id, key, name, is_system, created_at)
+                        VALUES (:id, :tenant_id, :key, :name, TRUE, CURRENT_TIMESTAMP)
+                        """
+                    ),
+                    {
+                        "id": role_id,
+                        "tenant_id": tenant_id,
+                        "key": role_key,
+                        "name": role_name,
+                    },
+                )
+
+            for permission_key in permission_keys:
+                permission_id = connection.execute(
+                    sa.text("SELECT id FROM permissions WHERE key = :key"),
+                    {"key": permission_key},
+                ).scalar_one_or_none()
+                if permission_id is None:
+                    permission_id = uuid4()
+                    connection.execute(
+                        sa.text(
+                            """
+                            INSERT INTO permissions (id, key, description)
+                            VALUES (:id, :key, :description)
+                            """
+                        ),
+                        {
+                            "id": permission_id,
+                            "key": permission_key,
+                            "description": f"Tenant baseline permission: {permission_key}",
+                        },
+                    )
+
+                linked = connection.execute(
+                    sa.text(
+                        """
+                        SELECT id FROM role_permissions
+                        WHERE role_id = :role_id AND permission_id = :permission_id
+                        """
+                    ),
+                    {"role_id": role_id, "permission_id": permission_id},
+                ).scalar_one_or_none()
+                if linked is None:
+                    connection.execute(
+                        sa.text(
+                            """
+                            INSERT INTO role_permissions (id, role_id, permission_id, effect)
+                            VALUES (:id, :role_id, :permission_id, 'allow')
+                            """
+                        ),
+                        {
+                            "id": uuid4(),
+                            "role_id": role_id,
+                            "permission_id": permission_id,
+                        },
+                    )
+
     permission_id = uuid4()
     role_permission_id = uuid4()
     platform_owner_role_id = connection.execute(
@@ -171,34 +266,5 @@ def downgrade() -> None:
     op.drop_column("admin_pairing_tokens", "tenant_id")
     op.drop_column("admin_pairing_tokens", "role_id")
 
-    connection = op.get_bind()
-    platform_owner_role_id = connection.execute(
-        sa.text(
-            """
-            SELECT id FROM roles
-            WHERE key = 'platform_owner' AND tenant_id IS NULL
-            LIMIT 1
-            """
-        )
-    ).scalar_one_or_none()
-    permission_id = connection.execute(
-        sa.text("SELECT id FROM permissions WHERE key = 'platform:roles:assign'")
-    ).scalar_one_or_none()
-    if platform_owner_role_id is not None and permission_id is not None:
-        connection.execute(
-            sa.text(
-                """
-                DELETE FROM role_permissions
-                WHERE role_id = :role_id AND permission_id = :permission_id
-                """
-            ),
-            {
-                "role_id": platform_owner_role_id,
-                "permission_id": permission_id,
-            },
-        )
-    if permission_id is not None:
-        connection.execute(
-            sa.text("DELETE FROM permissions WHERE id = :id"),
-            {"id": permission_id},
-        )
+    # Keep permission registry rows and owner grants; they may have been present
+    # before this migration or may now be referenced by other system roles.
