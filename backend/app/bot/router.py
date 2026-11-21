@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 import secrets
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -33,7 +32,6 @@ from app.modules.identity.pairing import (
 )
 from app.modules.identity.principal import TelegramPrincipal
 
-logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
 
@@ -295,6 +293,14 @@ async def invite_command(
         await message.answer("Telegram ID در محدوده معتبر نیست.")
         return
 
+    bot_info = await message.bot.get_me()
+    if not bot_info.username:
+        await message.answer(
+            "نام کاربری ربات تنظیم نشده است؛ دعوت‌نامه ساخته نشد. "
+            "ابتدا Username ربات را تنظیم کنید."
+        )
+        return
+
     try:
         invitation = await create_admin_pairing(
             db,
@@ -308,15 +314,6 @@ async def invite_command(
     except ValueError as exc:
         await message.answer(str(exc))
         return
-
-    bot_info = await message.bot.get_me()
-    if not bot_info.username:
-        await message.answer(
-            "دعوت‌نامه ساخته شد، اما نام کاربری ربات تنظیم نشده است؛ "
-            "لینک را از پشتیبانی فنی دریافت کنید."
-        )
-        return
-
     pairing_link = f"https://t.me/{bot_info.username}?start={invitation.raw_token}"
     expires = invitation.expires_at.strftime("%Y-%m-%d %H:%M UTC")
     await message.answer(
@@ -419,7 +416,7 @@ async def tenant_timezone_step(
     value = (message.text or "").strip()
     try:
         ZoneInfo(value)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         await message.answer("منطقه زمانی شناخته نشد. نمونه معتبر: Asia/Tehran")
         return
     await state.update_data(tenant_timezone=value)
