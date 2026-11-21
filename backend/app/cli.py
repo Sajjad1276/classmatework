@@ -22,6 +22,7 @@ PLATFORM_PERMISSIONS = {
     "platform:tenants:create": "Create a tenant",
     "platform:users:read": "Read platform user directory",
     "platform:users:manage": "Manage platform users and role assignments",
+    "platform:roles:assign": "Assign roles without exceeding the actor's effective authority",
     "school:read": "Read schools in an authorized tenant or school scope",
     "school:create": "Create schools within an authorized tenant",
     "academic_year:create": "Create academic years within a school",
