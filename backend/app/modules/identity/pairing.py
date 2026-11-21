@@ -112,6 +112,9 @@ async def _resolve_assignable_role(
         )
     ).all()
 
+    if not role_permissions or not any(effect == "allow" for _, effect in role_permissions):
+        raise ValueError("Role has no active allow permissions and cannot be assigned.")
+
     # The inviter may only grant permissions they currently possess at the exact
     # destination scope. Deny entries are safe to delegate and do not add authority.
     for permission_key, effect in role_permissions:
