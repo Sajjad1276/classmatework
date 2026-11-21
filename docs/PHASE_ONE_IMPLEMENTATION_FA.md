@@ -1,4 +1,4 @@
-# فاز یک — هویت تلگرام و هسته مدیریت ClassMate Work
+# فاز ۱ از ۵ — هویت تلگرام و هسته مدیریت ClassMate Work
 
 **شاخه:** `phase-1/core-identity-access`  
 **وضعیت PR:** Draft، باز و ادغام‌نشده  
