@@ -34,10 +34,10 @@
 - تست‌های Unit/Integration برای Scope و Tenant isolation اضافه شده‌اند.
 
 ### Application Layer و اولین قابلیت واقعی
-- Use Caseهای مستقل Tenant، School، Academic Year، Class، Subject، Role و Membership ساخته شده‌اند.
+- Use Caseهای مستقل Tenant، School، Academic Year، Class، Subject، Role، Membership و فهرست دعوت‌نامه‌ها ساخته شده‌اند.
 - Tenant list/select و Tenant create در Bot متصل‌اند.
 - فرم‌های School list/create، Academic Year list/create، Class list/create و Subject list/create در Bot متصل شده‌اند.
-- فرمان‌های /roles، /role-create، /members و /revoke-invite برای مدیریت پایه نقش‌ها، اعضا و دعوت‌ها اضافه شده‌اند.
+- فرمان‌های /roles، /role-create، /members، /invite، /invites و /revoke-invite برای مدیریت پایه نقش‌ها، اعضا و دعوت‌ها اضافه شده‌اند.
 - Wizardهای ساخت شامل اعتبارسنجی ورودی، Preview، Confirm، Back و Cancel هستند؛ ایجاد کلاس با انتخاب سال تحصیلی انجام می‌شود.
 - انتخاب Tenant/School/Academic Year فقط UI Context است؛ Use Case پیش از هر عملیات مالکیت و Permission را دوباره بررسی می‌کند.
 - فرم در ورودی نامعتبر در همان مرحله می‌ماند.
@@ -79,7 +79,7 @@
 
 ## 5. Gate پذیرش فاز ۱
 
-- [x] CI برای Commit 4980a075f3b75979d17921fc70c487d7d4ada3a1: Ruff، پنج Migration PostgreSQL و ۴۰ تست سبز (یک Warning غیرمسدودکننده). Run: 44937126858.
+- [x] CI برای Commit ce1f7e90fa8fb0c30c8bb5f95d6da7204d8e99e6: Ruff، پنج Migration PostgreSQL و ۴۲ تست سبز (یک Warning غیرمسدودکننده). Run: 44937709726.
 - [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
 - [x] تست‌های middleware برای Private Chat و رد مسیرهای خارج از هویت فعال اضافه شده‌اند؛ آزمون End-to-End حساب Unlinked/تعلیق‌شده با Bot واقعی هنوز لازم است.
 - [x] Pairing با Role/Scope، جلوگیری از escalation، رد Telegram ID اشتباه، Token منقضی/مصرف‌شده و رد دعوت در صورت لغو اختیار دعوت‌کننده تست شده است.
@@ -87,8 +87,8 @@
 - [x] Update تکراری در تست Dedup اجرا نمی‌شود و Update شکست‌خورده پس از آزادشدن Lease قابل Retry است.
 - [x] Role/Scope inheritance، Deny و Cross-tenant با تست‌های Policy و PostgreSQL اثبات شده‌اند.
 - [x] فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند.
-- [x] فهرست نقش‌ها، ساخت نقش سفارشی با Permission ceiling، فهرست اعضای فعال و لغو دعوت‌نامهٔ پذیرفته‌نشده پیاده‌سازی شده‌اند.
-- [x] مدیر Tenant فقط می‌تواند در محدودهٔ خودش نقش واگذار کند، اعضا را ببیند و دعوت صادر/لغو کند.
+- [x] فهرست نقش‌ها، ساخت نقش سفارشی با Permission ceiling، فهرست اعضای فعال، فهرست دعوت‌نامه‌های باز/منقضی و لغو دعوت‌نامهٔ پذیرفته‌نشده پیاده‌سازی شده‌اند.
+- [x] مدیر Tenant فقط می‌تواند در محدودهٔ خودش نقش واگذار کند، اعضا و دعوت‌ها را ببیند و دعوت صادر/لغو کند.
 - [ ] اجرای End-to-End فرم‌های ساختار آموزشی با Bot Token آزمایشی و بررسی دستی خطاها/Back/Cancel.
 - [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
 - [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
