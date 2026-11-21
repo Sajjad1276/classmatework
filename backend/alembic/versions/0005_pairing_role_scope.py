@@ -73,6 +73,11 @@ def upgrade() -> None:
         ondelete="RESTRICT",
     )
     op.create_check_constraint(
+        "ck_admin_pairing_target_positive",
+        "admin_pairing_tokens",
+        "target_telegram_user_id > 0",
+    )
+    op.create_check_constraint(
         "ck_admin_pairing_scope",
         "admin_pairing_tokens",
         "(scope_type = 'platform' AND tenant_id IS NULL AND scope_id IS NULL) OR "
@@ -242,6 +247,11 @@ def downgrade() -> None:
     op.drop_index(
         "uq_admin_pairing_active_target",
         table_name="admin_pairing_tokens",
+    )
+    op.drop_constraint(
+        "ck_admin_pairing_target_positive",
+        "admin_pairing_tokens",
+        type_="check",
     )
     op.drop_constraint(
         "ck_admin_pairing_scope",
