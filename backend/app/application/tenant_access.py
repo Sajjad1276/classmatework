@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -302,7 +302,13 @@ async def list_tenant_members(
         await db.execute(
             select(TenantMembership, User, TelegramAccount.telegram_user_id)
             .join(User, User.id == TenantMembership.user_id)
-            .outerjoin(TelegramAccount, TelegramAccount.user_id == User.id)
+            .outerjoin(
+                TelegramAccount,
+                and_(
+                    TelegramAccount.user_id == User.id,
+                    TelegramAccount.status == "active",
+                ),
+            )
             .where(
                 TenantMembership.tenant_id == tenant_id,
                 TenantMembership.status == "active",
