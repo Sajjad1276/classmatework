@@ -20,6 +20,7 @@ from app.bot.middleware import (
 )
 from app.bot.rate_limit import TelegramRateLimitMiddleware
 from app.bot.router import router
+from app.bot.academic_router import router as academic_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.runtime import create_database_engine, create_redis_client, create_session_factory
@@ -117,6 +118,7 @@ async def main() -> None:
             observer.outer_middleware(DatabaseSessionMiddleware(session_factory))
             observer.outer_middleware(TelegramIdentityMiddleware())
 
+        dispatcher.include_router(academic_router)
         dispatcher.include_router(router)
 
         await bot.set_my_commands(
