@@ -1,35 +1,49 @@
 # Identity — Telegram-first
 
-**Decision:** مدیر انسانی از طریق Telegram Identity به پلتفرم متصل می‌شود؛ Browser Login در محصول نهایی وجود ندارد.
+**Decision:** the only human administrator interface is the dedicated Telegram bot. Browser login, cookies and CSRF are not part of the product.
 
-## مدل هویت هدف
+## Identity model
 
-- User هویت سراسری پلتفرم است.
-- Telegram Account به User متصل می‌شود و Telegram User ID عددی شناسه اصلی اتصال است.
-- username، display name و عکس فقط metadata هستند و مبنای Authorization نیستند.
-- فقط Private Chat برای مدیریت پذیرفته می‌شود.
-- وضعیت User، Telegram Link، Role Binding، Tenant Membership و بازه اعتبار در هر عملیات بررسی می‌شوند.
-- تعلیق حساب یا قطع اتصال باید دسترسی Update بعدی را فوراً ببندد.
+- User is the platform-level principal.
+- TelegramAccount links one User to a numeric Telegram User ID.
+- Telegram User ID is the identifier; username, display name and profile fields are metadata only.
+- Administrative updates are accepted only in private chats.
+- Every update resolves the active TelegramAccount and active User before routing.
+- Tenant membership, RoleBinding scope and time validity are checked by the authorization layer for each domain use case.
+- A disabled User or unlinked/blocked TelegramAccount is rejected on the next update.
 
-## Bootstrap و Pairing
+## Bootstrap and pairing
 
-- ثبت‌نام عمومی ممنوع است.
-- Platform Owner اولیه از مسیر CLI کنترل‌شده و با Telegram User ID عددی از قبل تأییدشده provision می‌شود.
-- افزودن مدیران بعدی با Pairing Token تصادفی، یک‌بارمصرف، hash‌شده، کوتاه‌عمر و Audit‌شده انجام می‌شود.
-- Token خام فقط یک بار نمایش داده می‌شود؛ در DB، Log، Callback یا Audit ذخیره نمی‌شود.
-- بازیابی مالکیت در صورت از دست‌رفتن حساب Telegram باید فرایند کنترل‌شده و خارج از پیام آزاد ربات داشته باشد.
+- Public self-registration is disabled.
+- The first Platform Owner is provisioned by CLI using a numeric Telegram User ID verified outside the bot.
+- Additional administrators are invited with a random, one-time, short-lived pairing token.
+- Only a SHA-256 digest of the pairing token is stored; the raw token is shown once in the generated deep link.
+- Pairing is bound to the exact target Telegram User ID and an unexpired pending User record.
+- Pair creation and consumption are audited.
+- Recovery of the platform owner after losing the Telegram account still requires a controlled out-of-band procedure; it is not implemented yet.
 
-## نشست و وضعیت گفت‌وگو
+## Bot sessions and update state
 
-- Browser Cookie Session و CSRF در محصول نهایی استفاده نمی‌شود.
-- Redis برای FSM با TTL، Navigation State و Rate Limit استفاده می‌شود.
-- عملیات حساس/تأییدشده در PostgreSQL به‌صورت Durable ثبت می‌شود.
-- State با Actor ID، Chat ID، Flow ID و زمان انقضا جداسازی می‌شود.
-- Callback کوتاه و opaque است و هر بار Actor، Resource، Expiry و وضعیت مصرف دوباره بررسی می‌شوند.
-- عملیات Mutation باید Idempotent باشد تا Double-click یا تکرار Update دوباره اجرا نشود.
+- Browser Cookie Sessions and CSRF are removed.
+- Redis stores FSM state with TTL and the bot poller uses a Redis lease so two pollers do not run concurrently.
+- PostgreSQL stores pending pairing tokens and processed Telegram Update status/leases.
+- Wizard callbacks are bound to a per-flow token; an old confirmation/back/cancel button cannot affect a later flow.
+- Telegram Update IDs are recorded to suppress duplicate deliveries. This is not a substitute for idempotent domain use cases: a crash after a domain commit but before Update completion can still require the use case's own idempotency protection.
+- Audit events executed from a Telegram update carry a correlation ID in the form tg-UPDATE_ID.
 
-## وضعیت واقعی کد این شاخه
+## Implemented bot slice
 
-کد فعلی هنوز Browser Auth، Argon2id password، Cookie Session و CSRF دارد و CLI آن مالک را با ایمیل/گذرواژه می‌سازد. این‌ها پیاده‌سازی هدف Telegram-first نیستند و باید قبل از ادغام حذف یا جایگزین شوند.
+- Private Chat guard and Telegram account resolution.
+- /start, /menu, /back, /cancel, /invite, /help and /status.
+- Account details and a permission-filtered main menu.
+- Tenant list and a multi-step tenant creation wizard with validation, preview, confirm, back, cancel and stale-callback protection.
 
-ربات، Middleware، Telegram Account Link، Pairing، FSM و Idempotency هنوز در این شاخه پیاده‌سازی نشده‌اند. این سند معماری هدف را تعریف می‌کند و ادعای آماده‌بودن Bot ندارد.
+## Not yet complete
+
+- Telegram unlink/recovery lifecycle and step-up/MFA.
+- Full role assignment and user/membership management.
+- Complete school/academic CRUD forms in the bot.
+- Live Telegram API verification with a real bot token and production deployment.
+- Machine-to-machine identity for integration APIs.
+
+A bot skeleton in the repository is not a claim that a bot is deployed or production-ready.
