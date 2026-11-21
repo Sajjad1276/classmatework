@@ -23,8 +23,19 @@ from app.application.errors import (
     AccessDenied,
     ApplicationError,
 )
-from app.application.tenants import create_tenant, list_accessible_tenants, list_tenants
-from app.db.models import Role, RolePermission, Permission, Tenant, TenantMembership, User
+from app.application.tenants import (
+    create_tenant,
+    list_accessible_tenants,
+    list_tenants,
+)
+from app.db.models import (
+    Permission,
+    Role,
+    RolePermission,
+    Tenant,
+    TenantMembership,
+    User,
+)
 from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import (
     PairingNotAllowed,
