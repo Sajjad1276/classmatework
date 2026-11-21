@@ -197,3 +197,16 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - تعلیق، Membership را به `suspended` می‌برد و RoleBindingهای همان Tenant را پایان می‌دهد؛ User و TelegramAccount و سایر TenantMembershipها تغییر نمی‌کنند.
 - Audit شامل Actor، Tenant، Member، علت و تعداد RoleBindingهای پایان‌یافته است.
 - CI برای Commit `dcd0ed2b0bb2102bbb72805b2a4178ca72ddcc89` موفق شد: Ruff، شش Migration PostgreSQL و 45 passed, 1 warning. [Run #398](https://github.com/Sajjad1276/classmatework/actions/runs/44938276215).
+
+
+## 19. فعال‌سازی مجدد عضویت تعلیق‌شده
+
+- Use Caseهای `preview_tenant_member_reactivation` و `reactivate_tenant_member` در Application Layer اضافه شده‌اند.
+- فعال‌سازی مجدد فقط برای Membership با وضعیت suspended و User فعال مجاز است؛ TelegramAccount نیز باید active باشد.
+- Actor باید در Tenant مقصد `membership:manage` و `role:manage` داشته باشد.
+- Role انتخابی باید متعلق به همان Tenant باشد؛ تمام Permissionهای allow نقش باید در همان Tenant برای Actor مؤثر باشند؛ Permission بالاتر قابل واگذاری نیست.
+- دلیل ۱۰ تا ۵۰۰ نویسه اجباری است و فرم Preview/Confirm با Flow Token جلوی Callback قدیمی را می‌گیرد.
+- Membership به active برمی‌گردد و RoleBinding جدید ساخته می‌شود؛ RoleBindingهای قبلی با ends_at تاریخی باقی می‌مانند و احیا نمی‌شوند.
+- تعلیق و فعال‌سازی مجدد، فقط Tenant هدف را تغییر می‌دهند و TelegramAccount و سایر TenantMembershipهای کاربر حفظ می‌شوند.
+- تست‌های CI شامل reactivation، عدم پذیرش TelegramAccount مسدود و حفظ تاریخچه RoleBinding هستند.
+- CI برای Commit `85eb8e32a90e2203c5d578c426a9f6d7d8d912e7` موفق شد: Ruff، شش Migration PostgreSQL و 47 passed, 1 warning. [Run #412](https://github.com/Sajjad1276/classmatework/actions/runs/44938684499).
