@@ -341,14 +341,24 @@ async def tenant_list_callback(
     await callback.answer()
     if not tenants:
         body = "هنوز مجموعه‌ای در سامانه ثبت نشده است."
+        keyboard = await main_menu(db, principal)
     else:
-        lines = [
-            f"{index}. {tenant.name} | {tenant.slug} | {tenant.status}"
-            for index, tenant in enumerate(tenants, start=1)
+        body = "برای ورود به فضای مدیریتی هر مجموعه، آن را انتخاب کنید:"
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=f"{tenant.name} · {tenant.slug}",
+                    callback_data=f"tenant:open:{tenant.id}",
+                )
+            ]
+            for tenant in tenants
         ]
-        body = "فهرست مجموعه‌ها\n\n" + "\n".join(lines)
+        rows.append(
+            [InlineKeyboardButton(text="راهنما و منوی اصلی", callback_data="help:show")]
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     if callback.message is not None:
-        await callback.message.answer(body, reply_markup=await main_menu(db, principal))
+        await callback.message.answer(body, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "tenant:create")
