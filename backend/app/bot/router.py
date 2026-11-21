@@ -392,7 +392,7 @@ async def role_create_command(
 
     permission_keys = tuple(
         item.strip()
-        for item in parts[2].split(",")
+        for item in parts[3].split(",")
         if item.strip()
     )
     try:
@@ -400,8 +400,7 @@ async def role_create_command(
             db,
             actor_id=principal.user.id,
             tenant_id=tenant_id,
-            key=parts[0].split("@", maxsplit=1)[0].replace("/role-create", "").strip()
-            or "",
+            key=parts[2],
             name=display_name,
             permission_keys=permission_keys,
         )
