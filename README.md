@@ -12,6 +12,10 @@
 - PostgreSQL: منبع اصلی داده و Audit.
 - Redis: State فرم‌های ربات، TTL، قفل کوتاه‌مدت و Rate Limit.
 
+## نقشه تحویل پروژه
+
+کل پروژه دقیقاً در پنج فاز اجرا و تحویل می‌شود. فاز جاری، فاز ۱ است. برنامه کامل، خروجی‌ها و Gate هر فاز در `docs/MASTER_ROADMAP_5_PHASES_FA.md` ثبت شده است.
+
 ## وضعیت پیاده‌سازی — شفاف
 
 - Phase 0 زیرساخت اولیه را در `main` دارد.
@@ -81,4 +85,5 @@ Routeهای مدیریتی فعلی در PR2 موقت‌اند و تا انتق�
 - تصمیم‌های فاز صفر: `docs/PHASE_ZERO_DECISIONS_FA.md`
 - خط مبنای امنیت: `docs/SECURITY_BASELINE_FA.md`
 - قرارداد API فاز صفر: `docs/PHASE_ZERO_API_FA.md`
+- نقشه کل پروژه در پنج فاز: `docs/MASTER_ROADMAP_5_PHASES_FA.md`
 - وضعیت و موانع فاز یک: `docs/PHASE_ONE_IMPLEMENTATION_FA.md`
