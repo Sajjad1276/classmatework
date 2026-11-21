@@ -28,6 +28,10 @@ class PairingNotAllowed(Exception):
     """Raised when the acting administrator lacks the pairing/assignment authority."""
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class PairingInvitation:
     user_id: UUID
@@ -219,9 +223,13 @@ async def create_admin_pairing(
         )
     ).scalar_one_or_none()
     if existing_invitation is not None:
-        if existing_invitation.expires_at > now:
+        if _as_utc(existing_invitation.expires_at) > now:
             raise ValueError("An active invitation already exists for this Telegram account.")
         existing_invitation.revoked_at = now
+        previous_user = await db.get(User, existing_invitation.user_id)
+        if previous_user is not None and previous_user.status == "pending":
+            previous_user.status = "invitation_expired"
+        await db.flush()
 
     user = User(
         email=None,
