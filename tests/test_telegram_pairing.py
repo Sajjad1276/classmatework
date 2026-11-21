@@ -23,6 +23,7 @@ from app.modules.identity.pairing import (
     PairingRejected,
     consume_admin_pairing,
     create_admin_pairing,
+    revoke_admin_pairing,
 )
 from app.modules.identity.tokens import digest_secret
 
@@ -654,4 +655,96 @@ async def test_tenant_admin_can_invite_only_within_own_tenant() -> None:
                 )
             )
         ).scalar_one_or_none() is None
+    await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_invitation_creator_can_revoke_pending_invitation() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        owner, _ = await _create_platform_actor(
+            db,
+            permission_keys=("platform:users:read",),
+        )
+        role = await _create_role(
+            db,
+            key="revocable_auditor",
+            tenant_id=None,
+            permission_keys=("platform:users:read",),
+        )
+        invitation = await _invite(
+            db,
+            actor=owner,
+            telegram_user_id=978901234,
+            role_key=role.key,
+        )
+
+        await revoke_admin_pairing(
+            db,
+            actor_id=owner.id,
+            pairing_id=invitation.pairing_id,
+        )
+
+        pairing = await db.get(AdminPairingToken, invitation.pairing_id)
+        invited_user = await db.get(User, invitation.user_id)
+        assert pairing is not None
+        assert pairing.revoked_at is not None
+        assert invited_user is not None
+        assert invited_user.status == "invitation_revoked"
+
+        with pytest.raises(PairingRejected):
+            await consume_admin_pairing(
+                db,
+                raw_token=invitation.raw_token,
+                telegram_user_id=978901234,
+                username=None,
+                first_name="Revoked",
+                last_name="Invite",
+            )
+
+        with pytest.raises(PairingRejected):
+            await revoke_admin_pairing(
+                db,
+                actor_id=owner.id,
+                pairing_id=invitation.pairing_id,
+            )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_actor_cannot_revoke_another_admins_invitation() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        owner, _ = await _create_platform_actor(
+            db,
+            permission_keys=("platform:users:read",),
+        )
+        role = await _create_role(
+            db,
+            key="protected_invite",
+            tenant_id=None,
+            permission_keys=("platform:users:read",),
+        )
+        invitation = await _invite(
+            db,
+            actor=owner,
+            telegram_user_id=989012345,
+            role_key=role.key,
+        )
+        unrelated_user = User(display_name="Unrelated User", status="active")
+        db.add(unrelated_user)
+        await db.commit()
+
+        with pytest.raises(PairingNotAllowed):
+            await revoke_admin_pairing(
+                db,
+                actor_id=unrelated_user.id,
+                pairing_id=invitation.pairing_id,
+            )
+
+        pairing = await db.get(AdminPairingToken, invitation.pairing_id)
+        assert pairing is not None
+        assert pairing.revoked_at is None
+
     await engine.dispose()
