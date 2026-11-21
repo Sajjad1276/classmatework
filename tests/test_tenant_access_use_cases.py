@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -295,14 +296,13 @@ async def test_tenant_invitation_directory_is_limited_to_the_managers_tenant() -
             password_hash=None,
         )
         other_role = Role(
-            tenant_id=None,
+            tenant_id=other_tenant.id,
             key=f"other_invite_{uuid4().hex[:8]}",
             name="Other Invite Role",
             is_system=False,
         )
         db.add_all([other_tenant, other_user, other_role])
         await db.flush()
-        other_role.tenant_id = other_tenant.id
         other_pairing = AdminPairingToken(
             user_id=other_user.id,
             target_telegram_user_id=104_123_456,
@@ -342,7 +342,7 @@ async def test_tenant_invitation_directory_is_limited_to_the_managers_tenant() -
 async def test_platform_invitation_directory_requires_global_assignment_authority() -> None:
     engine, factory = await _database()
     async with factory() as db:
-        tenant, manager, _ = await _seed_manager_and_member(db)
+        _, manager, _ = await _seed_manager_and_member(db)
         with pytest.raises(AccessDenied):
             await list_admin_invitations(
                 db,
