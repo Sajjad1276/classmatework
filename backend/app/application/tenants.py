@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -21,6 +21,7 @@ from app.db.models import (
     School,
     Subject,
     Tenant,
+    TenantMembership,
 )
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
@@ -662,3 +663,59 @@ async def list_subjects(
     )
     await db.commit()
     return subjects
+
+
+
+async def list_accessible_tenants(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    limit: int = 50,
+) -> list[Tenant]:
+    """List only active tenants where the actor has a current membership and scope grant."""
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Tenant page size must be between 1 and 100.")
+    now = datetime.now(UTC)
+    result = await db.execute(
+        select(Tenant)
+        .join(TenantMembership, TenantMembership.tenant_id == Tenant.id)
+        .where(
+            TenantMembership.user_id == actor_id,
+            TenantMembership.status == "active",
+            Tenant.status == "active",
+            or_(TenantMembership.starts_at.is_(None), TenantMembership.starts_at <= now),
+            or_(TenantMembership.ends_at.is_(None), TenantMembership.ends_at > now),
+        )
+        .order_by(Tenant.name, Tenant.id)
+        .limit(limit)
+    )
+    candidates = list(result.scalars().all())
+    accessible: list[Tenant] = []
+    for tenant in candidates:
+        for permission_key in (
+            "school:read",
+            "school:create",
+            "academic_year:create",
+            "class:create",
+            "subject:create",
+        ):
+            if await has_permission(
+                db,
+                user_id=actor_id,
+                permission_key=permission_key,
+                tenant_id=tenant.id,
+                scope_type="tenant",
+                scope_id=tenant.id,
+            ):
+                accessible.append(tenant)
+                break
+
+    await record_event(
+        db,
+        event_type="tenant.accessible_directory.read",
+        actor_id=actor_id,
+        aggregate_type="tenant_directory",
+        event_data={"returned_count": len(accessible), "limit": limit},
+    )
+    await db.commit()
+    return accessible
