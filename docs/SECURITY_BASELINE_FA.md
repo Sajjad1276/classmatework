@@ -92,12 +92,12 @@
 - Bot فرم‌های پایه انتخاب/ایجاد School، Academic Year، Class و Subject را با Use Caseهای دارای Permission و Tenant ownership اجرا می‌کند.
 - Telegram Update correlation به Audit context منتقل می‌شود.
 - RBAC ارث‌بری والد به فرزند و Deny-overrides-Allow دارد؛ Composite FK و RoleBinding Check Constraint در Migration 0002 تعریف شده‌اند.
-- Use Caseهای Tenant/School/Academic Year/Class/Subject در Application Layer وجود دارند؛ Bot فعلاً فهرست/ایجاد Tenant را به UI متصل کرده است.
+- Use Caseهای Tenant/School/Academic Year/Class/Subject در Application Layer وجود دارند؛ Bot فرم‌های پایه فهرست/ایجاد Tenant، School، Academic Year، Class و Subject را اجرا می‌کند.
 - Migration 0004 جدول پردازش Updateها را اضافه می‌کند.
 
 **موارد باز:**
 
-- CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d` سبز شده است (Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده). Run: `44932471573`.
+- CI برای Commit `fcd542e67eab873bfb8b9bca626ce3d7388b2b27` سبز شده است (Ruff، چهار Migration، ۲۷ تست و یک Warning غیرمسدودکننده). Run: `44932613037`.
 - اجرای واقعی Bot با Token معتبر و تست end-to-end هنوز انجام نشده است.
 - لغو اتصال، بازیابی مدیر و Step-up/MFA کامل نیست.
 - مدیریت Role/Permission و فرم‌های کامل CRUD آموزشی در Bot هنوز تکمیل نشده‌اند.
