@@ -91,3 +91,19 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - دستور توسعه Frontend از Makefile حذف شد.
 - README، سند تصمیم‌ها، Security Baseline، Phase 1 و قرارداد API به‌روز شدند.
 - این اصلاحات فقط اسناد و ساختار Web را حذف/هم‌راستا کرده‌اند؛ Bot و Telegram Identity همچنان پیاده‌سازی نشده‌اند.
+
+
+## 11. به‌روزرسانی پس از شروع اجرای فاز ۱
+
+پس از ثبت یافته‌های اولیه، این اصلاحات در شاخه انجام شده‌اند:
+
+- Browser Auth endpoints و Browser Session model از مسیر اجرایی حذف شدند؛ Migration 0003 جدول sessions را حذف و Email/Password را اختیاری می‌کند.
+- TelegramAccount، AdminPairingToken و CLI مالک مبتنی بر Telegram ID افزوده شدند.
+- aiogram Bot Runtime، Private Chat guard، Telegram Identity middleware، Pairing و فرمان‌های پایه اضافه شدند.
+- Use Caseهای Application برای Tenant و عملیات پایه آموزشی ایجاد شدند.
+- منوی Bot اکنون Tenant list/create را نمایش می‌دهد و Wizard ساخت Tenant دارای Preview، Confirm، Back، Cancel و Flow Token اختصاصی است.
+- RBAC ارث‌بری والد به فرزند و Composite Foreign Keyهای جلوگیری از cross-tenant اضافه شدند.
+- Migration 0004 و Update Dedup Middleware برای ثبت Lease و جلوگیری از پردازش مجدد Telegram Update اضافه شده‌اند.
+- Correlation ID هر Update به Audit context منتقل می‌شود.
+- CI در یک اجرا Ruff و Migrationهای PostgreSQL را گذراند؛ تست Pairing انقضا به دلیل setup نامعتبر تست شکست خورد و اصلاح شد. اجرای CI پس از اصلاحات جدید باید جداگانه تأیید شود.
+- Bot در Telegram واقعی یا Railway هنوز Deploy/تست نشده و فاز ۱ همچنان باز است.
