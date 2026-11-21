@@ -37,12 +37,18 @@
 - Private Chat guard and Telegram account resolution.
 - /start, /menu, /back, /cancel, /invite, /help and /status.
 - Account details and a permission-filtered main menu.
-- Tenant list and a multi-step tenant creation wizard with validation, preview, confirm, back, cancel and stale-callback protection.
+- Tenant list/select and a multi-step tenant creation wizard with validation, preview, confirm, back, cancel and stale-callback protection.
+- Tenant-scoped school list/create forms.
+- School-scoped academic-year list/create forms.
+- School-scoped class list/create flows, including selecting an academic year before class creation.
+- School-scoped subject list/create forms.
+- Wizard contexts are retained in Redis FSM and every write use case rechecks the target ownership and permissions.
 
 ## Not yet complete
 
 - Telegram unlink/recovery lifecycle and step-up/MFA.
 - Full role assignment and user/membership management.
+- Update/archive forms, complete pagination/search and automated end-to-end Bot API tests.
 - Complete school/academic CRUD forms in the bot.
 - Live Telegram API verification with a real bot token and production deployment.
 - Machine-to-machine identity for integration APIs.
