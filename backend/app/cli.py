@@ -13,7 +13,6 @@ from app.db.models import (
     RoleBinding,
     RolePermission,
     TelegramAccount,
-    Tenant,
     User,
 )
 from app.db.runtime import create_database_engine, create_session_factory
