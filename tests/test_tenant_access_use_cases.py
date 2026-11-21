@@ -217,3 +217,40 @@ async def test_membership_directory_only_returns_active_members_in_authorized_te
         assert len(member_view.role_keys) == 1
         assert member_view.role_keys[0].startswith("tenant_member_")
     await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_member_directory_hides_blocked_telegram_id_and_rejects_other_tenant() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, member = await _seed_manager_and_member(db)
+        account = (
+            await db.execute(
+                select(TelegramAccount).where(TelegramAccount.user_id == member.id)
+            )
+        ).scalar_one()
+        account.status = "blocked"
+        other_tenant = Tenant(
+            slug=f"outside-{uuid4().hex[:8]}",
+            name="Outside Tenant",
+            status="active",
+        )
+        db.add(other_tenant)
+        await db.commit()
+
+        rows = await list_tenant_members(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+        )
+        member_view = next(item for item in rows if item.user_id == member.id)
+        assert member_view.telegram_user_id is None
+
+        with pytest.raises(AccessDenied):
+            await list_tenant_members(
+                db,
+                actor_id=manager.id,
+                tenant_id=other_tenant.id,
+            )
+    await engine.dispose()
