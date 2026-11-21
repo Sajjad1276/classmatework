@@ -120,3 +120,14 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - Bot هنوز با Token واقعی در Telegram یا Railway اجرا نشده؛ این آزمون خارج از CI و یکی از Gateهای باز فاز یک است.
 
 کنترل Rate Limit نیز به‌صورت Lua atomic counter در Redis افزوده شده است: سقف پیش‌فرض 30 پیام و 45 Callback برای هر Telegram ID در هر پنجره 60 ثانیه؛ هنگام قطعی Redis درخواست رد می‌شود.
+
+
+## 13. وضعیت به‌روزشده پس از تکمیل فرم‌های ساختار آموزشی
+
+- Bot اکنون علاوه بر Tenant، جریان‌های فهرست/ایجاد School، Academic Year، Class و Subject را نیز دارد.
+- Tenant/School/Academic Year در Redis FSM به‌عنوان Context انتخابی نگهداری می‌شوند؛ هر Use Case پیش از تغییر دوباره Permission و مالکیت منبع را بررسی می‌کند.
+- فهرست Tenant قابل انتخاب است؛ فهرست School، Academic Year، Class و Subject از منوهای زمینه‌ای ارائه می‌شود.
+- عملیات ایجاد دارای Preview/Confirm و Callbackهای Back/Cancel وابسته به Flow Token است.
+- CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1` سبز است: Ruff، چهار Migration و 27 passed, 1 warning؛ [Run #235](https://github.com/Sajjad1276/classmatework/actions/runs/44932267328).
+- این موفقیت شامل اجرای واقعی Bot در Telegram نیست. Bot Token آزمایشی/اجرای End-to-End هنوز فراهم نشده است.
+- Update/Archive، Search/Pagination کامل، Role assignment، Unlink/recovery، Step-up/MFA و M2M integration در Gateهای بعدی باقی می‌مانند.
