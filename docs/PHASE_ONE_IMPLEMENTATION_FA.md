@@ -34,8 +34,10 @@
 
 ### Application Layer و اولین قابلیت واقعی
 - Use Caseهای مستقل Tenant، School، Academic Year، Class و Subject ساخته شده‌اند.
-- Tenant list و Tenant create در Bot متصل‌اند.
-- Wizard ساخت Tenant شامل Name، Slug، Timezone، Locale، Preview، Confirm، Back و Cancel است.
+- Tenant list/select و Tenant create در Bot متصل‌اند.
+- فرم‌های School list/create، Academic Year list/create، Class list/create و Subject list/create در Bot متصل شده‌اند.
+- Wizardهای ساخت شامل اعتبارسنجی ورودی، Preview، Confirm، Back و Cancel هستند؛ ایجاد کلاس با انتخاب سال تحصیلی انجام می‌شود.
+- انتخاب Tenant/School/Academic Year فقط UI Context است؛ Use Case پیش از هر عملیات مالکیت و Permission را دوباره بررسی می‌کند.
 - فرم در ورودی نامعتبر در همان مرحله می‌ماند.
 - Duplicate slug در Application Layer و DB کنترل می‌شود.
 - Audit برای Tenant create و Tenant directory read نوشته می‌شود.
@@ -73,14 +75,15 @@
 
 ## 5. Gate پذیرش فاز ۱
 
-- [x] CI برای Commit `d66416d76ad5b3220eae410ca85b2328190cab01`: Ruff، چهار Migration PostgreSQL و ۲۵ تست سبز (یک Warning غیرمسدودکننده Redis). Run: `44931316097`.
+- [x] CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1`: Ruff، چهار Migration PostgreSQL و ۲۷ تست سبز (یک Warning غیرمسدودکننده). Run: `44932267328`.
 - [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
-- [ ] کاربر ناشناس، حساب تعلیق‌شده، حساب Unlinked و Group/Channel رد شوند.
+- [x] تست‌های middleware برای Private Chat و رد مسیرهای خارج از هویت فعال اضافه شده‌اند؛ آزمون End-to-End حساب Unlinked/تعلیق‌شده با Bot واقعی هنوز لازم است.
 - [x] Pairing برای Telegram ID نادرست، Token منقضی و Token مصرف‌شده در تست‌ها رد می‌شود.
 - [x] Callback قدیمی از Flow قبلی با Flow Token در Wizard ساخت Tenant بی‌اثر است.
 - [x] Update تکراری در تست Dedup اجرا نمی‌شود و Update شکست‌خورده پس از آزادشدن Lease قابل Retry است.
 - [x] Role/Scope inheritance، Deny و Cross-tenant با تست‌های Policy و PostgreSQL اثبات شده‌اند.
-- [ ] فرم‌های ساخت School/Academic Year/Class/Subject از Bot کامل شوند.
+- [x] فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند.
+- [ ] اجرای End-to-End فرم‌های ساختار آموزشی با Bot Token آزمایشی و بررسی دستی خطاها/Back/Cancel.
 - [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
 - [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
 - [ ] API Integration به شکل امن از هویت Telegram جدا شود.
