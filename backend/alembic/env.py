@@ -66,7 +66,14 @@ async def run_async_migrations() -> None:
         await connection.execute(
             text(f"CREATE SCHEMA IF NOT EXISTS {DATABASE_SCHEMA}")
         )
+        # Commit schema provisioning before Alembic opens its own migration
+        # transaction; otherwise Alembic may inherit this implicit transaction
+        # and the connection close can roll back the entire migration batch.
+        await connection.commit()
+
         await connection.execute(text(f"SET search_path TO {DATABASE_SEARCH_PATH}"))
+        await connection.commit()
+
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 
