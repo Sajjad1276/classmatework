@@ -21,8 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.errors import (
     AccessDenied,
     ApplicationError,
-    InvalidApplicationInput,
-    ResourceConflict,
     ResourceNotFound,
 )
 from app.application.tenants import (
@@ -36,7 +34,7 @@ from app.application.tenants import (
     list_subjects,
     list_tenants,
 )
-from app.db.models import AcademicYear, ClassGroup, School, Subject, Tenant
+from app.db.models import AcademicYear, School, Tenant
 from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
