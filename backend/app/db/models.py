@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -175,13 +176,12 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(
+        String(254), unique=True, index=True, nullable=True
+    )
     display_name: Mapped[str] = mapped_column(String(160))
-    password_hash: Mapped[str] = mapped_column(Text)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="active", nullable=False)
-    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -213,21 +213,51 @@ class TenantMembership(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class AuthSession(Base):
-    __tablename__ = "sessions"
+class TelegramAccount(Base):
+    __tablename__ = "telegram_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_telegram_accounts_user"),
+        UniqueConstraint("telegram_user_id", name="uq_telegram_accounts_telegram_user"),
+        CheckConstraint("status IN ('active', 'unlinked', 'blocked')", name="ck_telegram_accounts_status"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    csrf_hash: Mapped[str] = mapped_column(String(64))
-    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    unlinked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AdminPairingToken(Base):
+    __tablename__ = "admin_pairing_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_admin_pairing_token_hash"),
+        CheckConstraint("expires_at > created_at", name="ck_admin_pairing_expiry"),
+        Index("ix_admin_pairing_target_expiry", "target_telegram_user_id", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    target_telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
 
 
 class Role(Base):
