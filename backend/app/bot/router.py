@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
@@ -44,12 +45,18 @@ class TenantCreation(StatesGroup):
     confirm = State()
 
 
-def wizard_controls() -> InlineKeyboardMarkup:
+def wizard_controls(flow_token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="بازگشت", callback_data="wizard:back"),
-                InlineKeyboardButton(text="لغو عملیات", callback_data="wizard:cancel"),
+                InlineKeyboardButton(
+                    text="بازگشت",
+                    callback_data=f"wizard:back:{flow_token}",
+                ),
+                InlineKeyboardButton(
+                    text="لغو عملیات",
+                    callback_data=f"wizard:cancel:{flow_token}",
+                ),
             ]
         ]
     )
@@ -119,8 +126,13 @@ async def _show_tenant_step(
         "timezone": "منطقه زمانی را وارد کنید؛ نمونه: Asia/Tehran",
         "locale": "زبان/محلی‌سازی را وارد کنید؛ نمونه: fa-IR",
     }
+    data = await state.get_data()
+    flow_token = data.get("flow_token", "")
+    if not flow_token:
+        await state.clear()
+        await message.answer("فرم منقضی شده است. از منو دوباره شروع کنید.")
+        return
     if step == "confirm":
-        data = await state.get_data()
         summary = (
             "پیش‌نمایش ایجاد مجموعه\n\n"
             f"نام: {data.get('tenant_name', '')}\n"
@@ -133,17 +145,28 @@ async def _show_tenant_step(
             summary,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="تأیید و ایجاد", callback_data="tenant:confirm")],
                     [
-                        InlineKeyboardButton(text="بازگشت", callback_data="wizard:back"),
-                        InlineKeyboardButton(text="لغو عملیات", callback_data="wizard:cancel"),
+                        InlineKeyboardButton(
+                            text="تأیید و ایجاد",
+                            callback_data=f"tenant:confirm:{flow_token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="بازگشت",
+                            callback_data=f"wizard:back:{flow_token}",
+                        ),
+                        InlineKeyboardButton(
+                            text="لغو عملیات",
+                            callback_data=f"wizard:cancel:{flow_token}",
+                        ),
                     ],
                 ]
             ),
         )
         return
 
-    await message.answer(prompts[step], reply_markup=wizard_controls())
+    await message.answer(prompts[step], reply_markup=wizard_controls(flow_token))
 
 
 async def _move_tenant_wizard_back(
@@ -351,6 +374,7 @@ async def tenant_create_callback(
         return
     await callback.answer()
     await state.clear()
+    await state.update_data(flow_token=secrets.token_urlsafe(9))
     await state.set_state(TenantCreation.name)
     if callback.message is not None:
         await _show_tenant_step(callback.message, state, "name")
@@ -417,18 +441,26 @@ async def tenant_locale_step(
     await _show_tenant_step(message, state, "confirm")
 
 
-@router.callback_query(F.data == "tenant:confirm")
+@router.callback_query(F.data.startswith("tenant:confirm:"))
 async def tenant_confirm_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
-    if await state.get_state() != TenantCreation.confirm.state:
-        await callback.answer("این مرحله منقضی شده است. از منو دوباره شروع کنید.", show_alert=True)
+    data = await state.get_data()
+    supplied_token = (callback.data or "").split(":", maxsplit=2)[-1]
+    if (
+        await state.get_state() != TenantCreation.confirm.state
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+    ):
+        await callback.answer(
+            "این دکمه متعلق به فرم قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
         return
     await callback.answer()
-    data = await state.get_data()
     try:
         tenant = await create_tenant(
             db,
@@ -457,26 +489,42 @@ async def tenant_confirm_callback(
         )
 
 
-@router.callback_query(F.data == "wizard:back")
+@router.callback_query(F.data.startswith("wizard:back:"))
 async def wizard_back_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
+    supplied_token = (callback.data or "").split(":", maxsplit=2)[-1]
+    current_data = await state.get_data()
+    if not supplied_token or supplied_token != current_data.get("flow_token"):
+        await callback.answer(
+            "این دکمه متعلق به فرم قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
     await callback.answer()
     if callback.message is None:
         return
     await _move_tenant_wizard_back(callback.message, state, principal, db)
 
 
-@router.callback_query(F.data == "wizard:cancel")
+@router.callback_query(F.data.startswith("wizard:cancel:"))
 async def wizard_cancel_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
+    supplied_token = (callback.data or "").split(":", maxsplit=2)[-1]
+    current_data = await state.get_data()
+    if not supplied_token or supplied_token != current_data.get("flow_token"):
+        await callback.answer(
+            "این دکمه متعلق به فرم قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
     await callback.answer()
     await state.clear()
     if callback.message is not None:
