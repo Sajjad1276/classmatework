@@ -44,6 +44,14 @@ async def _require(
         raise AccessDenied
 
 
+async def _flush_or_conflict(db: AsyncSession, message: str) -> None:
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ResourceConflict(message) from exc
+
+
 async def _commit_or_conflict(db: AsyncSession, message: str) -> None:
     try:
         await db.commit()
@@ -128,7 +136,7 @@ async def create_tenant(
         status="active",
     )
     db.add(tenant)
-    await db.flush()
+    await _flush_or_conflict(db, "Tenant slug already exists.")
     await record_event(
         db,
         event_type="tenant.created",
@@ -235,7 +243,7 @@ async def create_school(
         status="setup",
     )
     db.add(school)
-    await db.flush()
+    await _flush_or_conflict(db, "School code already exists in this tenant.")
     await record_event(
         db,
         event_type="school.created",
@@ -293,7 +301,7 @@ async def create_academic_year(
     if not academic_year.name or len(academic_year.name) > 64:
         raise InvalidApplicationInput("نام سال تحصیلی نامعتبر است.")
     db.add(academic_year)
-    await db.flush()
+    await _flush_or_conflict(db, "Academic year already exists for this school.")
     await record_event(
         db,
         event_type="academic_year.created",
@@ -359,7 +367,7 @@ async def create_class(
         status="active",
     )
     db.add(class_group)
-    await db.flush()
+    await _flush_or_conflict(db, "Class code already exists for this academic year.")
     await record_event(
         db,
         event_type="class.created",
@@ -422,7 +430,7 @@ async def create_subject(
         status="active",
     )
     db.add(subject)
-    await db.flush()
+    await _flush_or_conflict(db, "Subject code already exists for this school.")
     await record_event(
         db,
         event_type="subject.created",
