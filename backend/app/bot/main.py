@@ -149,10 +149,20 @@ async def main() -> None:
             diagnostic = await connection.execute(
                 text(
                     "SELECT current_database() AS database, "
+                    "current_user AS database_user, "
                     "current_schema() AS schema, "
                     "current_setting('search_path') AS search_path, "
-                    f"to_regclass('{DATABASE_SCHEMA}.processed_telegram_updates')::text AS processed_table, "
-                    f"to_regclass('{DATABASE_SCHEMA}.alembic_version')::text AS version_table"
+                    "(SELECT array_agg(schema_name ORDER BY schema_name) "
+                    " FROM information_schema.schemata "
+                    " WHERE schema_name IN ('public', 'classmatework')) AS available_schemas, "
+                    "CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata "
+                    " WHERE schema_name = 'classmatework') "
+                    "THEN has_schema_privilege(current_user, 'classmatework', 'USAGE') "
+                    "ELSE FALSE END AS classmatework_schema_usage, "
+                    "to_regclass('classmatework.processed_telegram_updates')::text AS processed_table, "
+                    "to_regclass('public.processed_telegram_updates')::text AS public_processed_table, "
+                    "to_regclass('classmatework.alembic_version')::text AS version_table, "
+                    "to_regclass('public.alembic_version')::text AS public_version_table"
                 )
             )
             database_state = diagnostic.mappings().one()
