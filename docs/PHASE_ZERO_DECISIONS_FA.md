@@ -7,7 +7,7 @@
 
 | موضوع | تصمیم | پیامد اجرایی |
 |---|---|---|
-| مرز پروژه | ClassMate Work مستقل از \`classmate2\` است | هیچ کد، تنظیم یا داده‌ای در classmate2 تغییر نمی‌کند |
+| مرز پروژه | ClassMate Work مستقل از `classmate2` است | هیچ کد، تنظیم یا داده‌ای در classmate2 تغییر نمی‌کند |
 | رابط انسانی مدیریت | فقط ربات اختصاصی تلگرام | پنل وب، React، سایت مدیریت و Telegram Web App خارج از دامنه‌اند |
 | معماری | Modular Monolith با Adapterهای ورودی | منطق مشترک در Use Caseها؛ Handler و Route نازک |
 | Backend | Python 3.12 و FastAPI | Health Check و API یکپارچه‌سازی؛ نه رابط انسانی |
@@ -25,8 +25,8 @@
 
 ## معماری Service در Railway
 
-- \`classmatework-api\`: FastAPI و Health Check/APIهای Integration.
-- \`classmatework-admin-bot\`: ربات مدیریتی تلگرام با Long Polling.
+- `classmatework-api`: FastAPI و Health Check/APIهای Integration.
+- `classmatework-admin-bot`: ربات مدیریتی تلگرام با Long Polling.
 - PostgreSQL و Redis موجود مشترکاً مصرف می‌شوند.
 - Start Command دو سرویس جدا است؛ Bot با API یکی نیست.
 - در مرحله فعلی Worker سوم اضافه نمی‌شود.
@@ -38,7 +38,7 @@
 - منوها با Inline Keyboard ساخته می‌شوند.
 - هر دکمه Handler واقعی، Use Case، کنترل مجوز و تست دارد.
 - هر صفحه فرزند مسیر Back؛ هر Wizard مسیر Cancel دارد.
-- \`/menu\`، \`/back\`، \`/cancel\`، \`/help\` و \`/status\` رفتار سراسری مشخص دارند.
+- `/menu`، `/back`، `/cancel`، `/help` و `/status` رفتار سراسری مشخص دارند.
 - ورودی نامعتبر مرحله جاری را حفظ می‌کند و پیام خطای همان مرحله را می‌دهد.
 - Callback منقضی، تکراری یا متعلق به Actor دیگر بی‌اثر و رد می‌شود.
 - State فرم با TTL و کلید مجزای کاربر/چت در Redis نگهداری می‌شود؛ عملیات مهم و تأییدها در PostgreSQL رکورد durable دارند.
@@ -48,7 +48,7 @@
 
 ## تصمیم‌های امنیتی هویت
 
-1. هویت از \`Update.from.id\` معتبر تلگرام استخراج می‌شود.
+1. هویت از `Update.from.id` معتبر تلگرام استخراج می‌شود.
 2. username فقط برای نمایش است و تغییر آن هویت کاربر را تغییر نمی‌دهد.
 3. هر درخواست، وضعیت Account، Telegram Link، Role Binding، Membership و Scope را دوباره بررسی می‌کند.
 4. اتصال مدیر از طریق Pairing Token تصادفی، یک‌بارمصرف، هش‌شده و زمان‌دار انجام می‌شود.
