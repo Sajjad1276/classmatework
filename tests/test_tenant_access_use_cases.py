@@ -59,6 +59,7 @@ async def _seed_manager_and_member(db):
         "role:manage",
         "membership:read",
         "membership:invite",
+        "membership:manage",
         "school:read",
         "class:create",
         "platform:tenants:create",
@@ -74,6 +75,7 @@ async def _seed_manager_and_member(db):
         "role:manage",
         "membership:read",
         "membership:invite",
+        "membership:manage",
         "school:read",
         "class:create",
     )
