@@ -107,3 +107,16 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - Correlation ID هر Update به Audit context منتقل می‌شود.
 - CI در یک اجرا Ruff و Migrationهای PostgreSQL را گذراند؛ تست Pairing انقضا به دلیل setup نامعتبر تست شکست خورد و اصلاح شد. اجرای CI پس از اصلاحات جدید باید جداگانه تأیید شود.
 - Bot در Telegram واقعی یا Railway هنوز Deploy/تست نشده و فاز ۱ همچنان باز است.
+
+
+## 12. وضعیت تأیید کیفیت پس از سخت‌سازی Bot
+
+برای Commit `d66416d76ad5b3220eae410ca85b2328190cab01`، اجرای CI شماره 211 با موفقیت تمام شد:
+- Ruff: All checks passed.
+- Migrationهای PostgreSQL: موفق.
+- Tests: 25 passed, 1 warning.
+- Redis 7 و PostgreSQL 16 در CI به‌عنوان سرویس واقعی اجرا شدند.
+- Warning مربوط به Redis memory overcommit در کانتینر CI غیرمسدودکننده بود.
+- Bot هنوز با Token واقعی در Telegram یا Railway اجرا نشده؛ این آزمون خارج از CI و یکی از Gateهای باز فاز یک است.
+
+کنترل Rate Limit نیز به‌صورت Lua atomic counter در Redis افزوده شده است: سقف پیش‌فرض 30 پیام و 45 Callback برای هر Telegram ID در هر پنجره 60 ثانیه؛ هنگام قطعی Redis درخواست رد می‌شود.
