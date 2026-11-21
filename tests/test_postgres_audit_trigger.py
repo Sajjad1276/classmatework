@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import create_async_engine
+from app.db.runtime import create_database_engine
 
 
 @pytest.mark.asyncio
@@ -13,7 +13,7 @@ async def test_postgres_audit_trigger_rejects_update_and_delete() -> None:
     if not database_url:
         pytest.skip("TEST_POSTGRES_URL is not configured.")
 
-    engine = create_async_engine(database_url)
+    engine = create_database_engine(database_url)
     event_id = str(uuid4())
     update_rejected = False
     delete_rejected = False
