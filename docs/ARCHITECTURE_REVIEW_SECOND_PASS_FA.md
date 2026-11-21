@@ -184,3 +184,16 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - فرمان `/invites [TENANT_UUID]` و ثبت فرمان Bot اضافه شده‌اند. UUID نمایش‌داده‌شده با `/revoke-invite` قابل لغو است.
 - تست Tenant scope isolation، عدم افشای Token و نمایش منقضی‌شدن دعوت به مجموعهٔ تست‌ها اضافه شد.
 - CI برای Commit `ce1f7e90fa8fb0c30c8bb5f95d6da7204d8e99e6` موفق شد: Ruff، پنج Migration PostgreSQL و 42 passed, 1 warning. [Run #374](https://github.com/Sajjad1276/classmatework/actions/runs/44937709726).
+
+
+## 18. تعلیق کنترل‌شدهٔ عضویت Tenant
+
+- مجوز مستقل `membership:manage` به نقش `tenant_admin` اضافه شد؛ Migration 0006 این Permission را برای Tenantهای موجود Seed می‌کند.
+- Use Caseهای `preview_tenant_member_suspension` و `suspend_tenant_member` در Application Layer قرار دارند.
+- تعلیق فقط با عضویت فعال، دسترسی جاری مدیر و دلیل ۱۰ تا ۵۰۰ نویسه مجاز است.
+- UI تلگرام ابتدا Preview می‌دهد و فقط با Callback تأیید وابسته به Flow Token عمل می‌کند؛ لغو فرم هیچ Mutationی انجام نمی‌دهد.
+- تعلیق خود مدیر رد می‌شود. اگر هدف دارای `role:manage` باشد، تعداد مدیران فعال همان Tenant دوباره شمرده می‌شود؛ آخرین مدیر فعال قابل تعلیق نیست.
+- Tenant row و Membership row برای جلوگیری از دو تعلیق هم‌زمان مدیران قفل می‌شوند.
+- تعلیق، Membership را به `suspended` می‌برد و RoleBindingهای همان Tenant را پایان می‌دهد؛ User و TelegramAccount و سایر TenantMembershipها تغییر نمی‌کنند.
+- Audit شامل Actor، Tenant، Member، علت و تعداد RoleBindingهای پایان‌یافته است.
+- CI برای Commit `dcd0ed2b0bb2102bbb72805b2a4178ca72ddcc89` موفق شد: Ruff، شش Migration PostgreSQL و 45 passed, 1 warning. [Run #398](https://github.com/Sajjad1276/classmatework/actions/runs/44938276215).
