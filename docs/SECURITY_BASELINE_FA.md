@@ -80,15 +80,30 @@
 - Payload و Event نسخه‌بندی و اعتبارسنجی می‌شوند.
 - هیچ secret یا تغییر تنظیمی در classmate2 از این پروژه اعمال نمی‌شود.
 
-## 9. وضعیت پیاده‌سازی فعلی در PR2
+## 9. وضعیت پیاده‌سازی فعلی در شاخه فاز یک
 
-**این بخش برای جلوگیری از اشتباه بین طراحی و اجرای واقعی است:**
+**کنترل‌های موجود در کد (نیازمند قبولی CI و آزمون عملی Bot):**
 
-- Argon2id، Password Login مرورگری، Cookie Session و CSRF در PR2 وجود دارند؛ این‌ها با رابط نهایی Telegram-only هم‌راستا نیستند.
-- Bot Token handling، Telegram Account Link، Private Chat Guard، FSM، Callback authorization و Update idempotency هنوز پیاده‌سازی نشده‌اند.
-- Scope inheritance کامل و قیود ترکیبی Tenant/School هنوز نیازمند اصلاح و تست‌اند.
-- Audit append-only در ORM و PostgreSQL trigger موجود است؛ مدل Audit تلگرام و Correlation کامل Update هنوز باید افزوده شود.
-- تا رفع این موارد، PR2 برای ادغام یا استفاده عملیاتی آماده نیست.
+- مسیرهای Browser Auth از API فعال حذف شده‌اند؛ جدول Browser Session در Migration 0003 حذف می‌شود و Email/Password دیگر هویت مدیریتی اجباری نیست.
+- TelegramAccount با Telegram User ID عددی، وضعیت اتصال و metadata ایجاد شده است.
+- Bootstrap مالک پلتفرم با Telegram ID عددی و Pairing یک‌بارمصرف مدیران وجود دارد.
+- Private Chat Guard و رد User/TelegramAccount غیرفعال پیاده‌سازی شده است.
+- Redis FSM، قفل Poller، شناسه Flow برای Callbackهای Wizard و ثبت Durable پردازش Update ایجاد شده‌اند.
+- Telegram Update correlation به Audit context منتقل می‌شود.
+- RBAC ارث‌بری والد به فرزند و Deny-overrides-Allow دارد؛ Composite FK و RoleBinding Check Constraint در Migration 0002 تعریف شده‌اند.
+- Use Caseهای Tenant/School/Academic Year/Class/Subject در Application Layer وجود دارند؛ Bot فعلاً فهرست/ایجاد Tenant را به UI متصل کرده است.
+- Migration 0004 جدول پردازش Updateها را اضافه می‌کند.
+
+**موارد باز:**
+
+- CI آخرین Commit و تست‌های جدید باید سبز شوند.
+- اجرای واقعی Bot با Token معتبر و تست end-to-end هنوز انجام نشده است.
+- لغو اتصال، بازیابی مدیر و Step-up/MFA کامل نیست.
+- مدیریت Role/Permission و فرم‌های کامل CRUD آموزشی در Bot هنوز تکمیل نشده‌اند.
+- Integration API و Service Authentication برای اتصال آینده به classmate2 هنوز ساخته نشده‌اند.
+- Audit readهای حساس و Correlation end-to-end هنوز نیازمند بازبینی گسترده‌اند.
+
+هیچ Railway Deployment یا تغییر در classmate2 در این مرحله انجام نشده است.
 
 ## 10. کنترل‌های پایه محیط
 
