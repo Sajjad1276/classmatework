@@ -29,6 +29,8 @@ from app.application.tenant_access import (
     list_platform_roles,
     list_tenant_members,
     list_tenant_roles,
+    preview_tenant_member_suspension,
+    suspend_tenant_member,
 )
 from app.application.tenants import (
     create_tenant,
@@ -54,6 +56,10 @@ class TenantCreation(StatesGroup):
     slug = State()
     timezone = State()
     locale = State()
+    confirm = State()
+
+
+class MemberSuspension(StatesGroup):
     confirm = State()
 
 
@@ -531,6 +537,170 @@ async def invitations_command(
     await message.answer("\n\n".join(lines))
 
 
+@router.message(Command("member-suspend"))
+async def member_suspend_command(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    text_value = (message.text or "").strip()
+    if "|" not in text_value:
+        await message.answer(
+            "قالب فرمان:\n"
+            "/member-suspend TENANT_UUID USER_UUID | دلیل تعلیق\n\n"
+            "دلیل باید حداقل ۱۰ نویسه باشد. تعلیق فقط پس از تأیید دکمه انجام می‌شود."
+        )
+        return
+
+    left, reason = text_value.split("|", maxsplit=1)
+    parts = left.split()
+    if len(parts) != 3 or parts[0].split("@", maxsplit=1)[0] != "/member-suspend":
+        await message.answer(
+            "قالب فرمان:\n/member-suspend TENANT_UUID USER_UUID | دلیل تعلیق"
+        )
+        return
+    try:
+        tenant_id = UUID(parts[1])
+        member_user_id = UUID(parts[2])
+        preview = await preview_tenant_member_suspension(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=member_user_id,
+        )
+    except (ValueError, ApplicationError) as exc:
+        await message.answer(str(exc) or "شناسه‌های ورودی معتبر نیستند.")
+        return
+    except AccessDenied:
+        await message.answer("مجوز مدیریت عضویت‌های این مجموعه را ندارید.")
+        return
+
+    normalized_reason = reason.strip()
+    if not 10 <= len(normalized_reason) <= 500:
+        await message.answer("دلیل تعلیق باید بین ۱۰ تا ۵۰۰ نویسه باشد.")
+        return
+
+    flow_token = secrets.token_urlsafe(9)
+    await state.clear()
+    await state.update_data(
+        flow_name="member_suspend",
+        flow_token=flow_token,
+        suspend_tenant_id=str(tenant_id),
+        suspend_member_user_id=str(member_user_id),
+        suspend_reason=normalized_reason,
+    )
+    await state.set_state(MemberSuspension.confirm)
+    role_warning = (
+        "\nاین کاربر مدیر مجموعه است؛ پیش از تأیید، وجود مدیر جایگزین بررسی شده است."
+        if preview.is_tenant_admin
+        else ""
+    )
+    await message.answer(
+        "پیش‌نمایش تعلیق عضویت\n\n"
+        f"نام عضو: {preview.display_name}\n"
+        f"User ID: {preview.user_id}\n"
+        f"Tenant: {tenant_id}\n"
+        f"دلیل: {normalized_reason}\n"
+        f"{role_warning}\n\n"
+        "در صورت تأیید، عضویت و RoleBindingهای همین Tenant پایان می‌یابند. "
+        "حساب تلگرام و عضویت‌های سایر Tenantها تغییر نمی‌کنند.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="تأیید تعلیق",
+                        callback_data=f"member:suspend:confirm:{flow_token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="لغو",
+                        callback_data=f"member:suspend:cancel:{flow_token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("member:suspend:confirm:"))
+async def member_suspend_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberSuspension.confirm.state
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+        or data.get("flow_name") != "member_suspend"
+    ):
+        await callback.answer(
+            "این تأیید متعلق به درخواست قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
+
+    try:
+        tenant_id = UUID(data["suspend_tenant_id"])
+        member_user_id = UUID(data["suspend_member_user_id"])
+        result = await suspend_tenant_member(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=member_user_id,
+            reason=data.get("suspend_reason", ""),
+        )
+    except (ValueError, ApplicationError) as exc:
+        await state.clear()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except AccessDenied:
+        await state.clear()
+        await callback.answer("مجوز تعلیق عضویت را ندارید.", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer("عضویت تعلیق شد.")
+    if callback.message is not None:
+        await callback.message.answer(
+            "عضویت با موفقیت تعلیق شد.\n\n"
+            f"عضو: {result.display_name}\n"
+            f"Tenant: {result.tenant_id}\n"
+            f"RoleBindingهای پایان‌یافته: {result.ended_role_bindings}\n"
+            f"زمان: {result.suspended_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"دلیل: {result.reason}"
+        )
+
+
+@router.callback_query(F.data.startswith("member:suspend:cancel:"))
+async def member_suspend_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberSuspension.confirm.state
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+        or data.get("flow_name") != "member_suspend"
+    ):
+        await callback.answer(
+            "این دکمه متعلق به درخواست قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer("تعلیق لغو شد.")
+    if callback.message is not None:
+        await callback.message.answer("درخواست تعلیق لغو شد؛ تغییری در عضویت انجام نشد.")
+
+
 @router.message(Command("invite"))
 async def invite_command(
     message: Message,
@@ -892,6 +1062,7 @@ async def help_command(
         "/roles [TENANT_UUID] — فهرست نقش‌های قابل واگذاری\n"
         "/role-create TENANT_UUID KEY PERMISSIONS | NAME — ساخت نقش محدود به اختیارات شما\n"
         "/members TENANT_UUID — فهرست اعضای فعال مجموعه\n"
+        "/member-suspend TENANT_UUID USER_UUID | REASON — تعلیق عضو پس از تأیید\n"
         "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
         "/invites [TENANT_UUID] — فهرست دعوت‌های باز و منقضی‌شده\n"
         "/revoke-invite INVITATION_UUID — لغو دعوت پذیرفته‌نشده\n"
