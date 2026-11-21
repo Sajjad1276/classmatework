@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -301,7 +301,7 @@ async def test_postgres_enforces_pairing_scope_and_one_open_invite_per_target() 
                 "scope": str(tenant_id),
                 "created_by": str(user_id),
                 "created": now,
-                "expires": now + __import__("datetime").timedelta(minutes=15),
+                "expires": now + timedelta(minutes=15),
             }
             await connection.execute(
                 text(
