@@ -316,7 +316,6 @@ async def test_invalid_scope_or_cross_tenant_scope_is_denied() -> None:
         user = User(
             email="cross-scope@example.com",
             display_name="Cross Scope",
-            password_hash=hash_password("a-long-test-password"),
         )
         db.add_all([tenant_one, tenant_two, user])
         await db.flush()
