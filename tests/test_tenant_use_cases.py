@@ -98,6 +98,17 @@ async def test_create_and_list_tenant_use_cases_write_audit() -> None:
             )
         ).scalars().all()
         assert viewer_permission_keys == ["school:read"]
+        admin_role = next(role for role in tenant_roles if role.key == "tenant_admin")
+        admin_permission_keys = (
+            await db.execute(
+                select(Permission.key)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id == admin_role.id)
+            )
+        ).scalars().all()
+        assert "membership:read" in admin_permission_keys
+        assert "membership:invite" in admin_permission_keys
+        assert "role:manage" in admin_permission_keys
 
         tenant_user = User(display_name="Tenant Viewer", status="active")
         db.add(tenant_user)
