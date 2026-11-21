@@ -160,3 +160,16 @@ Audit append-only در ORM و PostgreSQL Trigger وجود دارد و باید �
 - Migration 0005 ستون‌های Role/Scope، قید positive Telegram ID، قید scope shape، unique active invitation per target و Seed نقش‌های پیش‌فرض Tenantهای قبلی را اضافه می‌کند؛ دعوت‌نامه‌های قدیمی فاقد Role invalidated می‌شوند.
 - CI برای Commit 746c1be44488df498737bcf5b2dd385ea0799f93 سبز است: Ruff، پنج Migration PostgreSQL و 34 passed, 1 warning. [Run #317](https://github.com/Sajjad1276/classmatework/actions/runs/44936217541).
 - Gateهای باز همچنان شامل آزمون Bot واقعی در Telegram، MFA/Step-up، unlink/recovery، CRUD کامل Role/Permission و Membership، M2M auth و live E2E هستند.
+
+
+## 16. مدیریت پایه نقش و اعضا و لغو دعوت
+
+- Use Caseهای tenant_access.py مالک عملیات Role directory، ساخت نقش Tenant و فهرست اعضای فعال Tenant هستند؛ Handlerها Query/Mutation مستقیم برای این قابلیت‌ها اجرا نمی‌کنند.
+- ساخت نقش سفارشی فقط به Role Manager در همان Tenant مجاز است و هر Permission انتخابی باید در همان Tenant برای سازنده مؤثر باشد؛ Permissionهای خارج از اختیار با AccessDenied رد می‌شوند.
+- فرمان /roles TENANT_UUID نقش‌های همان Tenant را نشان می‌دهد؛ مدیر Tenant به Role Directory سایر Tenantها دسترسی ندارد.
+- فرمان /role-create TENANT_UUID ROLE_KEY PERMISSION1,PERMISSION2 | NAME نقش سفارشی می‌سازد. در این نسخه فقط Allow permissionهای موجود قابل انتخاب‌اند.
+- فرمان /members TENANT_UUID فقط اعضای فعال و دارای عضویت زمانی معتبر همان Tenant را نشان می‌دهد. Telegram ID تنها برای TelegramAccount فعال نمایش داده می‌شود.
+- فرمان /revoke-invite INVITATION_UUID دعوت Pending را لغو می‌کند؛ لغو توسط creator یا مدیر دارای اختیار جاری در همان Scope مجاز است. دعوت پذیرفته‌شده با این فرمان قابل لغو نیست.
+- تست‌ها مرز privilege ceiling، cross-tenant isolation، محرمانگی Telegram ID حساب‌های blocked و رفتار revoke را پوشش می‌دهند.
+- CI برای Commit 4980a075f3b75979d17921fc70c487d7d4ada3a1 موفق است: Ruff، پنج Migration PostgreSQL و 40 passed, 1 warning. [Run #356](https://github.com/Sajjad1276/classmatework/actions/runs/44937126858).
+- Gateهای باز: Bot API End-to-End واقعی، Step-up/MFA، unlink/recovery، نقش و Permission edit/archive، تعلیق/لغو Membership، Pagination/Search و M2M API auth.
