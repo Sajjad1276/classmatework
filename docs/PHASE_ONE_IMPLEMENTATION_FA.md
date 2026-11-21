@@ -71,11 +71,11 @@
 7. سلامت اتصال Database و Redis را از Bot بررسی کند.
 8. از Back/Cancel/Menu و رفتار Callback منقضی استفاده کند.
 
-برای بستن کامل فاز، فرم‌های پایه مدرسه/سال/کلاس/درس، لغو اتصال مدیر، ماتریس Role/Scope، Integration identity و تست‌های عملی Bot نیز باید تکمیل شوند.
+برای بستن کامل فاز، Update/Archive، Search/Pagination، لغو اتصال مدیر، ماتریس کامل Role/Scope، Integration identity و تست‌های عملی Bot نیز باید تکمیل شوند.
 
 ## 5. Gate پذیرش فاز ۱
 
-- [x] CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d`: Ruff، چهار Migration PostgreSQL و ۲۷ تست سبز (یک Warning غیرمسدودکننده). Run: `44932471573`.
+- [x] CI برای Commit `fcd542e67eab873bfb8b9bca626ce3d7388b2b27`: Ruff، چهار Migration PostgreSQL و ۲۷ تست سبز (یک Warning غیرمسدودکننده). Run: `44932613037`.
 - [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
 - [x] تست‌های middleware برای Private Chat و رد مسیرهای خارج از هویت فعال اضافه شده‌اند؛ آزمون End-to-End حساب Unlinked/تعلیق‌شده با Bot واقعی هنوز لازم است.
 - [x] Pairing برای Telegram ID نادرست، Token منقضی و Token مصرف‌شده در تست‌ها رد می‌شود.
