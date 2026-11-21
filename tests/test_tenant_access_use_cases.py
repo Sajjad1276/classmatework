@@ -214,16 +214,6 @@ async def test_membership_directory_only_returns_active_members_in_authorized_te
         member_view = next(item for item in rows if item.user_id == member.id)
         assert member_view.display_name == "School Teacher"
         assert member_view.telegram_user_id == 102_123_456
-        assert member_view.role_keys == ("tenant_member_" + member_role_suffix(db, member.id),) or len(member_view.role_keys) == 1
+        assert len(member_view.role_keys) == 1
+        assert member_view.role_keys[0].startswith("tenant_member_")
     await engine.dispose()
-
-
-async def member_role_suffix(db, user_id) -> str:
-    role_key = (
-        await db.execute(
-            select(Role.key)
-            .join(RoleBinding, RoleBinding.role_id == Role.id)
-            .where(RoleBinding.user_id == user_id)
-        )
-    ).scalar_one()
-    return role_key.replace("tenant_member_", "")
