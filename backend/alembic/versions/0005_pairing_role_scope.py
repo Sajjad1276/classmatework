@@ -98,11 +98,7 @@ def upgrade() -> None:
                 "academic_year:create",
                 "class:create",
                 "subject:create",
-                "membership:read",
-                "membership:invite",
-                "role:manage",
-                "audit:read",
-            ),
+                            ),
         ),
         "tenant_viewer": ("ناظر مجموعه", ("school:read",)),
     }
