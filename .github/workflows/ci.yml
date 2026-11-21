@@ -48,7 +48,7 @@ jobs:
       - name: Lint
         run: ruff check backend tests
       - name: Apply PostgreSQL migrations
-        run: alembic -c backend/alembic.ini upgrade head
+        run: PYTHONPATH=backend alembic -c backend/alembic.ini upgrade head
       - name: Test
         run: pytest
 
