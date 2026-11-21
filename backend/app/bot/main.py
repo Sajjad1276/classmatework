@@ -12,6 +12,7 @@ from aiogram.types import BotCommand
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.bot.idempotency import TelegramUpdateDedupMiddleware
 from app.bot.middleware import (
     DatabaseSessionMiddleware,
     PrivateChatOnlyMiddleware,
@@ -81,6 +82,9 @@ async def main() -> None:
     )
     dispatcher = Dispatcher(storage=storage)
     dispatcher["redis"] = redis
+    dispatcher.update.outer_middleware(
+        TelegramUpdateDedupMiddleware(session_factory)
+    )
 
     try:
         await redis.ping()
