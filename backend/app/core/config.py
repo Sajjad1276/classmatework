@@ -19,6 +19,15 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://classmate:local-dev-only@localhost:5432/classmatework"
     )
     redis_url: str = "redis://localhost:6379/0"
+    session_cookie_name: str = "classmatework_session"
+    csrf_cookie_name: str = "classmatework_csrf"
+    session_ttl_minutes: int = 480
+    login_max_attempts: int = 8
+    login_lockout_minutes: int = 15
+
+    @property
+    def secure_cookies(self) -> bool:
+        return self.app_env in {"staging", "production"}
 
 
 @lru_cache

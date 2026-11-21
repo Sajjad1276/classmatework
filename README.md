@@ -2,78 +2,92 @@
 
 سامانه‌ی مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛
 منطق آموزشی/دانش‌آموزی در مخزن جداگانه‌ی classmate2 باقی می‌ماند.
-این پروژه در فاز صفر قرار دارد و هنوز هیچ قابلیت مدیریتیِ احراز هویت‌شده‌ای
-برای استفاده‌ی عملیاتی ارائه نمی‌کند.
 
 ## وضعیت فعلی
 
-- اسکلت Modular Monolith با FastAPI و مرزهای اولیه‌ی ماژول‌ها
-- API نسخه‌دار در /api/v1
-- health check زنده‌بودن و آمادگی وابستگی‌ها
-- شناسه‌ی هم‌بستگی درخواست در هدر X-Request-ID
-- اتصال زیرساختی PostgreSQL و Redis
-- پیکربندی Alembic برای migrationهای بعدی
-- پوسته‌ی اولیه‌ی رابط فارسی و راست‌به‌چپ
-- تست و CI پایه
+- Phase 0 ادغام شده و CI پایه سبز است.
+- Phase 1 در شاخه phase-1/core-identity-access در حال توسعه است.
+- Backend: FastAPI modular monolith با API نسخه‌دار در /api/v1.
+- Persistence: PostgreSQL/SQLAlchemy و migration با Alembic.
+- Cache/rate limit foundation: Redis.
+- Admin shell: React + TypeScript + RTL.
+- Identity: Argon2id و نشست opaque سمت سرور.
+- Authorization: RBAC scope-aware با تقدم deny بر allow.
+- Audit: رویدادهای append-only با trigger دیتابیس در PostgreSQL.
 
 ## اجرای محلی
 
 نیازمندی‌ها: Python 3.12+، Node.js 22+، npm و Docker Compose.
 
-1. فایل نمونه‌ی محیط را کپی کنید: cp .env.example .env
-2. سرویس‌های زیرساخت و API را اجرا کنید: docker compose up --build
-3. رابط مدیریتی را در ترمینال جداگانه اجرا کنید:
+1. فایل نمونه را کپی کنید: cp .env.example .env
+2. سرویس‌ها و API را اجرا کنید: docker compose up --build
+3. migrationهای فعلی را اجرا کنید:
+
+   alembic -c backend/alembic.ini upgrade head
+
+4. اولین مالک پلتفرم را به‌صورت تعاملی ایجاد کنید:
+
+   PYTHONPATH=backend python -m app.cli create-platform-owner
+
+5. رابط وب را در ترمینال جداگانه اجرا کنید:
+
    cd frontend && npm install && npm run dev
 
 API روی http://localhost:8000 و رابط وب روی http://localhost:5173 در دسترس خواهد بود.
 
-### اجرای API بدون Docker
+در ویندوز، فرمان PYTHONPATH را با تنظیم معادل محیطی سیستم خود اجرا کنید یا از محیط مجازی backend استفاده کنید.
 
-python -m venv .venv  
-فعال‌سازی محیط مجازی و سپس:
-
-pip install -r requirements-dev.txt  
-uvicorn app.main:app --app-dir backend --reload
-
-PostgreSQL و Redis باید مطابق مقادیر .env در دسترس باشند.
-
-## مسیرهای زیرساختی
+## APIهای فعلی
 
 | روش | مسیر | کاربرد |
 | --- | --- | --- |
-| GET | /api/v1/health/live | بررسی زنده‌بودن process |
-| GET | /api/v1/health/ready | بررسی اتصال PostgreSQL و Redis |
-| GET | /docs | مستندات OpenAPI در محیط توسعه |
+| GET | /api/v1/health/live | زنده‌بودن process |
+| GET | /api/v1/health/ready | آمادگی PostgreSQL و Redis |
+| POST | /api/v1/auth/login | ورود با ایمیل و گذرواژه |
+| POST | /api/v1/auth/logout | ابطال نشست جاری؛ نیازمند CSRF |
+| GET | /api/v1/me | هویت و عضویت‌های فعال کاربر |
+| GET/POST | /api/v1/tenants | فهرست/ایجاد tenant با مجوز platform |
+| GET/POST | /api/v1/schools | فهرست/ایجاد مدرسه در tenant انتخاب‌شده |
+| POST | /api/v1/academic-years | ایجاد سال تحصیلی |
+| POST | /api/v1/classes | ایجاد کلاس |
+| POST | /api/v1/subjects | ایجاد درس |
+| GET | /api/v1/audit-events | خواندن audit در tenant |
 
-پاسخ readiness فقط وضعیت کلی وابستگی‌ها را می‌دهد و جزئیات اتصال یا secretها را افشا نمی‌کند.
+Endpointهای tenant با هدر X-Tenant-ID tenant انتخابی را دریافت می‌کنند. Backend عضویت و permission را جداگانه ارزیابی می‌کند؛ مقدار ارسالی client به‌تنهایی مجوز نیست.
 
-## ساختار مخزن
+## Migration
 
-- backend/app/api: لایه‌ی HTTP و قراردادهای API
-- backend/app/core: تنظیمات، logging و request context
-- backend/app/db: زیرساخت persistence و base مدل‌ها
-- backend/app/modules: مرزهای دامنه‌ای مستقل
-- backend/alembic: migrationهای پایگاه داده
-- frontend: پوسته‌ی React/TypeScript با RTL
-- tests: تست‌های backend
-- docs: اسناد تصمیم، معماری و خط مبنای امنیت
+برای ایجاد migration پس از تغییر مدل‌ها:
+
+    alembic -c backend/alembic.ini revision --autogenerate -m "describe schema change"
+
+فایل تولیدشده باید بازبینی و در محیط توسعه آزمایش شود. سپس:
+
+    alembic -c backend/alembic.ini upgrade head
 
 ## کنترل کیفیت
 
-ruff check backend tests  
-pytest  
-cd frontend && npm install && npm run build
+    ruff check backend tests
+    pytest
+    cd frontend && npm install && npm run build
 
-## اصول غیرقابل نقض
+## مرزهای امنیتی
 
-1. این مخزن مستقل از classmate2 است؛ تغییرات آن پروژه خارج از دامنه‌ی این مخزن است.
-2. شناسه‌ی tenant ارسال‌شده از client هویت یا مجوز محسوب نمی‌شود.
-3. هیچ endpoint مدیریتی پیش از پیاده‌سازی identity و authorization امن فعال نمی‌شود.
-4. health check جایگزین authentication یا کنترل دسترسی نیست.
-5. secret واقعی، داده‌ی مدرسه یا اطلاعات کاربر وارد Git نمی‌شود.
-6. آمار داشبورد تا زمان اتصال به منبع معتبر نمایش داده نمی‌شود.
+- ثبت‌نام عمومی یا حساب مدیر پیش‌فرض وجود ندارد.
+- اولین مالک پلتفرم فقط با فرمان تعاملی CLI ساخته می‌شود.
+- گذرواژه‌ها با Argon2id هش می‌شوند و توکن خام نشست در دیتابیس ذخیره نمی‌شود.
+- نشست مرورگر HttpOnly است؛ درخواست‌های تغییردهنده‌ی احراز‌شده CSRF token می‌خواهند.
+- ورود با Redis rate-limited و حساب پس از تلاش‌های مکرر ناموفق موقتاً قفل می‌شود.
+- tenant context از X-Tenant-ID قابل انتخاب است، اما scope و membership در backend کنترل می‌شود.
+- audit در PostgreSQL در برابر UPDATE و DELETE قفل شده است.
+- MFA/TOTP، invitation lifecycle و مدیریت نقش از UI هنوز در صف فاز یک هستند.
+- secret واقعی یا داده‌ی production نباید وارد Git شود.
+- classmate2 مستقل باقی می‌ماند و از این مخزن تغییر نمی‌گیرد.
 
-## وضعیت تصمیم‌های محصول
+## اسناد
 
-تصمیم‌های باز و فرض‌های موقت در docs/PHASE_ZERO_DECISIONS_FA.md ثبت شده‌اند.
-تا تعیین تکلیف آن‌ها، فقط زیرساخت و قراردادهای کم‌ریسک توسعه می‌یابند.
+- طراحی مرجع: docs/SYSTEM_DESIGN_FA.md
+- تصمیم‌های فاز صفر: docs/PHASE_ZERO_DECISIONS_FA.md
+- خط مبنای امنیتی: docs/SECURITY_BASELINE_FA.md
+- قرارداد API فاز صفر: docs/PHASE_ZERO_API_FA.md
+- اجرای فاز یک: docs/PHASE_ONE_IMPLEMENTATION_FA.md
