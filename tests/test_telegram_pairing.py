@@ -488,3 +488,64 @@ async def test_duplicate_active_invitation_for_same_telegram_id_is_rejected() ->
                 role_key=role.key,
             )
     await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_expired_active_invitation_is_revoked_before_replacement() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        owner, _ = await _create_platform_actor(
+            db,
+            permission_keys=("platform:users:read",),
+        )
+        role = await _create_role(
+            db,
+            key="replacement_test",
+            tenant_id=None,
+            permission_keys=("platform:users:read",),
+        )
+        old_invitation = await _invite(
+            db,
+            actor=owner,
+            telegram_user_id=967890123,
+            role_key=role.key,
+        )
+        old_pairing = (
+            await db.execute(
+                select(AdminPairingToken).where(
+                    AdminPairingToken.user_id == old_invitation.user_id
+                )
+            )
+        ).scalar_one()
+        now = datetime.now(UTC)
+        old_pairing.created_at = now - timedelta(minutes=5)
+        old_pairing.expires_at = now - timedelta(minutes=1)
+        await db.commit()
+
+        new_invitation = await _invite(
+            db,
+            actor=owner,
+            telegram_user_id=967890123,
+            role_key=role.key,
+        )
+        await db.refresh(old_pairing)
+        previous_user = await db.get(User, old_invitation.user_id)
+
+        assert old_pairing.revoked_at is not None
+        assert previous_user is not None
+        assert previous_user.status == "invitation_expired"
+        assert new_invitation.user_id != old_invitation.user_id
+
+        active_invitations = (
+            await db.execute(
+                select(AdminPairingToken.id).where(
+                    AdminPairingToken.target_telegram_user_id == 967890123,
+                    AdminPairingToken.consumed_at.is_(None),
+                    AdminPairingToken.revoked_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        assert len(active_invitations) == 1
+
+    await engine.dispose()
