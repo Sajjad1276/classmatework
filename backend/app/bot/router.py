@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import secrets
+from datetime import UTC, datetime
+from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
@@ -14,15 +16,15 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy import text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors import (
     AccessDenied,
     ApplicationError,
 )
-from app.application.tenants import create_tenant, list_tenants
-from app.db.models import User
+from app.application.tenants import create_tenant, list_accessible_tenants, list_tenants
+from app.db.models import Role, RolePermission, Permission, Tenant, TenantMembership, User
 from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import (
     PairingNotAllowed,
@@ -88,7 +90,20 @@ async def main_menu(
         scope_type="platform",
         scope_id=None,
     )
-    if can_list_tenants:
+    now = datetime.now(UTC)
+    has_active_membership = (
+        await db.execute(
+            select(TenantMembership.id)
+            .where(
+                TenantMembership.user_id == principal.user.id,
+                TenantMembership.status == "active",
+                or_(TenantMembership.starts_at.is_(None), TenantMembership.starts_at <= now),
+                or_(TenantMembership.ends_at.is_(None), TenantMembership.ends_at > now),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+    if can_list_tenants or has_active_membership:
         rows.append(
             [InlineKeyboardButton(text="فهرست مجموعه‌ها", callback_data="tenant:list")]
         )
@@ -336,8 +351,11 @@ async def tenant_list_callback(
     try:
         tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
     except AccessDenied:
-        await callback.answer("دسترسی ندارید.", show_alert=True)
-        return
+        tenants = await list_accessible_tenants(
+            db,
+            actor_id=principal.user.id,
+            limit=50,
+        )
     await callback.answer()
     if not tenants:
         body = "هنوز مجموعه‌ای در سامانه ثبت نشده است."
