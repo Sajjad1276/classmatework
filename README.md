@@ -1,89 +1,107 @@
 # ClassMate Work
 
-سامانه مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛ منطق آموزشی/دانش‌آموزی در مخزن جداگانه `classmate2` باقی می‌ماند و از طریق قراردادهای کنترل‌شده API/Event متصل می‌شود.
+سامانه مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛ منطق آموزشی/دانش‌آموزی در مخزن جداگانه classmate2 باقی می‌ماند و فقط از طریق قراردادهای کنترل‌شده API/Event به آن متصل خواهد شد.
 
-## تصمیم قطعی رابط مدیریت
+## تصمیم قطعی محصول
 
-**رابط انسانی مدیریت فقط ربات اختصاصی تلگرام است.** این پروژه پنل وب مدیریتی، سایت ادمین، React، Telegram Web App یا ورود مدیریتی از مرورگر ندارد.
+**رابط انسانی مدیریت فقط ربات اختصاصی تلگرام است.** پنل وب، سایت ادمین، React، Telegram Web App و ورود مدیریتی مرورگری خارج از دامنه محصول‌اند.
 
-- ربات تلگرام: رابط منوها، فرم‌ها، تأییدها و گزارش‌های مدیر.
+- Telegram Admin Bot: منوها، فرمان‌ها، فرم‌ها، تأییدها و گزارش‌های مدیر.
 - FastAPI: Health Check و APIهای داخلی/یکپارچه‌سازی؛ نه پنل انسانی.
-- Application Use Cases: منطق مشترک و مستقل از Telegram Handler یا HTTP Route.
-- PostgreSQL: منبع اصلی داده و Audit.
-- Redis: State فرم‌های ربات، TTL، قفل کوتاه‌مدت و Rate Limit.
+- Application Use Cases: منطق کسب‌وکار مستقل از Telegram Handler یا HTTP Route.
+- PostgreSQL: منبع اصلی داده، مجوز و Audit.
+- Redis: FSM، TTL، قفل Poller و کنترل نرخ درخواست.
 
-## نقشه تحویل پروژه
+## نقشه تحویل
 
-کل پروژه دقیقاً در پنج فاز اجرا و تحویل می‌شود. فاز جاری، فاز ۱ است. برنامه کامل، خروجی‌ها و Gate هر فاز در `docs/MASTER_ROADMAP_5_PHASES_FA.md` ثبت شده است.
+کل پروژه دقیقاً در پنج فاز تحویل می‌شود. فاز جاری ۱ است. نقشه کامل و Gate هر فاز در:
+docs/MASTER_ROADMAP_5_PHASES_FA.md
 
-## وضعیت پیاده‌سازی — شفاف
+## وضعیت واقعی فاز ۱
 
-- Phase 0 زیرساخت اولیه را در `main` دارد.
-- بازطراحی مرجع Telegram-first در شاخه `phase-1/core-identity-access` انجام شده است.
-- PR شماره ۲ هنوز Draft و ادغام‌نشده است.
-- **ربات مدیریتی هنوز پیاده‌سازی نشده است.**
-- کد فعلی PR2 هنوز بخشی از احراز هویت مرورگری (ایمیل/گذرواژه، Cookie، CSRF و Session مرورگر) و منطق کسب‌وکار داخل Routeها دارد؛ این کد با تصمیم نهایی محصول هم‌راستا نیست و پیش از ادغام باید بازنویسی/جایگزین شود.
-- تا زمان تکمیل Bot Adapter، Telegram Identity، Application Use Cases و تست‌های مربوطه، قابلیت عملیاتی مدیریتی آماده استفاده نیست.
-- هیچ ادعایی مبنی بر اتصال یا Deploy ربات در Railway وجود ندارد.
+شاخه کاری: phase-1/core-identity-access  
+PR شماره ۲: Draft، باز و ادغام‌نشده.
 
-## معماری استقرار هدف
+### پیاده‌سازی‌شده در شاخه
+
+- هویت مدیر بر اساس Telegram User ID عددی؛ username فقط metadata است.
+- Bootstrap مالک پلتفرم از CLI با Telegram ID عددی.
+- Pairing یک‌بارمصرف مدیر جدید، محدود به Telegram ID مقصد، با Token خامِ ذخیره‌نشده و Audit.
+- Bot Runtime با aiogram 3، Long Polling، Redis FSM و قفل توزیع‌شده برای جلوگیری از دو Poller هم‌زمان.
+- Private Chat guard و رد حساب ناشناس/تعلیق‌شده.
+- فرمان‌های /start، /menu، /back، /cancel، /invite، /help و /status.
+- Inline menu پویا بر اساس Permission.
+- فرم چندمرحله‌ای ساخت Tenant با اعتبارسنجی، Preview، تأیید، Back، Cancel و شناسه Flow برای رد Callbackهای قدیمی.
+- Use Caseهای مستقل برای ساخت/فهرست Tenant و عملیات پایه مدرسه، سال تحصیلی، کلاس و درس.
+- RBAC با ارث‌بری از والد به فرزند، Deny-overrides-Allow و کنترل Membership.
+- Composite Foreign Key برای جلوگیری از اتصال School، Academic Year، Class و Subject به Tenant/School اشتباه.
+- Migrationهای هویت تلگرام و وضعیت پردازش Telegram Update.
+- جلوگیری از پردازش دوباره Update با ثبت Durable در PostgreSQL و Lease؛ Actionهای دامنه همچنان باید Idempotent بمانند.
+- CI بدون Frontend Build و دارای PostgreSQL واقعی برای Migration و تست‌های یکپارچگی.
+
+### هنوز انجام‌نشده یا نیازمند تأیید
+
+- تست‌های واقعی علیه Telegram Bot API با Token اختصاصی و تأیید اجرای واقعی در محیط توسعه.
+- تست نهایی CI روی آخرین Commit این شاخه؛ وضعیت آخرین اجرا باید در Actions بررسی شود.
+- قطع اتصال Telegram، بازیابی مدیر، MFA/Step-up و سیاست تأیید دوم.
+- تکمیل CRUD مدرسه، سال تحصیلی، کلاس و درس در رابط Bot؛ Use Case پایه وجود دارد اما فرم‌های Bot هنوز کامل نیستند.
+- مدیریت Role/Permission از طریق Bot.
+- API احراز هویت‌شده Machine-to-Machine؛ در حال حاضر API عمومی فقط Health را ارائه می‌کند.
+- Audit correlation برای Telegram Update ایجاد شده، اما بازبینی کامل end-to-end و پوشش Readهای حساس باقی است.
+- اتصال عملیاتی و Deploy در Railway انجام نشده است.
+
+**وجود کد Bot به معنی Deploy یا آماده‌بودن Production نیست.** هیچ Bot Token یا Secret واقعی در Git قرار نگرفته است.
+
+## معماری استقرار هدف در Railway
 
 در همان Railway Project موجود، بدون ساخت Project جدید:
 
-| Service | وظیفه |
+| Service | مسئولیت |
 |---|---|
-| `classmatework-api` | FastAPI، Health Check و APIهای سرویس‌به‌سرویس |
-| `classmatework-admin-bot` | ربات مدیریتی تلگرام با Long Polling |
+| classmatework-api | FastAPI، Health Check و APIهای سرویس‌به‌سرویس |
+| classmatework-admin-bot | ربات مدیریت تلگرام با Long Polling |
 | PostgreSQL | ذخیره‌سازی اصلی |
-| Redis | FSM، Rate Limit، TTL و قفل‌ها |
+| Redis | FSM، Rate Limit، Lease و قفل Poller |
 
-API و Bot دو فرایند با وظایف جدا هستند، نه دو Worker تکراری. هر دو از کد مشترک و دیتابیس مشترک استفاده می‌کنند. در فاز اولیه فقط یک Replica از Bot Poller مجاز است. Worker عمومی جداگانه تا وقتی نیاز واقعی و صف پایدار تعریف نشده اضافه نمی‌شود.
+API و Bot دو فرایند با مسئولیت جدا هستند؛ دو Worker تکراری نیستند. در شروع فقط یک Replica از Bot Poller مجاز است. Worker عمومی سوم تا زمان وجود نیاز عملیاتی و صف Durable ساخته نمی‌شود.
 
-**توجه:** جدول بالا معماری هدف است؛ سرویس Bot و Start Command آن هنوز ایجاد/Deploy نشده‌اند. هیچ تنظیم Railway با این بازنگری تغییر نکرده است.
+هیچ Railway Service، Variable یا Deployment در این مرحله تغییر داده نشده است.
 
-## اجرای محلی زیرساخت فعلی
+## اجرای محلی
 
-نیازمندی‌ها: Python 3.12+، Docker Compose.
+نیازمندی‌ها: Python 3.12+ و Docker Compose.
 
-1. فایل نمونه محیط را کپی کنید: `cp .env.example .env`
-2. زیرساخت و API فعلی را اجرا کنید: `docker compose up --build`
-3. Migrationهای موجود را اجرا کنید:
+1. فایل نمونه را به .env کپی کنید.
+2. PostgreSQL، Redis و API را با docker compose up --build اجرا کنید.
+3. Migrationها را با alembic -c backend/alembic.ini upgrade head اعمال کنید.
+4. پس از آماده بودن دیتابیس، اولین مالک را با PYTHONPATH=backend python -m app.cli create-platform-owner بسازید. فرمان، Telegram User ID عددی و نام را می‌گیرد.
+5. برای اجرای محلی Bot، مقدار TELEGRAM_BOT_TOKEN را فقط در .env محلی تنظیم و سرویس را با docker compose --profile bot up --build admin-bot اجرا کنید.
 
-   `alembic -c backend/alembic.ini upgrade head`
+Token واقعی نباید در مخزن، Log یا پیام خطا قرار گیرد. اجرای Bot نیازمند Telegram Bot Token معتبر و یک Telegram User ID است که به‌صورت امن در CLI provision شده باشد.
 
-4. CLI فعلی ایجاد مالک پلتفرم هنوز بر پایه ایمیل/گذرواژه است و **Bootstrap نهایی Telegram-first محسوب نمی‌شود**؛ برای محیط واقعی از آن به‌عنوان روش نهایی ایجاد مدیر استفاده نکنید.
-
-API روی پورت 8000 در دسترس است. در وضعیت فعلی، این اجرا به معنی آماده‌بودن ربات مدیریتی نیست.
-
-## APIهای زیرساختی فعلی
-
-| روش | مسیر | کاربرد |
-|---|---|---|
-| GET | `/api/v1/health/live` | زنده‌بودن Process |
-| GET | `/api/v1/health/ready` | آمادگی PostgreSQL و Redis |
-
-Routeهای مدیریتی فعلی در PR2 موقت‌اند و تا انتقال به Use Caseهای مشترک و هویت تلگرام نباید به‌عنوان قرارداد نهایی معرفی یا برای مدیریت واقعی استفاده شوند.
+API روی پورت 8000 ارائه می‌شود. مسیرهای فعلی API:
+- GET /api/v1/health/live
+- GET /api/v1/health/ready
 
 ## اصول غیرقابل نقض
 
-1. رابط انسانی مدیریت فقط Bot تلگرام است؛ وب‌پنل در دامنه محصول نیست.
-2. Telegram User ID عددی و استخراج‌شده از Update معتبر، شناسه اتصال است؛ username هویت یا مجوز نیست.
-3. فقط Private Chat مجاز است؛ مدیریت از گروه/کانال رد می‌شود.
-4. دکمه، Callback Data، Tenant ID و پیام کاربر به‌تنهایی مجوز نیستند؛ Backend باید هر بار Policy و Scope را بررسی کند.
-5. Telegram Handler و FastAPI Route مستقیماً منطق دامنه یا ORM را اجرا نمی‌کنند؛ Use Case مالک منطق است.
-6. Update و عملیات حساس باید در برابر Replay و اجرای تکراری مقاوم باشند.
-7. هر تغییر مدیریتی قابل ممیزی است؛ Audit append-only باقی می‌ماند.
-8. هیچ secret، Bot Token یا داده واقعی کاربران وارد Git، Log یا Callback نمی‌شود.
-9. هیچ تغییر یا Deploy در `classmate2` از این مخزن انجام نمی‌شود.
-10. قابلیت ناقص یا بدون Handler، Use Case، مجوز و تست در منوی مدیر نمایش داده نمی‌شود.
+1. رابط انسانی مدیریت فقط Bot تلگرام است.
+2. Telegram User ID از Update معتبر استخراج می‌شود؛ username یا Callback Data هویت و مجوز نیست.
+3. فقط Private Chat مجاز است.
+4. هر Handler قبل از عملیات، هویت، وضعیت حساب، Permission و Scope را بررسی می‌کند.
+5. Handler و Route منطق دامنه یا Query/Mutation مستقیم ORM را در خود نگه نمی‌دارند؛ Use Case مالک منطق است.
+6. Callback قدیمی، تکراری یا متعلق به Flow قبلی نباید عملیات را اجرا کند.
+7. هر عملیات تغییردهنده باید در برابر Replay و اجرای تکراری مقاوم باشد.
+8. Audit append-only است و Secret یا Token خام در Audit/Log ذخیره نمی‌شود.
+9. هیچ تغییر یا Deploy در classmate2 از این مخزن انجام نمی‌شود.
+10. PR2 تا تکمیل Gate فاز ۱ Draft باقی می‌ماند.
 
 ## اسناد مرجع
 
-- طراحی مرجع Telegram-first: `docs/SYSTEM_DESIGN_FA.md`
-- بازبینی دو مرحله‌ای معماری: `docs/ARCHITECTURE_REVIEW_FA.md`
-- یافته‌های تکمیلی دور دوم کد و Migration: `docs/ARCHITECTURE_REVIEW_SECOND_PASS_FA.md`
-- تصمیم‌های فاز صفر: `docs/PHASE_ZERO_DECISIONS_FA.md`
-- خط مبنای امنیت: `docs/SECURITY_BASELINE_FA.md`
-- قرارداد API فاز صفر: `docs/PHASE_ZERO_API_FA.md`
-- نقشه کل پروژه در پنج فاز: `docs/MASTER_ROADMAP_5_PHASES_FA.md`
-- وضعیت و موانع فاز یک: `docs/PHASE_ONE_IMPLEMENTATION_FA.md`
+- طراحی مرجع: docs/SYSTEM_DESIGN_FA.md
+- نقشه پنج فاز: docs/MASTER_ROADMAP_5_PHASES_FA.md
+- برنامه و موانع فاز یک: docs/PHASE_ONE_IMPLEMENTATION_FA.md
+- بازبینی معماری: docs/ARCHITECTURE_REVIEW_FA.md
+- یافته‌های بازبینی کد: docs/ARCHITECTURE_REVIEW_SECOND_PASS_FA.md
+- خط مبنای امنیت: docs/SECURITY_BASELINE_FA.md
+- قرارداد Health/API: docs/PHASE_ZERO_API_FA.md
