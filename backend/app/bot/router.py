@@ -367,7 +367,7 @@ async def roles_command(
     await message.answer("\n\n".join(output))
 
 
-@router.message(Command("role-create"))
+@router.message(Command("role_create"))
 async def role_create_command(
     message: Message,
     principal: TelegramPrincipal,
@@ -377,17 +377,17 @@ async def role_create_command(
     if "|" not in text_value:
         await message.answer(
             "قالب فرمان:\n"
-            "/role-create TENANT_UUID ROLE_KEY PERMISSION1,PERMISSION2 | نام نمایشی نقش\n\n"
+            "/role_create TENANT_UUID ROLE_KEY PERMISSION1,PERMISSION2 | نام نمایشی نقش\n\n"
             "فقط مجوزهایی قابل واگذاری‌اند که خودتان در همان مجموعه دارید."
         )
         return
 
     left, display_name = text_value.split("|", maxsplit=1)
     parts = left.split()
-    if len(parts) != 4 or parts[0].split("@", maxsplit=1)[0] != "/role-create":
+    if len(parts) != 4 or parts[0].split("@", maxsplit=1)[0] != "/role_create":
         await message.answer(
             "قالب فرمان:\\n"
-            "/role-create TENANT_UUID ROLE_KEY PERMISSION1,PERMISSION2 | نام نمایشی نقش"
+            "/role_create TENANT_UUID ROLE_KEY PERMISSION1,PERMISSION2 | نام نمایشی نقش"
         )
         return
     try:
@@ -538,12 +538,12 @@ async def invitations_command(
             f"   Scope: {scope_label}\n"
             f"   وضعیت: {status_label}\n"
             f"   انقضا: {invitation.expires_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
-            f"   لغو: /revoke-invite {invitation.invitation_id}"
+            f"   لغو: /revoke_invite {invitation.invitation_id}"
         )
     await message.answer("\n\n".join(lines))
 
 
-@router.message(Command("member-suspend"))
+@router.message(Command("member_suspend"))
 async def member_suspend_command(
     message: Message,
     principal: TelegramPrincipal,
@@ -554,16 +554,16 @@ async def member_suspend_command(
     if "|" not in text_value:
         await message.answer(
             "قالب فرمان:\n"
-            "/member-suspend TENANT_UUID USER_UUID | دلیل تعلیق\n\n"
+            "/member_suspend TENANT_UUID USER_UUID | دلیل تعلیق\n\n"
             "دلیل باید حداقل ۱۰ نویسه باشد. تعلیق فقط پس از تأیید دکمه انجام می‌شود."
         )
         return
 
     left, reason = text_value.split("|", maxsplit=1)
     parts = left.split()
-    if len(parts) != 3 or parts[0].split("@", maxsplit=1)[0] != "/member-suspend":
+    if len(parts) != 3 or parts[0].split("@", maxsplit=1)[0] != "/member_suspend":
         await message.answer(
-            "قالب فرمان:\n/member-suspend TENANT_UUID USER_UUID | دلیل تعلیق"
+            "قالب فرمان:\n/member_suspend TENANT_UUID USER_UUID | دلیل تعلیق"
         )
         return
     try:
@@ -707,7 +707,7 @@ async def member_suspend_cancel_callback(
         await callback.message.answer("درخواست تعلیق لغو شد؛ تغییری در عضویت انجام نشد.")
 
 
-@router.message(Command("member-reactivate"))
+@router.message(Command("member_reactivate"))
 async def member_reactivate_command(
     message: Message,
     principal: TelegramPrincipal,
@@ -718,17 +718,17 @@ async def member_reactivate_command(
     if "|" not in text_value:
         await message.answer(
             "قالب فرمان:\n"
-            "/member-reactivate TENANT_UUID USER_UUID ROLE_KEY | دلیل فعال‌سازی مجدد\n\n"
+            "/member_reactivate TENANT_UUID USER_UUID ROLE_KEY | دلیل فعال‌سازی مجدد\n\n"
             "حساب تلگرام کاربر باید فعال باشد و دلیل حداقل ۱۰ نویسه داشته باشد."
         )
         return
 
     left, reason = text_value.split("|", maxsplit=1)
     parts = left.split()
-    if len(parts) != 4 or parts[0].split("@", maxsplit=1)[0] != "/member-reactivate":
+    if len(parts) != 4 or parts[0].split("@", maxsplit=1)[0] != "/member_reactivate":
         await message.answer(
             "قالب فرمان:\n"
-            "/member-reactivate TENANT_UUID USER_UUID ROLE_KEY | دلیل فعال‌سازی مجدد"
+            "/member_reactivate TENANT_UUID USER_UUID ROLE_KEY | دلیل فعال‌سازی مجدد"
         )
         return
 
@@ -974,7 +974,7 @@ async def invite_command(
     )
 
 
-@router.message(Command("revoke-invite"))
+@router.message(Command("revoke_invite"))
 async def revoke_invite_command(
     message: Message,
     principal: TelegramPrincipal,
@@ -983,7 +983,7 @@ async def revoke_invite_command(
     parts = (message.text or "").strip().split(maxsplit=1)
     if len(parts) != 2:
         await message.answer(
-            "قالب فرمان:\n/revoke-invite INVITATION_UUID\n\n"
+            "قالب فرمان:\n/revoke_invite INVITATION_UUID\n\n"
             "شناسه دعوت در پیام ایجاد دعوت‌نامه نمایش داده می‌شود."
         )
         return
@@ -1238,13 +1238,13 @@ async def help_command(
         "/back — بازگشت یک مرحله در فرم\n"
         "/cancel — لغو فرم جاری\n"
         "/roles [TENANT_UUID] — فهرست نقش‌های قابل واگذاری\n"
-        "/role-create TENANT_UUID KEY PERMISSIONS | NAME — ساخت نقش محدود به اختیارات شما\n"
+        "/role_create TENANT_UUID KEY PERMISSIONS | NAME — ساخت نقش محدود به اختیارات شما\n"
         "/members TENANT_UUID — فهرست اعضای فعال مجموعه\n"
-        "/member-suspend TENANT_UUID USER_UUID | REASON — تعلیق عضو پس از تأیید\n"
-        "/member-reactivate TENANT_UUID USER_UUID ROLE_KEY | REASON — فعال‌سازی مجدد با نقش مشخص\n"
+        "/member_suspend TENANT_UUID USER_UUID | REASON — تعلیق عضو پس از تأیید\n"
+        "/member_reactivate TENANT_UUID USER_UUID ROLE_KEY | REASON — فعال‌سازی مجدد با نقش مشخص\n"
         "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
         "/invites [TENANT_UUID] — فهرست دعوت‌های باز و منقضی‌شده\n"
-        "/revoke-invite INVITATION_UUID — لغو دعوت پذیرفته‌نشده\n"
+        "/revoke_invite INVITATION_UUID — لغو دعوت پذیرفته‌نشده\n"
         "/help — راهنما\n"
         "/status — بررسی سلامت اتصال‌ها\n\n"
         "گزینه‌های منو بر اساس مجوز شما نمایش داده می‌شوند.",
