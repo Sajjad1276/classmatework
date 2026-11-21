@@ -483,3 +483,245 @@ async def list_tenant_members(
     )
     await db.commit()
     return members
+
+
+
+@dataclass(frozen=True, slots=True)
+class TenantMemberSuspensionPreview:
+    user_id: UUID
+    display_name: str
+    is_tenant_admin: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TenantMemberSuspensionResult:
+    user_id: UUID
+    display_name: str
+    tenant_id: UUID
+    suspended_at: datetime
+    ended_role_bindings: int
+    reason: str
+
+
+async def _active_tenant_admin_ids(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    now: datetime,
+) -> set[UUID]:
+    candidate_ids = (
+        await db.execute(
+            select(TenantMembership.user_id)
+            .join(User, User.id == TenantMembership.user_id)
+            .where(
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == "active",
+                User.status == "active",
+                or_(
+                    TenantMembership.starts_at.is_(None),
+                    TenantMembership.starts_at <= now,
+                ),
+                or_(
+                    TenantMembership.ends_at.is_(None),
+                    TenantMembership.ends_at > now,
+                ),
+            )
+        )
+    ).scalars().all()
+
+    admins: set[UUID] = set()
+    for user_id in set(candidate_ids):
+        if await has_permission(
+            db,
+            user_id=user_id,
+            permission_key="role:manage",
+            tenant_id=tenant_id,
+            scope_type="tenant",
+            scope_id=tenant_id,
+        ):
+            admins.add(user_id)
+    return admins
+
+
+async def _load_suspendable_tenant_member(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    member_user_id: UUID,
+    lock: bool,
+) -> tuple[TenantMembership, User, bool]:
+    tenant_statement = select(Tenant).where(
+        Tenant.id == tenant_id,
+        Tenant.status == "active",
+    )
+    if lock:
+        tenant_statement = tenant_statement.with_for_update()
+    tenant = (await db.execute(tenant_statement)).scalar_one_or_none()
+    if tenant is None:
+        raise ResourceNotFound("مجموعه فعال پیدا نشد.")
+
+    membership_statement = select(TenantMembership).where(
+        TenantMembership.tenant_id == tenant_id,
+        TenantMembership.user_id == member_user_id,
+        TenantMembership.status == "active",
+    )
+    if lock:
+        membership_statement = membership_statement.with_for_update()
+    membership = (
+        await db.execute(membership_statement)
+    ).scalar_one_or_none()
+    if membership is None:
+        raise ResourceNotFound("عضویت فعال این کاربر در مجموعه پیدا نشد.")
+
+    user = await db.get(User, member_user_id)
+    if user is None or user.status != "active":
+        raise ResourceNotFound("حساب کاربر فعال نیست.")
+
+    now = datetime.now(UTC)
+    starts_at = membership.starts_at
+    ends_at = membership.ends_at
+    if (
+        starts_at is not None
+        and (
+            starts_at.replace(tzinfo=UTC)
+            if starts_at.tzinfo is None
+            else starts_at.astimezone(UTC)
+        ) > now
+    ):
+        raise ResourceConflict("عضویت هنوز شروع نشده است.")
+    if (
+        ends_at is not None
+        and (
+            ends_at.replace(tzinfo=UTC)
+            if ends_at.tzinfo is None
+            else ends_at.astimezone(UTC)
+        ) <= now
+    ):
+        raise ResourceConflict("عضویت در حال حاضر فعال نیست.")
+
+    if actor_id == member_user_id:
+        raise InvalidApplicationInput("مدیر نمی‌تواند عضویت خودش را تعلیق کند.")
+
+    is_tenant_admin = await has_permission(
+        db,
+        user_id=member_user_id,
+        permission_key="role:manage",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    )
+    if is_tenant_admin:
+        admins = await _active_tenant_admin_ids(
+            db,
+            tenant_id=tenant_id,
+            now=now,
+        )
+        if member_user_id in admins and len(admins) <= 1:
+            raise InvalidApplicationInput(
+                "آخرین مدیر فعال مجموعه قابل تعلیق نیست؛ ابتدا مدیر جایگزین اضافه کنید."
+            )
+    return membership, user, is_tenant_admin
+
+
+async def preview_tenant_member_suspension(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    member_user_id: UUID,
+) -> TenantMemberSuspensionPreview:
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="membership:manage",
+    )
+    _, user, is_admin = await _load_suspendable_tenant_member(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        member_user_id=member_user_id,
+        lock=False,
+    )
+    return TenantMemberSuspensionPreview(
+        user_id=user.id,
+        display_name=user.display_name,
+        is_tenant_admin=is_admin,
+    )
+
+
+async def suspend_tenant_member(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    member_user_id: UUID,
+    reason: str,
+) -> TenantMemberSuspensionResult:
+    normalized_reason = reason.strip()
+    if not 10 <= len(normalized_reason) <= 500:
+        raise InvalidApplicationInput("دلیل تعلیق باید بین ۱۰ تا ۵۰۰ نویسه باشد.")
+
+    # Lock the tenant row to serialize concurrent last-admin suspension attempts.
+    await db.execute(
+        select(Tenant.id)
+        .where(Tenant.id == tenant_id)
+        .with_for_update()
+    )
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="membership:manage",
+    )
+    membership, user, is_admin = await _load_suspendable_tenant_member(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        member_user_id=member_user_id,
+        lock=True,
+    )
+
+    now = datetime.now(UTC)
+    bindings = (
+        await db.execute(
+            select(RoleBinding)
+            .where(
+                RoleBinding.user_id == member_user_id,
+                RoleBinding.tenant_id == tenant_id,
+                or_(RoleBinding.starts_at.is_(None), RoleBinding.starts_at <= now),
+                or_(RoleBinding.ends_at.is_(None), RoleBinding.ends_at > now),
+            )
+            .with_for_update()
+        )
+    ).scalars().all()
+
+    membership.status = "suspended"
+    membership.ends_at = now
+    for binding in bindings:
+        binding.ends_at = now
+
+    await record_event(
+        db,
+        event_type="membership.tenant_member_suspended",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="membership",
+        aggregate_id=membership.id,
+        event_data={
+            "member_user_id": str(member_user_id),
+            "member_was_tenant_admin": is_admin,
+            "ended_role_bindings": len(bindings),
+            "reason": normalized_reason,
+        },
+    )
+    await db.commit()
+    return TenantMemberSuspensionResult(
+        user_id=user.id,
+        display_name=user.display_name,
+        tenant_id=tenant_id,
+        suspended_at=now,
+        ended_role_bindings=len(bindings),
+        reason=normalized_reason,
+    )
