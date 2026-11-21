@@ -1,7 +1,11 @@
 import pytest
 from sqlalchemy.engine import make_url
 
-from app.db.runtime import normalize_async_database_url
+from app.db.runtime import (
+    DATABASE_SCHEMA,
+    DATABASE_SEARCH_PATH,
+    normalize_async_database_url,
+)
 
 
 @pytest.mark.parametrize(
@@ -35,3 +39,8 @@ def test_non_postgresql_url_is_preserved() -> None:
     database_url = "sqlite+aiosqlite:///:memory:"
 
     assert normalize_async_database_url(database_url) == database_url
+
+
+def test_application_uses_a_dedicated_postgres_schema() -> None:
+    assert DATABASE_SCHEMA == "classmatework"
+    assert DATABASE_SEARCH_PATH == "classmatework,public"
