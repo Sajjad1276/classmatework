@@ -13,6 +13,7 @@ from app.application.errors import (
     ResourceConflict,
 )
 from app.db.models import (
+    AdminPairingToken,
     Permission,
     Role,
     RoleBinding,
@@ -279,6 +280,121 @@ async def create_tenant_role(
         raise ResourceConflict("Role key already exists for this tenant.") from exc
     await db.refresh(role)
     return role
+
+
+
+@dataclass(frozen=True, slots=True)
+class PendingInvitationView:
+    invitation_id: UUID
+    invited_user_id: UUID
+    display_name: str
+    target_telegram_user_id: int
+    role_key: str
+    scope_type: str
+    scope_id: UUID | None
+    created_at: datetime
+    expires_at: datetime
+    status: str
+
+
+async def list_admin_invitations(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID | None = None,
+    limit: int = 50,
+) -> list[PendingInvitationView]:
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Invitation page size must be between 1 and 100.")
+
+    if tenant_id is None:
+        for permission_key in ("platform:users:manage", "platform:roles:assign"):
+            allowed = await has_permission(
+                db,
+                user_id=actor_id,
+                permission_key=permission_key,
+                tenant_id=None,
+                scope_type="platform",
+                scope_id=None,
+            )
+            if not allowed:
+                raise AccessDenied
+    else:
+        await _require_tenant_permission(
+            db,
+            actor_id=actor_id,
+            tenant_id=tenant_id,
+            permission_key="membership:invite",
+        )
+        await _require_tenant_permission(
+            db,
+            actor_id=actor_id,
+            tenant_id=tenant_id,
+            permission_key="role:manage",
+        )
+
+    statement = (
+        select(AdminPairingToken, User.display_name, Role.key)
+        .join(User, User.id == AdminPairingToken.user_id)
+        .join(Role, Role.id == AdminPairingToken.role_id)
+        .where(
+            AdminPairingToken.consumed_at.is_(None),
+            AdminPairingToken.revoked_at.is_(None),
+            User.status == "pending",
+        )
+    )
+    if tenant_id is not None:
+        statement = statement.where(
+            AdminPairingToken.tenant_id == tenant_id,
+            AdminPairingToken.scope_type == "tenant",
+        )
+    rows = (
+        await db.execute(
+            statement
+            .order_by(AdminPairingToken.created_at.desc(), AdminPairingToken.id)
+            .limit(limit)
+        )
+    ).all()
+
+    now = datetime.now(UTC)
+    invitations = [
+        PendingInvitationView(
+            invitation_id=pairing.id,
+            invited_user_id=pairing.user_id,
+            display_name=display_name,
+            target_telegram_user_id=pairing.target_telegram_user_id,
+            role_key=role_key,
+            scope_type=pairing.scope_type,
+            scope_id=pairing.scope_id,
+            created_at=pairing.created_at,
+            expires_at=pairing.expires_at,
+            status=(
+                "expired"
+                if (
+                    pairing.expires_at.replace(tzinfo=UTC)
+                    if pairing.expires_at.tzinfo is None
+                    else pairing.expires_at.astimezone(UTC)
+                )
+                <= now
+                else "pending"
+            ),
+        )
+        for pairing, display_name, role_key in rows
+    ]
+    await record_event(
+        db,
+        event_type=(
+            "identity.telegram_pairing.tenant_directory.read"
+            if tenant_id is not None
+            else "identity.telegram_pairing.platform_directory.read"
+        ),
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="pairing_directory",
+        event_data={"returned_count": len(invitations), "limit": limit},
+    )
+    await db.commit()
+    return invitations
 
 
 async def list_tenant_members(
