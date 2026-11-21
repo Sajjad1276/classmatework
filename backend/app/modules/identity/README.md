@@ -40,12 +40,13 @@
 ## Implemented bot slice
 
 - Private Chat guard and Telegram account resolution.
-- /start, /menu, /back, /cancel, /roles, /role-create, /members, /member-suspend, /invite, /invites, /revoke-invite, /help and /status.
+- /start, /menu, /back, /cancel, /roles, /role-create, /members, /member-suspend, /member-reactivate, /invite, /invites, /revoke-invite, /help and /status.
 - Account details and a permission-filtered main menu.
 - Role directory for platform owners and tenant managers (tenant managers see only their own tenant's roles).
 - Tenant-local custom role creation; every allow permission must already be held by the creator at the same tenant scope.
 - Active member directory with current tenant role bindings; Telegram IDs for blocked/unlinked accounts are hidden.
 - Two-step member suspension with mandatory reason; self-suspension and suspension of the last active tenant admin are rejected. Only that tenant's membership and role bindings are ended.
+- Two-step member reactivation with a new selected Tenant Role; the actor must hold every allow permission in that role, the target TelegramAccount must be active, and a fresh RoleBinding is created rather than reviving old grants.
 - Role-aware invitation from the Platform or from the same Tenant; a tenant manager cannot invite into another Tenant.
 - Pending invitation directory, scoped to platform administrators or the same Tenant; expired entries are clearly marked and raw tokens are never displayed.
 - Revocation of pending invitations by the creator or an administrator with current assignment authority; a consumed invitation cannot be revoked through this command.
@@ -59,7 +60,7 @@
 ## Not yet complete
 
 - Telegram unlink/recovery lifecycle and step-up/MFA.
-- Role edit/archive, independent permission-registry management, member cancellation/reactivation and member-directory pagination.
+- Role edit/archive, independent permission-registry management, membership cancellation and member-directory pagination.
 - Update/archive forms, complete pagination/search and automated end-to-end Bot API tests.
 - Complete school/academic CRUD forms in the bot.
 - Live Telegram API verification with a real bot token and production deployment.
