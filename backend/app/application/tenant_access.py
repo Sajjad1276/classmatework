@@ -11,6 +11,7 @@ from app.application.errors import (
     AccessDenied,
     InvalidApplicationInput,
     ResourceConflict,
+    ResourceNotFound,
 )
 from app.db.models import (
     AdminPairingToken,
