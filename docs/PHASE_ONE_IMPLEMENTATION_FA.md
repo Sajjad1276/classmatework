@@ -1,116 +1,90 @@
 # فاز ۱ از ۵ — هویت تلگرام و هسته مدیریت ClassMate Work
 
-**شاخه:** `phase-1/core-identity-access`  
-**وضعیت PR:** Draft، باز و ادغام‌نشده  
-**وضعیت این پیاده‌سازی:** برش موقت؛ با مرجع Telegram-first هنوز هم‌راستا نیست.  
-**معیار ادغام:** تکمیل موانع بخش پایانی این سند؛ سبز بودن CI به‌تنهایی کافی نیست.
+**شاخه:** phase-1/core-identity-access  
+**PR:** شماره ۲، Draft، باز و ادغام‌نشده  
+**وضعیت:** هسته کد و اولین Vertical Slice ساخته شده؛ فاز ۱ هنوز کامل نیست.  
+**معیار ادغام:** تمام Gateهای پایانی این سند باید بسته شوند.
 
-## 1. تصمیم معماری
+## 1. معماری اجراشده در شاخه
 
-- رابط مدیریتی انسانی فقط ربات اختصاصی تلگرام است.
-- FastAPI فقط API سلامت و Integration/Machine-to-Machine را ارائه می‌کند.
-- منطق دامنه باید در Application Use Case باشد؛ Bot Handler و HTTP Route فقط Adapter هستند.
-- هویت مدیر از Telegram User ID عددی و Pairing امن ساخته می‌شود؛ ایمیل/گذرواژه و Browser Cookie مدل نهایی نیست.
-- PostgreSQL منبع اصلی و Redis محل FSM/TTL/Rate Limit است.
-- `classmate2` مستقل است و این شاخه هیچ تغییری در آن ایجاد نمی‌کند.
+- رابط مدیریتی انسانی فقط Bot تلگرام است.
+- FastAPI فعلاً فقط Health و APIهای زیرساختی را ارائه می‌کند؛ مدیریت انسانی از HTTP فعال نیست.
+- Bot با aiogram 3 و Long Polling ساخته شده است.
+- Application Use Caseها منطق مستقل از Handler/Route را اجرا می‌کنند.
+- PostgreSQL منبع حقیقت و Redis محل FSM، TTL و قفل Poller است.
+- classmate2 مستقل است و در این شاخه تغییر نکرده است.
 
-## 2. آنچه در PR فعلی وجود دارد
+## 2. پیاده‌سازی‌های موجود
 
-- مدل‌های Tenant، Organization، School، AcademicYear، ClassGroup، Subject، User، Membership، Session، Role، Permission، RoleBinding و Audit.
-- Argon2id Password Login، Cookie Session، CSRF و Rate Limit ورود مرورگری.
-- ایجاد Tenant، School، Academic Year، Class و Subject از Routeهای FastAPI.
-- Permission پایه با Deny-overrides-Allow و کنترل عضویت فعال Tenant.
-- Migration اولیه و Audit Append-only در ORM و PostgreSQL.
-- Bootstrap CLI با ایمیل/گذرواژه.
-- تست‌های Policy، Password و Trigger دیتابیس.
+### هویت و امنیت Bot
+- User و TelegramAccount با Telegram ID عددی.
+- Bootstrap مالک با CLI.
+- Pairing مدیر جدید با Token یک‌بارمصرف، hash‌شده، کوتاه‌عمر و محدود به Telegram ID هدف.
+- Private Chat guard، رد حساب ناشناس یا غیرفعال.
+- Redis FSM و قفل Poller تک‌نمونه‌ای.
+- Telegram Update dedup با Lease پایدار در PostgreSQL.
+- Callbackهای Wizard به Flow Token متصل‌اند تا Callback قدیمی روی فرم جدید اثر نگذارد.
+- Audit correlation با شناسه tg-UPDATE_ID.
 
-این موارد به‌عنوان پیشرفت فنی قابل استفاده‌اند، اما **هویت مرورگری، Session Cookie/CSRF و Routeهای ضخیم باید جایگزین شوند**. Bot هنوز وجود ندارد.
+### دسترسی و صحت داده
+- RBAC + scope ancestry، ارث‌بری والد به فرزند و Deny-overrides-Allow.
+- Membership فعال و بازه اعتبار نقش‌ها کنترل می‌شود.
+- Migration 0002، قیود RoleBinding و Composite FKهای آموزشی را اضافه می‌کند.
+- تست‌های Unit/Integration برای Scope و Tenant isolation اضافه شده‌اند.
 
-## 3. کارهای لازم برای خروج از وضعیت موقت
+### Application Layer و اولین قابلیت واقعی
+- Use Caseهای مستقل Tenant، School، Academic Year، Class و Subject ساخته شده‌اند.
+- Tenant list و Tenant create در Bot متصل‌اند.
+- Wizard ساخت Tenant شامل Name، Slug، Timezone، Locale، Preview، Confirm، Back و Cancel است.
+- فرم در ورودی نامعتبر در همان مرحله می‌ماند.
+- Duplicate slug در Application Layer و DB کنترل می‌شود.
+- Audit برای Tenant create و Tenant directory read نوشته می‌شود.
 
-### A. حذف مدل ورود وب
+### Migrationها
+- 0001: هسته اولیه Tenant/Academic/Identity/RBAC/Audit.
+- 0002: scope constraints و composite tenant integrity.
+- 0003: TelegramAccount و Pairing Token؛ حذف Browser Sessions.
+- 0004: processed_telegram_updates برای Replay suppression.
 
-- حذف Login/Logout مرورگری به‌عنوان مسیر اصلی مدیریت.
-- حذف Cookie Session و CSRF مخصوص Browser از مسیر هویت مدیر.
-- بازطراحی Session/Identity حول Telegram Account و ابطال اتصال.
-- اصلاح User model تا Email اجباری و Password Hash شرط لازم هر مدیر نباشد؛ Email در صورت نیاز metadata/contact است.
-- Bootstrap امن Platform Owner با Telegram User ID عددی از CLI کنترل‌شده.
-- Pairing مدیران بعدی با Token یک‌بارمصرف، hash‌شده و Expiring.
+## 3. مواردی که هنوز نباید پیاده‌سازی‌شده اعلام شوند
 
-### B. ساخت Bot Adapter
+- Bot هنوز با Bot Token واقعی در Telegram یا Railway آزمایش/Deploy نشده است.
+- Invite/Pairing در تست‌ها بررسی شده؛ تحویل واقعی لینک به مدیر دعوت‌شده هنوز end-to-end تست نشده است.
+- Unlink/recovery، MFA/step-up و مدیریت نشست/دستگاه هنوز کامل نیست.
+- Role assignment و مدیریت مجوزها از UI تلگرام هنوز در دست توسعه است.
+- فرم‌های Bot برای School، Academic Year، Class و Subject هنوز کامل نیستند؛ Use Caseهای پایه وجود دارند.
+- Audit explorer، گزارش، جست‌وجوی سراسری و داشبورد در فازهای بعدی تکمیل می‌شوند.
+- Machine-to-Machine authentication برای Integration API هنوز پیاده‌سازی نشده است.
 
-- ساخت `backend/app/bot/main.py` و Application/Dispatcher.
-- انتخاب aiogram 3، Long Polling و تک Replica در Railway.
-- Middlewareهای Private Chat، Actor Extraction، Account Status، Rate Limit و Correlation.
-- Routerهای فرمان عمومی، Navigation، Tenant/School، Academic و Admin Identity.
-- Inline Keyboard، Callback Factory کوتاه، FSM Redis و Navigation Stack.
-- Back، Cancel، Menu، Help، Timeout و خطاهای ورودی.
-- جلوگیری از اجرای Update/Callback تکراری و ثبت وضعیت Action.
-- هیچ Handler مستقیماً به ORM دسترسی نداشته باشد.
+## 4. محدوده تحویل فاز ۱
 
-### C. جداسازی Application Layer
+مدیر مجاز باید بتواند:
 
-- Use Caseهای Create/List Tenant، School، Academic Year، Class و Subject.
-- Repository برای Persistence و Policy Service برای Authorization.
-- FastAPI و Bot هر دو همان Use Case را فراخوانی کنند.
-- Transaction، Audit و Outbox boundary روشن باشد.
-- پاسخ Bot از Result ساخت‌یافته ساخته شود؛ متن خطا/موفقیت در Handler مالک منطق نباشد.
+1. با Telegram ID متصل‌شده در Private Chat پذیرفته شود.
+2. هویت مدیریتی خود را ببیند.
+3. بر اساس Permission منوی درست را ببیند.
+4. Tenantها را فهرست کند.
+5. Tenant جدید را با Preview و Confirmation بسازد.
+6. مدیر جدید را با Pairing یک‌بارمصرف دعوت کند (دعوت به‌تنهایی Role مدیریتی اضافه نمی‌کند).
+7. سلامت اتصال Database و Redis را از Bot بررسی کند.
+8. از Back/Cancel/Menu و رفتار Callback منقضی استفاده کند.
 
-### D. اصلاح Authorization و Integrity
+برای بستن کامل فاز، فرم‌های پایه مدرسه/سال/کلاس/درس، لغو اتصال مدیر، ماتریس Role/Scope، Integration identity و تست‌های عملی Bot نیز باید تکمیل شوند.
 
-- ارث‌بری Scope از Platform به Tenant و Scopeهای فرزند، با مرزهای روشن و تست‌شده.
-- عدم انتقال مجوز به Scope والد، هم‌سطح یا Tenant دیگر.
-- Deny-overrides-Allow در تمام مسیرهای ارث‌بری.
-- عضویت Tenant و بازه‌های Role Binding هر بار کنترل شوند.
-- قیود ترکیبی دیتابیس/Domain برای تضمین هم‌خوانی Tenant، School، Academic Year و Class.
-- هم‌تراز کردن Check Constraint مربوط به RoleBinding در ORM و Migration؛ Migration فعلی از مدل ضعیف‌تر است و باید با تست PostgreSQL اصلاح شود.
-- تست‌های منفی cross-tenant و دسترسی غیرمجاز با Callback دستکاری‌شده.
+## 5. Gate پذیرش فاز ۱
 
-### E. Telegram Safety و Audit
+- [ ] CI آخرین Commit: Ruff، Migration PostgreSQL و همه تست‌ها سبز.
+- [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند.
+- [ ] کاربر ناشناس، حساب تعلیق‌شده، حساب Unlinked و Group/Channel رد شوند.
+- [ ] Pairing برای Telegram ID نادرست، Token منقضی و Token مصرف‌شده رد شود.
+- [ ] Callback قدیمی از Flow قبلی بی‌اثر باشد.
+- [ ] Update تکراری اجرا نشود و شکست قابل Retry کنترل‌شده داشته باشد.
+- [ ] Role/Scope inheritance، Deny و Cross-tenant با تست PostgreSQL اثبات شوند.
+- [ ] فرم‌های ساخت School/Academic Year/Class/Subject از Bot کامل شوند.
+- [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
+- [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
+- [ ] API Integration به شکل امن از هویت Telegram جدا شود.
+- [ ] CI و Runbook بدون Frontend باشد.
+- [ ] هیچ Deploy یا تغییری در classmate2 انجام نشده باشد.
 
-- Pairing، Unlink، Account Suspend و Role Change با Audit.
-- Private Chat فقط؛ Group/Channel Update رد شود.
-- Callback actor/resource/expiry/status validation.
-- Update ID/Action ID idempotency.
-- داده حساس در FSM/Callback/Log قرار نگیرد.
-- Audit شامل Actor واقعی Telegram-linked، Context، Correlation و نتیجه باشد.
-
-### F. تست و CI
-
-- Unit Tests برای Policy/Use Case/Navigation/FSM.
-- Bot Tests برای Unknown User، Non-private chat، stale callback، double click، invalid input، Back/Cancel و duplicate Update.
-- PostgreSQL Integration برای migration، audit immutability و cross-tenant integrity.
-- Ruff و pytest برای Backend و Bot.
-- هیچ Frontend/Node Build در CI نهایی وجود ندارد.
-
-## 4. محدوده عملیاتی فاز یک
-
-پس از موانع بالا، مدیر مجاز باید بتواند در ربات:
-
-1. هویت خود و سطح دسترسی را ببیند.
-2. فهرست Tenantهای قابل دسترس را ببیند و Context را انتخاب کند.
-3. Tenant جدید بسازد (فقط Platform Permission).
-4. مدرسه ایجاد/فهرست کند.
-5. سال تحصیلی ایجاد و فهرست کند.
-6. کلاس ایجاد و فهرست کند.
-7. درس ایجاد و فهرست کند.
-8. Audit مجاز را با فیلتر و Pagination ببیند.
-9. از هر Flow یک Back و Cancel قابل پیش‌بینی داشته باشد.
-
-هر قابلیت تا زمان وجود Handler، Use Case، Policy، Audit و Test «پیاده‌سازی‌شده» محسوب نمی‌شود.
-
-## 5. معیارهای پذیرش
-
-- هیچ رابط وب انسانی یا Login مرورگری در معماری باقی نمانده باشد.
-- Bot فقط در Private Chat و برای حساب Pairشده فعال باشد.
-- هیچ عملیات مدیریتی بدون Policy check انجام نشود.
-- هیچ Callback قابل جعل یا Replay نباشد.
-- فرم‌ها بعد از خطای ورودی در مرحله صحیح باقی بمانند.
-- Back و Cancel در همه Wizardهای چندمرحله‌ای درست عمل کنند.
-- Scope hierarchy و Tenant isolation با تست‌های مثبت و منفی اثبات شود.
-- API Integration دارای Service Authentication مستقل باشد.
-- Audit برای تمام عملیات حساس ثبت شود.
-- CI بدون Frontend اجرا و سبز باشد.
-- Railway Deploy و classmate2 هیچ تغییری بدون درخواست مستقل نداشته باشند.
-
-**تا وقتی تمام معیارهای بالا برآورده نشده‌اند، PR2 نباید Merge شود.**
+**تا بسته‌شدن تمام Gateها PR2 باید Draft باقی بماند و Merge نشود.**
