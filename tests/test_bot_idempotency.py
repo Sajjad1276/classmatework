@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
+from app.core.request_context import request_id_context
 from app.db.base import Base
 from app.db.models import ProcessedTelegramUpdate
 
@@ -22,10 +23,12 @@ async def test_duplicate_telegram_update_is_processed_only_once() -> None:
     middleware = TelegramUpdateDedupMiddleware(factory)
     event = SimpleNamespace(update_id=1001)
     calls = 0
+    correlation_ids: list[str | None] = []
 
     async def handler(_event, _data):
         nonlocal calls
         calls += 1
+        correlation_ids.append(request_id_context.get())
         return "handled"
 
     first = await middleware(handler, event, {})
@@ -34,6 +37,7 @@ async def test_duplicate_telegram_update_is_processed_only_once() -> None:
     assert first == "handled"
     assert duplicate is None
     assert calls == 1
+    assert correlation_ids == ["tg-1001"]
 
     async with factory() as db:
         record = await db.get(ProcessedTelegramUpdate, 1001)
