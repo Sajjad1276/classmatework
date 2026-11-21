@@ -54,7 +54,7 @@
 - Invite/Pairing در تست‌ها بررسی شده؛ تحویل واقعی لینک به مدیر دعوت‌شده هنوز end-to-end تست نشده است.
 - Unlink/recovery، MFA/step-up و مدیریت نشست/دستگاه هنوز کامل نیست.
 - Role assignment و مدیریت مجوزها از UI تلگرام هنوز در دست توسعه است.
-- فرم‌های Bot برای School، Academic Year، Class و Subject هنوز کامل نیستند؛ Use Caseهای پایه وجود دارند.
+- فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند؛ Update/Archive، Search و Pagination کامل هنوز باقی است.
 - Audit explorer، گزارش، جست‌وجوی سراسری و داشبورد در فازهای بعدی تکمیل می‌شوند.
 - Machine-to-Machine authentication برای Integration API هنوز پیاده‌سازی نشده است.
 
@@ -75,7 +75,7 @@
 
 ## 5. Gate پذیرش فاز ۱
 
-- [x] CI برای Commit `361b9e26aaf8c94046c023b36c244b31be2790c1`: Ruff، چهار Migration PostgreSQL و ۲۷ تست سبز (یک Warning غیرمسدودکننده). Run: `44932267328`.
+- [x] CI برای Commit `2e3f0d2c572afa938add772f09cbedb062a36e6d`: Ruff، چهار Migration PostgreSQL و ۲۷ تست سبز (یک Warning غیرمسدودکننده). Run: `44932471573`.
 - [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
 - [x] تست‌های middleware برای Private Chat و رد مسیرهای خارج از هویت فعال اضافه شده‌اند؛ آزمون End-to-End حساب Unlinked/تعلیق‌شده با Bot واقعی هنوز لازم است.
 - [x] Pairing برای Telegram ID نادرست، Token منقضی و Token مصرف‌شده در تست‌ها رد می‌شود.
