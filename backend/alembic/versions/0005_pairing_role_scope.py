@@ -104,7 +104,9 @@ def upgrade() -> None:
                 "academic_year:create",
                 "class:create",
                 "subject:create",
-                            ),
+                "membership:invite",
+                "role:manage",
+            ),
         ),
         "tenant_viewer": ("ناظر مجموعه", ("school:read",)),
     }
