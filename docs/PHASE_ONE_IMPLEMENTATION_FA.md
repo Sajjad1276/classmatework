@@ -34,9 +34,10 @@
 - تست‌های Unit/Integration برای Scope و Tenant isolation اضافه شده‌اند.
 
 ### Application Layer و اولین قابلیت واقعی
-- Use Caseهای مستقل Tenant، School، Academic Year، Class و Subject ساخته شده‌اند.
+- Use Caseهای مستقل Tenant، School، Academic Year، Class، Subject، Role و Membership ساخته شده‌اند.
 - Tenant list/select و Tenant create در Bot متصل‌اند.
 - فرم‌های School list/create، Academic Year list/create، Class list/create و Subject list/create در Bot متصل شده‌اند.
+- فرمان‌های /roles، /role-create، /members و /revoke-invite برای مدیریت پایه نقش‌ها، اعضا و دعوت‌ها اضافه شده‌اند.
 - Wizardهای ساخت شامل اعتبارسنجی ورودی، Preview، Confirm، Back و Cancel هستند؛ ایجاد کلاس با انتخاب سال تحصیلی انجام می‌شود.
 - انتخاب Tenant/School/Academic Year فقط UI Context است؛ Use Case پیش از هر عملیات مالکیت و Permission را دوباره بررسی می‌کند.
 - فرم در ورودی نامعتبر در همان مرحله می‌ماند.
@@ -48,6 +49,7 @@
 - 0002: scope constraints و composite tenant integrity.
 - 0003: TelegramAccount و Pairing Token؛ حذف Browser Sessions.
 - 0004: processed_telegram_updates برای Replay suppression.
+- 0005: Role/Scope در Pairing، قید مثبت بودن Telegram ID، یکتایی دعوت فعال و Seed نقش‌های پیش‌فرض Tenant.
 - 0005: Role/Scope در دعوت‌نامه، قید مثبت بودن Telegram ID، جلوگیری از دعوت فعال تکراری و Seed نقش‌های پایه Tenantهای موجود.
 
 ## 3. مواردی که هنوز نباید پیاده‌سازی‌شده اعلام شوند
@@ -77,7 +79,7 @@
 
 ## 5. Gate پذیرش فاز ۱
 
-- [x] CI برای Commit 746c1be44488df498737bcf5b2dd385ea0799f93: Ruff، پنج Migration PostgreSQL و ۳۴ تست سبز (یک Warning غیرمسدودکننده). Run: 44936217541.
+- [x] CI برای Commit 4980a075f3b75979d17921fc70c487d7d4ada3a1: Ruff، پنج Migration PostgreSQL و ۴۰ تست سبز (یک Warning غیرمسدودکننده). Run: 44937126858.
 - [ ] Bot با Token آزمایشی در Telegram اجرا و فرمان‌ها End-to-End بررسی شوند (نیازمند Token آزمایشی و اجرای واقعی).
 - [x] تست‌های middleware برای Private Chat و رد مسیرهای خارج از هویت فعال اضافه شده‌اند؛ آزمون End-to-End حساب Unlinked/تعلیق‌شده با Bot واقعی هنوز لازم است.
 - [x] Pairing با Role/Scope، جلوگیری از escalation، رد Telegram ID اشتباه، Token منقضی/مصرف‌شده و رد دعوت در صورت لغو اختیار دعوت‌کننده تست شده است.
@@ -85,7 +87,8 @@
 - [x] Update تکراری در تست Dedup اجرا نمی‌شود و Update شکست‌خورده پس از آزادشدن Lease قابل Retry است.
 - [x] Role/Scope inheritance، Deny و Cross-tenant با تست‌های Policy و PostgreSQL اثبات شده‌اند.
 - [x] فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند.
-- [x] فهرست نقش‌ها و دعوت نقش‌محور برای Scopeهای Platform و Tenant پیاده‌سازی شده؛ مدیر Tenant فقط داخل Tenant خودش می‌تواند دعوت صادر کند.
+- [x] فهرست نقش‌ها، ساخت نقش سفارشی با Permission ceiling، فهرست اعضای فعال و لغو دعوت‌نامهٔ پذیرفته‌نشده پیاده‌سازی شده‌اند.
+- [x] مدیر Tenant فقط می‌تواند در محدودهٔ خودش نقش واگذار کند، اعضا را ببیند و دعوت صادر/لغو کند.
 - [ ] اجرای End-to-End فرم‌های ساختار آموزشی با Bot Token آزمایشی و بررسی دستی خطاها/Back/Cancel.
 - [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
 - [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
