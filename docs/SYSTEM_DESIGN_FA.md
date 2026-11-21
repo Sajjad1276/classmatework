@@ -569,63 +569,22 @@ CI باید Backend lint/test، Bot lint/test، Migration و Integration Testه�
 
 ---
 
-## 13. فازبندی اجرایی بازنگری‌شده
+## 13. برنامه اجرایی کل پروژه — دقیقاً پنج فاز
 
-### فاز صفر — اصلاح مبنای معماری
+نقشه رسمی و جزئیات تحویل هر فاز در `docs/MASTER_ROADMAP_5_PHASES_FA.md` ثبت شده است. تعداد فازهای اصلی پروژه دقیقاً پنج است؛ زیرساخت Phase 0 موجود، پیش‌نیاز قبلی است و فاز ششم یا فاز صفر جدید ساخته نمی‌شود.
 
-- تبدیل سند مرجع به معماری Telegram-first.
-- حذف Frontend وب و تست Build آن.
-- تثبیت قرارداد Bot Adapter، API و Use Case.
-- تعیین سیاست Telegram identity، private chat و polling.
-- تعیین ساختار Railway Serviceها بدون ساخت Project جدید.
+1. **فاز ۱ — هسته امن و ربات مدیریتی:** Telegram Identity، Pairing، Bot Core، Private Chat، Navigation/FSM، Application Use Cases، RBAC/Scope، Tenant Isolation و Audit.
+2. **فاز ۲ — مدیریت ساختار و کاربران:** Tenant، Organization، School، Academic Year، Class، Subject، User، Membership، Invite و Role Management.
+3. **فاز ۳ — محتوا و گردش‌کار:** Content، Revision، Workflow، Approval، Scheduling و Rollback منطقی.
+4. **فاز ۴ — ارتباطات و خودکارسازی:** Telegram Connections، Notifications، Outbox، Integration با `classmate2`، Job Center و Bulk Import/Export.
+5. **فاز ۵ — گزارش، امنیت و تحویل نهایی:** Dashboard، Reporting، Audit Explorer، Security Center، Settings، Feature Flags، Observability، Backup/Restore و Production Release.
 
-**معیار خروج:** هیچ سند، CI یا دستور اجرای اصلی پروژه وب‌محور نباشد.
+هر فاز دارای خروجی قابل استفاده، تست، مستندات و Gate پذیرش است. فاز بعدی تا قبولی Gate فاز قبلی آغاز نمی‌شود. قابلیت صرفاً مستندشده یا منویی که Use Case، مجوز، Audit و تست ندارد تحویل‌شده محسوب نمی‌شود.
 
-### فاز یک — هویت، دسترسی و هسته ربات
-
-- Telegram Account و Bootstrap امن Platform Owner.
-- Private Chat Guard و Bot Middleware.
-- منوی اصلی، Navigation Stack، Back/Cancel و Redis FSM.
-- Use Caseهای Tenant، School، Academic Year، Class و Subject.
-- RBAC/ABAC با Scope Hierarchy صحیح.
-- Audit و جلوگیری از Duplicate Update.
-- تست Integration و Bot.
-
-**معیار خروج:** مدیر مجاز بتواند عملیات پایه را از ابتدا تا انتها در ربات انجام دهد و مدیر غیرمجاز نتواند با جعل Callback یا تغییر Tenant به داده دسترسی پیدا کند.
-
-### فاز دو — مدیریت کامل کاربران و عضویت
-
-- Invite/Pairing یک‌بارمصرف.
-- چرخه کامل Membership و Role Binding.
-- مدیریت حساب‌ها و قطع اتصال Telegram.
-- جست‌وجو، صفحه‌بندی و گزارش‌های کاربران.
-
-### فاز سه — Workflow و Approval
-
-- Content، Revision، Task، Approval و Quorum.
-- Preview، تأیید دوم، رد و Rollback منطقی.
-
-### فاز چهار — اتصال‌ها و عملیات
-
-- Telegram Communication Connections.
-- Template، Notification Queue، Retry و Delivery Report.
-- Outbox/Integration با `classmate2`.
-- Import/Export و Jobهای قابل پیگیری.
-
-### فاز پنج — گزارش، امنیت و Automation پیشرفته
-
-- گزارش‌های عملیاتی و Export Governance.
-- Security Incident، Policy Simulator و Anomaly Detection.
-- Feature Flag، Retention، Backup/Restore و Hardening.
-
-### فاز شش — مقیاس
-
-- جداسازی سرویس فقط بر اساس بار واقعی.
-- Worker مستقل فقط در صورت نیاز واقعی به پردازش غیرهمزمان.
-- Multi-region و Disaster Recovery پیشرفته.
+**فاز جاری: ۱.** PR2 فعلی Draft باقی می‌ماند تا موانع هویت تلگرام، Bot، Application Layer، Scope و Data Integrity رفع شوند.
 
 ---
-
+ 
 ## 14. معیار نهایی جلوگیری از انحراف
 
 پیش از افزودن هر قابلیت، این موارد باید پاسخ مستند داشته باشند:
