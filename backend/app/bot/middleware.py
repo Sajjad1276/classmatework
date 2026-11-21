@@ -1,3 +1,4 @@
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -87,6 +88,9 @@ class TelegramIdentityMiddleware(BaseMiddleware):
         )
         row = result.one_or_none()
         if row is None:
+            if isinstance(event, Message) and _is_pairing_start(event.text):
+                data["pairing_candidate"] = True
+                return await handler(event, data)
             await self._reject(event)
             return None
 
@@ -106,3 +110,16 @@ class TelegramIdentityMiddleware(BaseMiddleware):
                 "دسترسی این حساب فعال نیست.",
                 show_alert=True,
             )
+
+
+
+_PAIRING_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
+
+
+def _is_pairing_start(message_text: str | None) -> bool:
+    if not message_text:
+        return False
+    parts = message_text.strip().split(maxsplit=1)
+    if len(parts) != 2 or parts[0].split("@", maxsplit=1)[0] != "/start":
+        return False
+    return _PAIRING_TOKEN_PATTERN.fullmatch(parts[1]) is not None
