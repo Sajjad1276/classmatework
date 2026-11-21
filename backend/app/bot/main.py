@@ -7,9 +7,11 @@ from contextlib import suppress
 from datetime import timedelta
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.base import DefaultKeyBuilder
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand
 from redis.asyncio import Redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.academic_router import router as academic_router
@@ -23,7 +25,12 @@ from app.bot.rate_limit import TelegramRateLimitMiddleware
 from app.bot.router import router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.db.runtime import create_database_engine, create_redis_client, create_session_factory
+from app.db.runtime import (
+    DATABASE_SCHEMA,
+    create_database_engine,
+    create_redis_client,
+    create_session_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +127,10 @@ async def main() -> None:
     bot = Bot(token=settings.telegram_bot_token.get_secret_value())
     storage = RedisStorage.from_url(
         settings.redis_url,
+        key_builder=DefaultKeyBuilder(
+            prefix="classmatework:fsm",
+            with_bot_id=True,
+        ),
         state_ttl=timedelta(seconds=settings.bot_fsm_ttl_seconds),
         data_ttl=timedelta(seconds=settings.bot_fsm_ttl_seconds),
     )
@@ -134,6 +145,16 @@ async def main() -> None:
 
     try:
         await redis.ping()
+        async with engine.connect() as connection:
+            ready = await connection.execute(
+                text("SELECT to_regclass('processed_telegram_updates')")
+            )
+            if ready.scalar_one_or_none() is None:
+                raise RuntimeError(
+                    "ClassMate Work database is not migrated; processed_telegram_updates is missing."
+                )
+        logger.info("ClassMate Work database ready; schema=%s", DATABASE_SCHEMA)
+
         await _acquire_poller_lock(redis, token)
 
         for observer in (dispatcher.message, dispatcher.callback_query):
