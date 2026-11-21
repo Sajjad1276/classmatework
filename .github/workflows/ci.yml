@@ -14,7 +14,17 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://classmate:local-dev-only@localhost:5432/classmatework
       TEST_POSTGRES_URL: postgresql+asyncpg://classmate:local-dev-only@localhost:5432/classmatework
+      REDIS_URL: redis://localhost:6379/0
     services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
       postgres:
         image: postgres:16-alpine
         env:
@@ -42,5 +52,5 @@ jobs:
       - name: Test
         run: pytest
 
-# Telegram adapter tests will join this job after the adapter and FSM are implemented.
+# Telegram adapter, pairing, FSM-state and idempotency tests run in the backend test suite.
 # There is deliberately no Node.js or frontend build in the Telegram-only product.
