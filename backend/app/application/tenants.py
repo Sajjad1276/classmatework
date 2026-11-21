@@ -104,6 +104,7 @@ _TENANT_ROLE_TEMPLATES = {
             "subject:create",
             "membership:read",
             "membership:invite",
+            "membership:manage",
             "role:manage",
         ),
     ),
