@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +26,19 @@ class Settings(BaseSettings):
     bot_message_rate_limit: int = Field(default=30, ge=1, le=1000)
     bot_callback_rate_limit: int = Field(default=45, ge=1, le=1000)
     bot_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+
+    @field_validator("app_env", mode="before")
+    @classmethod
+    def normalize_app_env(cls, value: object) -> object:
+        if isinstance(value, str):
+            aliases = {
+                "dev": "development",
+                "stage": "staging",
+                "prod": "production",
+            }
+            normalized = value.strip().lower()
+            return aliases.get(normalized, normalized)
+        return value
 
 
 @lru_cache
