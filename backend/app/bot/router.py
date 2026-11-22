@@ -4,7 +4,6 @@ import re
 import secrets
 from datetime import UTC, datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -57,13 +56,10 @@ from app.modules.identity.principal import TelegramPrincipal
 router = Router(name="admin")
 
 
+
 class TenantCreation(StatesGroup):
     name = State()
-    slug = State()
-    timezone = State()
-    locale = State()
     confirm = State()
-
 
 class MemberSuspension(StatesGroup):
     confirm = State()
@@ -73,25 +69,17 @@ class MemberReactivation(StatesGroup):
     confirm = State()
 
 
+
 def wizard_controls(flow_token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="بازگشت",
-                    callback_data=f"wizard:back:{flow_token}",
-                ),
-                InlineKeyboardButton(
-                    text="لغو عملیات",
-                    callback_data=f"wizard:cancel:{flow_token}",
-                ),
-            ]
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"wizard:back:{flow_token}")],
+            [InlineKeyboardButton(text="❌ لغو عملیات", callback_data=f"wizard:cancel:{flow_token}")],
         ]
     )
 
-
 MAIN_MENU_ACCOUNT = "👤 حساب مدیریتی من"
-MAIN_MENU_TENANTS = "🏢 فهرست مجموعه‌ها"
+MAIN_MENU_TENANTS = "🏫 مدیریت مدارس و کلاس‌ها"
 MAIN_MENU_CREATE_TENANT = "➕ ایجاد مجموعه جدید"
 MAIN_MENU_HELP = "❓ راهنما"
 
@@ -167,6 +155,7 @@ async def _hide_root_keyboard(message: Message) -> None:
         pass
 
 
+
 async def _show_tenant_list(
     message: Message,
     principal: TelegramPrincipal,
@@ -181,32 +170,32 @@ async def _show_tenant_list(
             limit=50,
         )
 
-    if not tenants:
-        await message.answer(
-            "هنوز مجموعه‌ای در سامانه ثبت نشده است.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")]
-                ]
-            ),
-        )
-        return
-
+    can_create = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="platform:tenants:create",
+        tenant_id=None,
+        scope_type="platform",
+        scope_id=None,
+    )
     rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{tenant.name} · {tenant.slug}",
-                callback_data=f"tenant:open:{tenant.id}",
-            )
-        ]
+        [InlineKeyboardButton(
+            text=f"{tenant.name} · {tenant.slug}",
+            callback_data=f"tenant:open:{tenant.id}",
+        )]
         for tenant in tenants
     ]
-    rows.append([InlineKeyboardButton(text="خانه", callback_data="root:menu")])
-    await message.answer(
-        "برای ورود به فضای مدیریتی هر مجموعه، آن را انتخاب کنید:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+    if can_create:
+        rows.append([InlineKeyboardButton(text="➕ ایجاد مجموعه", callback_data="tenant:create")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")])
 
+    body = (
+        f"🏫 مدیریت مدارس و کلاس‌ها\n\nمجموعه‌ها: {len(tenants)}\n"
+        "برای مدیریت مدارس و کلاس‌های هر مجموعه، آن را انتخاب کنید."
+        if tenants
+        else "هنوز مجموعه‌ای ثبت نشده است. ابتدا یک مجموعه ایجاد کنید."
+    )
+    await message.answer(body, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 async def _begin_tenant_creation(
     message: Message,
@@ -338,58 +327,67 @@ async def root_menu_callback(
         )
 
 
+
 async def _show_tenant_step(
     message: Message,
     state: FSMContext,
     step: str,
 ) -> None:
-    prompts = {
-        "name": "نام مجموعه را وارد کنید (۲ تا ۱۸۰ نویسه):",
-        "slug": "شناسه انگلیسی مجموعه را وارد کنید؛ فقط حروف کوچک، عدد و خط تیره:",
-        "timezone": "منطقه زمانی را وارد کنید؛ نمونه: Asia/Tehran",
-        "locale": "زبان/محلی‌سازی را وارد کنید؛ نمونه: fa-IR",
-    }
     data = await state.get_data()
     flow_token = data.get("flow_token", "")
     if not flow_token:
         await state.clear()
         await message.answer("فرم منقضی شده است. از منو دوباره شروع کنید.")
         return
+
     if step == "confirm":
-        summary = (
+        body = (
             "پیش‌نمایش ایجاد مجموعه\n\n"
-            f"نام: {data.get('tenant_name', '')}\n"
-            f"شناسه: {data.get('tenant_slug', '')}\n"
-            f"منطقه زمانی: {data.get('tenant_timezone', '')}\n"
-            f"زبان: {data.get('tenant_locale', '')}\n\n"
+            f"نام مجموعه: {data.get('tenant_name', '')}\n"
+            f"شناسه سیستمی: {data.get('tenant_slug', '')}\n"
+            "منطقه زمانی پیش‌فرض: Asia/Tehran\n"
+            "زبان پیش‌فرض: fa-IR\n\n"
             "برای ثبت نهایی تأیید کنید."
         )
-        await message.answer(
-            summary,
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="تأیید و ایجاد",
-                            callback_data=f"tenant:confirm:{flow_token}",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="بازگشت",
-                            callback_data=f"wizard:back:{flow_token}",
-                        ),
-                        InlineKeyboardButton(
-                            text="لغو عملیات",
-                            callback_data=f"wizard:cancel:{flow_token}",
-                        ),
-                    ],
-                ]
-            ),
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ تأیید و ایجاد",
+                    callback_data=f"tenant:confirm:{flow_token}",
+                )],
+                [InlineKeyboardButton(
+                    text="⬅️ بازگشت",
+                    callback_data=f"wizard:back:{flow_token}",
+                )],
+                [InlineKeyboardButton(
+                    text="❌ لغو عملیات",
+                    callback_data=f"wizard:cancel:{flow_token}",
+                )],
+            ]
         )
-        return
+    else:
+        body = "نام مجموعه را وارد کنید (۲ تا ۱۸۰ نویسه):"
+        keyboard = wizard_controls(flow_token)
 
-    await message.answer(prompts[step], reply_markup=wizard_controls(flow_token))
+    prompt_id = data.get("flow_prompt_message_id")
+    chat_id = data.get("flow_chat_id") or message.chat.id
+    if prompt_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=prompt_id,
+                text=body,
+                reply_markup=keyboard,
+            )
+            return
+        except TelegramBadRequest:
+            pass
+
+    sent = await message.answer(body, reply_markup=keyboard)
+    await state.update_data(
+        flow_prompt_message_id=sent.message_id,
+        flow_chat_id=sent.chat.id,
+    )
 
 
 async def _move_tenant_wizard_back(
@@ -399,23 +397,16 @@ async def _move_tenant_wizard_back(
     db: AsyncSession,
 ) -> None:
     current = await state.get_state()
-    previous = {
-        TenantCreation.slug.state: "name",
-        TenantCreation.timezone.state: "slug",
-        TenantCreation.locale.state: "timezone",
-        TenantCreation.confirm.state: "locale",
-    }
-    if current not in previous:
-        await state.clear()
-        await message.answer(
-            "به منوی اصلی برگشتید.",
-            reply_markup=await main_menu(db, principal),
-        )
+    if current == TenantCreation.confirm.state:
+        await state.set_state(TenantCreation.name)
+        await _show_tenant_step(message, state, "name")
         return
-    step = previous[current]
-    await state.set_state(getattr(TenantCreation, step))
-    await _show_tenant_step(message, state, step)
 
+    await state.clear()
+    await message.answer(
+        "به منوی اصلی برگشتید.",
+        reply_markup=await main_menu(db, principal),
+    )
 
 @router.message(CommandStart())
 async def start_command(
@@ -1219,6 +1210,7 @@ async def tenant_create_callback(
         await _begin_tenant_creation(callback.message, principal, db, state)
 
 
+
 @router.message(TenantCreation.name)
 async def tenant_name_step(
     message: Message,
@@ -1226,56 +1218,14 @@ async def tenant_name_step(
 ) -> None:
     value = (message.text or "").strip()
     if not 2 <= len(value) <= 180:
-        await message.answer("نام باید بین ۲ تا ۱۸۰ نویسه باشد. دوباره وارد کنید.")
+        await message.answer("نام مجموعه باید بین ۲ تا ۱۸۰ نویسه باشد. دوباره وارد کنید.")
         return
-    await state.update_data(tenant_name=value)
-    await state.set_state(TenantCreation.slug)
-    await _show_tenant_step(message, state, "slug")
-
-
-@router.message(TenantCreation.slug)
-async def tenant_slug_step(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    value = (message.text or "").strip().lower()
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?", value):
-        await message.answer(
-            "شناسه نامعتبر است. فقط حروف کوچک انگلیسی، عدد و خط تیره مجاز است؛ "
-            "ابتدا و انتهای شناسه باید حرف یا عدد باشد."
-        )
-        return
-    await state.update_data(tenant_slug=value)
-    await state.set_state(TenantCreation.timezone)
-    await _show_tenant_step(message, state, "timezone")
-
-
-@router.message(TenantCreation.timezone)
-async def tenant_timezone_step(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    value = (message.text or "").strip()
-    try:
-        ZoneInfo(value)
-    except (ZoneInfoNotFoundError, ValueError):
-        await message.answer("منطقه زمانی شناخته نشد. نمونه معتبر: Asia/Tehran")
-        return
-    await state.update_data(tenant_timezone=value)
-    await state.set_state(TenantCreation.locale)
-    await _show_tenant_step(message, state, "locale")
-
-
-@router.message(TenantCreation.locale)
-async def tenant_locale_step(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    value = (message.text or "").strip()
-    if not re.fullmatch(r"[a-zA-Z]{2,3}(?:-[a-zA-Z]{2,4})?", value):
-        await message.answer("کد زبان نامعتبر است؛ نمونه: fa-IR یا en-US")
-        return
-    await state.update_data(tenant_locale=value)
+    await state.update_data(
+        tenant_name=value,
+        tenant_slug=f"tenant-{secrets.token_hex(4)}",
+        tenant_timezone="Asia/Tehran",
+        tenant_locale="fa-IR",
+    )
     await state.set_state(TenantCreation.confirm)
     await _show_tenant_step(message, state, "confirm")
 
@@ -1288,7 +1238,7 @@ async def tenant_confirm_callback(
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
-    supplied_token = (callback.data or "").split(":", maxsplit=2)[-1]
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
     if (
         await state.get_state() != TenantCreation.confirm.state
         or not supplied_token
@@ -1299,34 +1249,44 @@ async def tenant_confirm_callback(
             show_alert=True,
         )
         return
-    await callback.answer()
+
     try:
         tenant = await create_tenant(
             db,
             actor_id=principal.user.id,
             name=data.get("tenant_name", ""),
             slug=data.get("tenant_slug", ""),
-            timezone=data.get("tenant_timezone", "Asia/Tehran"),
-            locale=data.get("tenant_locale", "fa-IR"),
+            timezone="Asia/Tehran",
+            locale="fa-IR",
         )
     except AccessDenied:
         await state.clear()
-        if callback.message is not None:
-            await callback.message.answer("دسترسی ایجاد مجموعه را ندارید.")
+        await callback.answer("دسترسی ایجاد مجموعه را ندارید.", show_alert=True)
         return
     except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
-    await state.clear()
-    if callback.message is not None:
-        await callback.message.answer(
-            "مجموعه با موفقیت ایجاد شد.\n\n"
-            f"نام: {tenant.name}\n"
-            f"شناسه: {tenant.slug}\n"
-            f"شناسه داخلی: {tenant.id}",
-            reply_markup=await main_menu(db, principal),
-        )
 
+    await state.clear()
+    await callback.answer("مجموعه ایجاد شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            (
+                "✅ مجموعه ایجاد شد.\n\n"
+                f"نام: {tenant.name}\n"
+                f"شناسه: {tenant.slug}\n\n"
+                "برای مدیریت مدارس و کلاس‌های این مجموعه وارد آن شوید."
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="🏫 مدیریت مدارس این مجموعه",
+                        callback_data=f"tenant:open:{tenant.id}",
+                    )],
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+                ]
+            ),
+        )
 
 @router.callback_query(F.data.startswith("wizard:back:"))
 async def wizard_back_callback(
@@ -1349,6 +1309,7 @@ async def wizard_back_callback(
     await _move_tenant_wizard_back(callback.message, state, principal, db)
 
 
+
 @router.callback_query(F.data.startswith("wizard:cancel:"))
 async def wizard_cancel_callback(
     callback: CallbackQuery,
@@ -1356,7 +1317,7 @@ async def wizard_cancel_callback(
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
-    supplied_token = (callback.data or "").split(":", maxsplit=2)[-1]
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
     current_data = await state.get_data()
     if not supplied_token or supplied_token != current_data.get("flow_token"):
         await callback.answer(
@@ -1364,14 +1325,15 @@ async def wizard_cancel_callback(
             show_alert=True,
         )
         return
-    await callback.answer()
     await state.clear()
+    await callback.answer("عملیات لغو شد.")
     if callback.message is not None:
-        await callback.message.answer(
-            "عملیات لغو شد. هیچ تغییری ثبت نشد.",
-            reply_markup=await main_menu(db, principal),
+        await callback.message.edit_text(
+            "عملیات لغو شد؛ هیچ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
+            ]),
         )
-
 
 @router.message(Command("help"))
 async def help_command(
