@@ -227,6 +227,7 @@ async def _begin_tenant_creation(
     await _show_tenant_step(message, state, "name")
 
 
+
 async def _show_account_panel(
     message: Message,
     principal: TelegramPrincipal,
@@ -241,7 +242,7 @@ async def _show_account_panel(
         f"وضعیت اتصال تلگرام: {account.status}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="خانه", callback_data="root:menu")]
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
             ]
         ),
     )
@@ -250,18 +251,16 @@ async def _show_account_panel(
 async def _show_help_panel(message: Message) -> None:
     await message.answer(
         "راهنمای ClassMate Work\n\n"
-        "برای مدیریت مجموعه‌ها، یک مجموعه را از فهرست انتخاب کنید. "
-        "داخل هر مجموعه، مدیریت مدارس، سال‌های تحصیلی، کلاس‌ها و درس‌ها "
-        "از طریق دکمه‌های شیشه‌ای انجام می‌شود.\n\n"
-        "برای بازگشت از دکمه‌های «بازگشت» یا «خانه» استفاده کنید. "
-        "فرم‌های چندمرحله‌ای نیز دکمه لغو و بازگشت دارند.",
+        "برای مدیریت مدارس و کلاس‌ها، وارد «مدیریت مدارس و کلاس‌ها» شوید. "
+        "سپس مجموعه، مدرسه و سال تحصیلی موردنظر را انتخاب کنید.\n\n"
+        "در پنل‌های داخلی فقط دکمه «بازگشت» برای رفتن به سطح قبلی وجود دارد. "
+        "فرم‌ها کدهای سیستمی را خودکار می‌سازند و اطلاعات قابل پیش‌فرض را از شما نمی‌پرسند.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="خانه", callback_data="root:menu")]
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
             ]
         ),
     )
-
 
 async def show_main_menu(
     message: Message,
@@ -390,6 +389,7 @@ async def _show_tenant_step(
     )
 
 
+
 async def _move_tenant_wizard_back(
     message: Message,
     state: FSMContext,
@@ -403,6 +403,10 @@ async def _move_tenant_wizard_back(
         return
 
     await state.clear()
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
     await message.answer(
         "به منوی اصلی برگشتید.",
         reply_markup=await main_menu(db, principal),
@@ -1222,7 +1226,7 @@ async def tenant_name_step(
         return
     await state.update_data(
         tenant_name=value,
-        tenant_slug=f"tenant-{secrets.token_hex(4)}",
+        tenant_slug=f"tenant-{secrets.token_hex(8)}",
         tenant_timezone="Asia/Tehran",
         tenant_locale="fa-IR",
     )
@@ -1310,6 +1314,7 @@ async def wizard_back_callback(
 
 
 
+
 @router.callback_query(F.data.startswith("wizard:cancel:"))
 async def wizard_cancel_callback(
     callback: CallbackQuery,
@@ -1328,11 +1333,10 @@ async def wizard_cancel_callback(
     await state.clear()
     await callback.answer("عملیات لغو شد.")
     if callback.message is not None:
-        await callback.message.edit_text(
-            "عملیات لغو شد؛ هیچ تغییری ثبت نشد.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
-            ]),
+        await callback.message.edit_text("عملیات لغو شد؛ هیچ تغییری ثبت نشد.")
+        await callback.message.answer(
+            "به منوی اصلی برگشتید.",
+            reply_markup=await main_menu(db, principal),
         )
 
 @router.message(Command("help"))
@@ -1358,7 +1362,9 @@ async def help_command(
         "/help — راهنما\n"
         "/status — بررسی سلامت اتصال‌ها\n\n"
         "گزینه‌های منو بر اساس مجوز شما نمایش داده می‌شوند.",
-        reply_markup=await main_menu(db, principal),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
+        ]),
     )
 
 
