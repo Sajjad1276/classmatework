@@ -9,9 +9,9 @@ from app.api.v1.integrations import _require_integration_key
 from app.application.control_center import (
     complete_class_group_handshake,
     create_class_group_handshake,
+    get_class_subject_catalog,
     get_platform_report,
     ingest_usage_event,
-    get_class_subject_catalog,
     list_school_class_group_directory,
     set_class_subject_assignment,
 )

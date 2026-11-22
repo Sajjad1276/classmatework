@@ -8,6 +8,7 @@ from typing import Sequence, Union
 from uuid import uuid4
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0008_class_subjects"
