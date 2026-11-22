@@ -309,4 +309,17 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
         await db.refresh(school)
         assert school.status == "archived"
 
+        assert await list_schools(
+            db, actor_id=owner.id, tenant_id=tenant.id
+        ) == []
+        assert await list_academic_years(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        ) == []
+        assert await list_classes(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        ) == []
+        assert await list_subjects(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        ) == []
+
     await engine.dispose()

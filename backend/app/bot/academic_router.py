@@ -25,6 +25,10 @@ from app.application.errors import (
     ResourceNotFound,
 )
 from app.application.tenants import (
+    archive_academic_year,
+    archive_class,
+    archive_school,
+    archive_subject,
     create_academic_year,
     create_class,
     create_school,
@@ -35,8 +39,12 @@ from app.application.tenants import (
     list_schools,
     list_subjects,
     list_tenants,
+    update_academic_year,
+    update_class,
+    update_school,
+    update_subject,
 )
-from app.db.models import AcademicYear, School, Tenant
+from app.db.models import AcademicYear, ClassGroup, School, Subject, Tenant
 from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
@@ -53,6 +61,8 @@ class StructureWizard(StatesGroup):
     class_name = State()
     class_grade = State()
     class_confirm = State()
+    edit_value = State()
+    edit_confirm = State()
 
 
 _CONTEXT_KEYS = {
@@ -66,6 +76,7 @@ _FIELD_PROMPTS = {
     StructureWizard.subject_name.state: "نام درس را وارد کنید:",
     StructureWizard.class_name.state: "نام کلاس را وارد کنید؛ نمونه: دهم الف",
     StructureWizard.class_grade.state: "پایه/مقطع کلاس را وارد کنید؛ نمونه: دهم",
+    StructureWizard.edit_value.state: "مقدار جدید را وارد کنید:",
 }
 _FIELD_KEYS = {
     StructureWizard.school_name.state: "school_name",
@@ -80,12 +91,14 @@ _PREVIOUS = {
     StructureWizard.subject_confirm.state: StructureWizard.subject_name,
     StructureWizard.class_grade.state: StructureWizard.class_name,
     StructureWizard.class_confirm.state: StructureWizard.class_grade,
+    StructureWizard.edit_confirm.state: StructureWizard.edit_value,
 }
 _CONFIRM_STATES = {
     "school": StructureWizard.school_confirm.state,
     "year": StructureWizard.year_confirm.state,
     "subject": StructureWizard.subject_confirm.state,
     "class": StructureWizard.class_confirm.state,
+    "edit": StructureWizard.edit_confirm.state,
 }
 
 
@@ -308,6 +321,10 @@ async def _show_school_menu(
         db, actor_id=principal.user.id, tenant_id=tenant_id,
         school_id=school_id, permission="subject:create",
     )
+    can_manage_school = await _has_school_permission(
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="school:manage",
+    )
 
     rows: list[list[InlineKeyboardButton]] = []
     if can_read:
@@ -323,6 +340,9 @@ async def _show_school_menu(
         rows.append([InlineKeyboardButton(text="➕ ایجاد کلاس", callback_data="class:choose-year")])
     if can_subject:
         rows.append([InlineKeyboardButton(text="➕ افزودن درس", callback_data="subject:create")])
+    if can_manage_school:
+        rows.append([InlineKeyboardButton(text="✏️ ویرایش نام مدرسه", callback_data=f"life:e:school:{school.id}:name")])
+        rows.append([InlineKeyboardButton(text="🗄 بایگانی مدرسه", callback_data=f"life:a:s:{school.id}")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="school:list")])
 
     body = (
@@ -357,11 +377,18 @@ async def _show_year_menu(
         db, actor_id=principal.user.id, tenant_id=tenant_id,
         school_id=school_id, permission="class:create",
     )
+    can_manage_year = await _has_school_permission(
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="academic_year:manage",
+    )
     rows: list[list[InlineKeyboardButton]] = []
     if can_read:
         rows.append([InlineKeyboardButton(text="👥 کلاس‌های این سال", callback_data="class:list")])
     if can_create_class:
         rows.append([InlineKeyboardButton(text="➕ ایجاد کلاس در این سال", callback_data="class:create-selected")])
+    if can_manage_year:
+        rows.append([InlineKeyboardButton(text="✏️ ویرایش نام سال", callback_data=f"life:e:year:{year.id}:name")])
+        rows.append([InlineKeyboardButton(text="🗄 بایگانی سال تحصیلی", callback_data=f"life:a:y:{year.id}")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="year:list")])
     body = (
         f"📅 سال تحصیلی: {year.name}\n"
@@ -406,6 +433,13 @@ def _flow_keyboard(flow_token: str, *, confirm: bool = False) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def _summary(flow_name: str, data: dict) -> str:
+    if flow_name == "edit":
+        return (
+            "پیش‌نمایش ویرایش اطلاعات\n\n"
+            f"{data.get('edit_label', 'مورد')}: "
+            f"{data.get('edit_original', '-')} ← {data.get('edit_value', '-')}\n\n"
+            "کد سیستمی تغییر نمی‌کند. برای ثبت تغییر تأیید کنید."
+        )
     summaries = {
         "school": [("نام مدرسه", "school_name")],
         "year": [("نام سال تحصیلی", "year_name")],
@@ -438,7 +472,11 @@ async def _render_step(
         body = _summary(data.get("flow_name", ""), data)
         keyboard = _flow_keyboard(flow_token, confirm=True)
     else:
-        body = _FIELD_PROMPTS.get(step_name)
+        body = (
+            data.get("edit_prompt")
+            if step_name == StructureWizard.edit_value.state
+            else _FIELD_PROMPTS.get(step_name)
+        )
         if body is None:
             await message.answer("مرحلهٔ فرم شناخته نشد؛ عملیات را لغو کنید.")
             return
@@ -1020,14 +1058,21 @@ async def subject_open_callback(
     except (ValueError, ApplicationError) as exc:
         await callback.answer(str(exc), show_alert=True)
         return
+    can_manage_subject = await _has_school_permission(
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="subject:manage",
+    )
+    buttons = []
+    if can_manage_subject:
+        buttons.append([InlineKeyboardButton(text="✏️ ویرایش نام درس", callback_data=f"life:e:subject:{subject.id}:name")])
+        buttons.append([InlineKeyboardButton(text="🗄 بایگانی درس", callback_data=f"life:a:u:{subject.id}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="subject:list")])
     await callback.answer()
     if callback.message is not None:
         await _render_panel(
             callback.message,
             f"📚 درس: {subject.name}\nکد سیستمی: {subject.code}\nوضعیت: {subject.status}",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="subject:list")]
-            ]),
+            InlineKeyboardMarkup(inline_keyboard=buttons),
         )
 
 @router.callback_query(F.data == "subject:create")
@@ -1171,6 +1216,14 @@ async def class_open_callback(
             callback_data=f"cs:o:{class_item.id.hex}",
         )
     ])
+    can_manage_class = await _has_school_permission(
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="class:manage",
+    )
+    if can_manage_class:
+        buttons.append([InlineKeyboardButton(text="✏️ ویرایش نام کلاس", callback_data=f"life:e:class:{class_item.id}:name")])
+        buttons.append([InlineKeyboardButton(text="✏️ ویرایش پایه/مقطع", callback_data=f"life:e:class:{class_item.id}:grade")])
+        buttons.append([InlineKeyboardButton(text="🗄 بایگانی کلاس", callback_data=f"life:a:c:{class_item.id}")])
     buttons.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)])
     await callback.answer()
     if callback.message is not None:
@@ -1425,6 +1478,124 @@ async def class_name_step(message: Message, state: FSMContext) -> None:
     )
 
 
+
+@router.callback_query(F.data.startswith("life:e:"))
+async def structure_edit_start_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5:
+        await callback.answer("درخواست ویرایش معتبر نیست.", show_alert=True)
+        return
+    resource, raw_id, field = parts[2], parts[3], parts[4]
+    permissions = {
+        "school": "school:manage",
+        "year": "academic_year:manage",
+        "class": "class:manage",
+        "subject": "subject:manage",
+    }
+    fields = {
+        "school": {"name": "نام مدرسه"},
+        "year": {"name": "نام سال تحصیلی"},
+        "class": {"name": "نام کلاس", "grade": "پایه/مقطع"},
+        "subject": {"name": "نام درس"},
+    }
+    if resource not in permissions or field not in fields[resource]:
+        await callback.answer("این نوع ویرایش پشتیبانی نمی‌شود.", show_alert=True)
+        return
+
+    try:
+        tenant_id, school_id, year_id = await _context_ids(state)
+        resource_id = UUID(raw_id)
+        if school_id is None:
+            raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
+        if not await _has_school_permission(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            permission=permissions[resource],
+        ):
+            raise AccessDenied("مجوز ویرایش این مورد را ندارید.")
+
+        entity_models = {
+            "school": School,
+            "year": AcademicYear,
+            "class": ClassGroup,
+            "subject": Subject,
+        }
+        entity = await db.get(entity_models[resource], resource_id)
+        if entity is None or entity.tenant_id != tenant_id or entity.status == "archived":
+            raise ResourceNotFound("مورد فعال پیدا نشد.")
+        if resource == "school":
+            if entity.id != school_id:
+                raise ResourceNotFound("مدرسه با زمینهٔ انتخاب‌شده تطابق ندارد.")
+        elif entity.school_id != school_id:
+            raise ResourceNotFound("این مورد به مدرسهٔ انتخاب‌شده تعلق ندارد.")
+        if resource == "year" and year_id is not None and entity.id != year_id:
+            raise ResourceNotFound("سال تحصیلی با محدودهٔ انتخاب‌شده تطابق ندارد.")
+        current_value = getattr(entity, field)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شناسه معتبر نیست.", show_alert=True)
+        return
+
+    await _start_flow(
+        state,
+        flow_name="edit",
+        first_state=StructureWizard.edit_value,
+    )
+    await state.update_data(
+        context_tenant_id=str(tenant_id),
+        context_school_id=str(school_id),
+        context_academic_year_id=str(year_id) if year_id else None,
+        edit_resource=resource,
+        edit_resource_id=str(resource_id),
+        edit_field=field,
+        edit_label=fields[resource][field],
+        edit_original=str(current_value),
+        edit_prompt=(
+            f"{fields[resource][field]} فعلی: {current_value}\n"
+            "مقدار جدید را وارد کنید:"
+        ),
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _render_step(
+            callback.message,
+            state=state,
+            step_name=StructureWizard.edit_value.state,
+        )
+
+
+@router.message(StructureWizard.edit_value)
+async def structure_edit_value_step(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    resource = data.get("edit_resource")
+    field = data.get("edit_field")
+    limits = {
+        ("school", "name"): (2, 180),
+        ("year", "name"): (1, 64),
+        ("class", "name"): (1, 120),
+        ("class", "grade"): (1, 48),
+        ("subject", "name"): (1, 120),
+    }
+    minimum, maximum = limits.get((resource, field), (1, 0))
+    await _accept_field(
+        message,
+        state,
+        key="edit_value",
+        next_state=StructureWizard.edit_confirm,
+        validator=lambda value: value if minimum <= len(value) <= maximum else None,
+        error_message=(
+            f"{data.get('edit_label', 'مقدار')} باید بین "
+            f"{minimum} تا {maximum} نویسه باشد."
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("structure:confirm:"))
 async def structure_confirm_callback(
     callback: CallbackQuery,
@@ -1495,6 +1666,62 @@ async def structure_confirm_callback(
             success_school_id = school_id
             success_year_id = year_id
             next_message = "درس به فهرست درس‌های مدرسه اضافه شد."
+        elif flow_name == "edit":
+            resource = data.get("edit_resource")
+            field = data.get("edit_field")
+            resource_id = UUID(data.get("edit_resource_id", ""))
+            value = data.get("edit_value", "")
+            if resource == "school" and field == "name":
+                entity = await update_school(
+                    db,
+                    actor_id=principal.user.id,
+                    tenant_id=tenant_id,
+                    school_id=resource_id,
+                    name=value,
+                )
+                result_text = f"نام مدرسه به «{entity.name}» تغییر کرد."
+                success_school_id = entity.id
+                success_year_id = None
+            elif resource == "year" and field == "name":
+                entity = await update_academic_year(
+                    db,
+                    actor_id=principal.user.id,
+                    tenant_id=tenant_id,
+                    school_id=school_id,
+                    academic_year_id=resource_id,
+                    name=value,
+                )
+                result_text = f"نام سال تحصیلی به «{entity.name}» تغییر کرد."
+                success_school_id = school_id
+                success_year_id = entity.id
+            elif resource == "class" and field in {"name", "grade"}:
+                entity = await update_class(
+                    db,
+                    actor_id=principal.user.id,
+                    tenant_id=tenant_id,
+                    school_id=school_id,
+                    class_group_id=resource_id,
+                    name=value if field == "name" else None,
+                    grade=value if field == "grade" else None,
+                )
+                result_text = f"{data.get('edit_label')} کلاس به «{value}» تغییر کرد."
+                success_school_id = school_id
+                success_year_id = year_id
+            elif resource == "subject" and field == "name":
+                entity = await update_subject(
+                    db,
+                    actor_id=principal.user.id,
+                    tenant_id=tenant_id,
+                    school_id=school_id,
+                    subject_id=resource_id,
+                    name=value,
+                )
+                result_text = f"نام درس به «{entity.name}» تغییر کرد."
+                success_school_id = school_id
+                success_year_id = None
+            else:
+                raise ResourceNotFound("عملیات ویرایش معتبر نیست.")
+            next_message = "تغییرات ذخیره شدند."
         else:
             if year_id is None:
                 raise ResourceNotFound("سال تحصیلی انتخاب نشده است.")
@@ -1701,6 +1928,201 @@ async def structure_cancel_command(
     await message.answer("عملیات لغو شد؛ هیچ تغییری ثبت نشد.")
     await _return_to_context_menu(message, state, db, principal)
     return None
+
+
+
+@router.callback_query(F.data.startswith("life:ac:"))
+async def structure_archive_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer("درخواست بایگانی معتبر نیست.", show_alert=True)
+        return
+    code, raw_id = parts[2], parts[3]
+    resource_map = {"s": "school", "y": "year", "c": "class", "u": "subject"}
+    resource = resource_map.get(code)
+    if resource is None:
+        await callback.answer("نوع مورد برای بایگانی شناخته نشد.", show_alert=True)
+        return
+    try:
+        tenant_id, school_id, year_id = await _context_ids(state)
+        resource_id = UUID(raw_id)
+        if resource == "school":
+            if school_id != resource_id:
+                raise ResourceNotFound("مدرسه با زمینهٔ انتخاب‌شده تطابق ندارد.")
+            changed = await archive_school(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=resource_id,
+            )
+            next_school_id = None
+            next_year_id = None
+        elif resource == "year":
+            if school_id is None or (year_id is not None and year_id != resource_id):
+                raise ResourceNotFound("سال تحصیلی با زمینهٔ انتخاب‌شده تطابق ندارد.")
+            changed = await archive_academic_year(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                academic_year_id=resource_id,
+            )
+            next_school_id = school_id
+            next_year_id = None
+        elif resource == "class":
+            if school_id is None:
+                raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
+            changed = await archive_class(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                class_group_id=resource_id,
+            )
+            next_school_id = school_id
+            next_year_id = year_id
+        else:
+            if school_id is None:
+                raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
+            changed = await archive_subject(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                subject_id=resource_id,
+            )
+            next_school_id = school_id
+            next_year_id = None
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شناسه معتبر نیست.", show_alert=True)
+        return
+
+    await callback.answer(
+        "بایگانی انجام شد." if changed else "این مورد قبلاً بایگانی شده بود."
+    )
+    await _clear_flow(state)
+    await state.update_data(
+        context_tenant_id=str(tenant_id),
+        context_school_id=str(next_school_id) if next_school_id else None,
+        context_academic_year_id=str(next_year_id) if next_year_id else None,
+    )
+    if callback.message is not None:
+        notice = "✅ بایگانی انجام شد؛ سابقه و کد سیستمی حذف نشده‌اند."
+        if resource == "school":
+            await _show_tenant_menu(
+                callback.message,
+                db=db,
+                principal=principal,
+                tenant_id=tenant_id,
+                notice=notice,
+            )
+        elif resource == "class" and year_id is not None:
+            await _show_year_menu(
+                callback.message,
+                db=db,
+                principal=principal,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                year_id=year_id,
+                notice=notice,
+            )
+        else:
+            await _show_school_menu(
+                callback.message,
+                db=db,
+                principal=principal,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                notice=notice,
+            )
+
+
+@router.callback_query(F.data.startswith("life:a:"))
+async def structure_archive_prompt_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer("درخواست بایگانی معتبر نیست.", show_alert=True)
+        return
+    code, raw_id = parts[2], parts[3]
+    labels = {
+        "s": (
+            "مدرسه",
+            "بایگانی مدرسه فقط زمانی انجام می‌شود که سال تحصیلی، کلاس یا درس فعالی نداشته باشد.",
+            "school:menu",
+            "school:manage",
+        ),
+        "y": (
+            "سال تحصیلی",
+            "این سال فقط زمانی بایگانی می‌شود که کلاس فعال نداشته باشد.",
+            "year:menu",
+            "academic_year:manage",
+        ),
+        "c": (
+            "کلاس",
+            "اتصال گروه تلگرام لغو و تخصیص درس‌ها غیرفعال می‌شوند؛ تاریخچه باقی می‌ماند.",
+            "class:list",
+            "class:manage",
+        ),
+        "u": (
+            "درس",
+            "تخصیص درس از کلاس‌ها غیرفعال می‌شود؛ سابقه و اصل رکورد حذف نمی‌شود.",
+            "subject:list",
+            "subject:manage",
+        ),
+    }
+    item = labels.get(code)
+    if item is None:
+        await callback.answer("نوع مورد برای بایگانی شناخته نشد.", show_alert=True)
+        return
+    title, explanation, parent_callback, permission = item
+    try:
+        tenant_id, school_id, _ = await _context_ids(state)
+        resource_id = UUID(raw_id)
+        if school_id is None or not await _has_school_permission(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            permission=permission,
+        ):
+            raise AccessDenied("مجوز بایگانی این مورد را ندارید.")
+        if code == "s" and school_id != resource_id:
+            raise ResourceNotFound("مدرسه با زمینهٔ انتخاب‌شده تطابق ندارد.")
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شناسه معتبر نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"آیا {title} بایگانی شود؟\n\n{explanation}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="تأیید بایگانی",
+                            callback_data=f"life:ac:{code}:{raw_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="لغو",
+                            callback_data=parent_callback,
+                        )
+                    ],
+                ]
+            ),
+        )
 
 
 @router.callback_query()

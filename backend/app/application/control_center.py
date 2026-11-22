@@ -72,8 +72,8 @@ async def create_class_group_handshake(
     class_group = (
         await db.execute(select(ClassGroup).where(ClassGroup.id == class_group_id))
     ).scalar_one_or_none()
-    if class_group is None:
-        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    if class_group is None or class_group.status == "archived":
+        raise ResourceNotFound("کلاس فعال موردنظر پیدا نشد.")
 
     await _require(
         db,
@@ -139,8 +139,8 @@ async def get_class_telegram_group(
     class_group = (
         await db.execute(select(ClassGroup).where(ClassGroup.id == class_group_id))
     ).scalar_one_or_none()
-    if class_group is None:
-        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    if class_group is None or class_group.status == "archived":
+        raise ResourceNotFound("کلاس فعال موردنظر پیدا نشد.")
     await _require(
         db,
         actor_id=actor_id,
@@ -178,8 +178,8 @@ async def revoke_class_telegram_group(
     class_group = (
         await db.execute(select(ClassGroup).where(ClassGroup.id == class_group_id))
     ).scalar_one_or_none()
-    if class_group is None:
-        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    if class_group is None or class_group.status == "archived":
+        raise ResourceNotFound("کلاس فعال موردنظر پیدا نشد.")
     await _require(
         db,
         actor_id=actor_id,
@@ -262,8 +262,8 @@ async def complete_class_group_handshake(
             )
         )
     ).scalar_one_or_none()
-    if class_group is None:
-        raise ResourceNotFound("کلاس متصل به این کد دیگر وجود ندارد.")
+    if class_group is None or class_group.status == "archived":
+        raise ResourceNotFound("کلاس متصل به این کد دیگر فعال نیست.")
 
     existing = (
         await db.execute(
@@ -579,6 +579,7 @@ async def list_school_class_group_directory(
     class_filter = (
         ClassGroup.tenant_id == tenant_id,
         ClassGroup.school_id == school_id,
+        ClassGroup.status != "archived",
     )
     total = int(
         (
@@ -652,8 +653,8 @@ async def get_class_subject_catalog(
     class_group = (
         await db.execute(select(ClassGroup).where(ClassGroup.id == class_group_id))
     ).scalar_one_or_none()
-    if class_group is None:
-        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    if class_group is None or class_group.status == "archived":
+        raise ResourceNotFound("کلاس فعال موردنظر پیدا نشد.")
     await _require(
         db,
         actor_id=actor_id,
@@ -716,8 +717,8 @@ async def set_class_subject_assignment(
     class_group = (
         await db.execute(select(ClassGroup).where(ClassGroup.id == class_group_id))
     ).scalar_one_or_none()
-    if class_group is None:
-        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    if class_group is None or class_group.status == "archived":
+        raise ResourceNotFound("کلاس فعال موردنظر پیدا نشد.")
     await _require(
         db,
         actor_id=actor_id,
