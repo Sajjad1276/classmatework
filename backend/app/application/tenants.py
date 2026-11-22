@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,9 @@ from app.application.errors import (
 from app.db.models import (
     AcademicYear,
     ClassGroup,
+    ClassGroupLinkHandshake,
+    ClassSubject,
+    ClassTelegramGroup,
     Organization,
     Permission,
     Role,
@@ -99,9 +102,13 @@ _TENANT_ROLE_TEMPLATES = {
         (
             "school:read",
             "school:create",
+            "school:manage",
             "academic_year:create",
+            "academic_year:manage",
             "class:create",
+            "class:manage",
             "subject:create",
+            "subject:manage",
             "class:group:manage",
             "class:subjects:manage",
             "membership:read",
@@ -257,7 +264,7 @@ async def list_schools(
     )
     result = await db.execute(
         select(School)
-        .where(School.tenant_id == tenant_id)
+        .where(School.tenant_id == tenant_id, School.status != "archived")
         .order_by(School.created_at.desc(), School.id)
         .limit(limit)
     )
@@ -428,6 +435,7 @@ async def create_class(
                 AcademicYear.id == academic_year_id,
                 AcademicYear.school_id == school_id,
                 AcademicYear.tenant_id == tenant_id,
+                AcademicYear.status != "archived",
             )
         )
     ).scalar_one_or_none()
@@ -532,7 +540,6 @@ async def create_subject(
     return subject
 
 
-
 async def list_academic_years(
     db: AsyncSession,
     *,
@@ -556,6 +563,7 @@ async def list_academic_years(
         .where(
             AcademicYear.tenant_id == tenant_id,
             AcademicYear.school_id == school_id,
+            AcademicYear.status != "archived",
         )
         .order_by(AcademicYear.starts_on.desc(), AcademicYear.name)
         .limit(limit)
@@ -599,6 +607,7 @@ async def list_classes(
     statement = select(ClassGroup).where(
         ClassGroup.tenant_id == tenant_id,
         ClassGroup.school_id == school_id,
+        ClassGroup.status != "archived",
     )
     if academic_year_id is not None:
         statement = statement.where(ClassGroup.academic_year_id == academic_year_id)
@@ -646,6 +655,7 @@ async def list_subjects(
         .where(
             Subject.tenant_id == tenant_id,
             Subject.school_id == school_id,
+            Subject.status != "archived",
         )
         .order_by(Subject.name, Subject.code)
         .limit(limit)
@@ -667,17 +677,14 @@ async def list_subjects(
     return subjects
 
 
-
 async def list_accessible_tenants(
     db: AsyncSession,
     *,
     actor_id: UUID,
     limit: int = 50,
 ) -> list[Tenant]:
-    """List only active tenants where the actor has a current membership and scope grant."""
     if not 1 <= limit <= 100:
         raise InvalidApplicationInput("Tenant page size must be between 1 and 100.")
-    now = datetime.now(UTC)
     result = await db.execute(
         select(Tenant)
         .join(TenantMembership, TenantMembership.tenant_id == Tenant.id)
@@ -685,39 +692,500 @@ async def list_accessible_tenants(
             TenantMembership.user_id == actor_id,
             TenantMembership.status == "active",
             Tenant.status == "active",
-            or_(TenantMembership.starts_at.is_(None), TenantMembership.starts_at <= now),
-            or_(TenantMembership.ends_at.is_(None), TenantMembership.ends_at > now),
         )
-        .order_by(Tenant.name, Tenant.id)
+        .order_by(Tenant.created_at.desc(), Tenant.id)
         .limit(limit)
     )
-    candidates = list(result.scalars().all())
-    accessible: list[Tenant] = []
-    for tenant in candidates:
-        for permission_key in (
-            "school:read",
-            "school:create",
-            "academic_year:create",
-            "class:create",
-            "subject:create",
-        ):
-            if await has_permission(
-                db,
-                user_id=actor_id,
-                permission_key=permission_key,
-                tenant_id=tenant.id,
-                scope_type="tenant",
-                scope_id=tenant.id,
-            ):
-                accessible.append(tenant)
-                break
+    return list(result.scalars().all())
 
+
+# --- Structure lifecycle operations ---
+
+
+async def update_school(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    name: str,
+) -> School:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="school:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    normalized_name = name.strip()
+    if not 2 <= len(normalized_name) <= 180:
+        raise InvalidApplicationInput("نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+    school = (
+        await db.execute(
+            select(School).where(
+                School.id == school_id,
+                School.tenant_id == tenant_id,
+                School.status != "archived",
+            )
+        )
+    ).scalar_one_or_none()
+    if school is None:
+        raise ResourceNotFound("مدرسهٔ فعال در این مجموعه پیدا نشد.")
+    if school.name == normalized_name:
+        return school
+    previous_name = school.name
+    school.name = normalized_name
     await record_event(
         db,
-        event_type="tenant.accessible_directory.read",
+        event_type="school.updated",
         actor_id=actor_id,
-        aggregate_type="tenant_directory",
-        event_data={"returned_count": len(accessible), "limit": limit},
+        tenant_id=tenant_id,
+        aggregate_type="school",
+        aggregate_id=school.id,
+        event_data={"previous_name": previous_name, "name": normalized_name},
+    )
+    await _commit_or_conflict(db, "ویرایش مدرسه انجام نشد.")
+    await db.refresh(school)
+    return school
+
+
+async def archive_school(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+) -> bool:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="school:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    school = (
+        await db.execute(
+            select(School).where(
+                School.id == school_id,
+                School.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if school is None:
+        raise ResourceNotFound("مدرسه در این مجموعه پیدا نشد.")
+    if school.status == "archived":
+        return False
+
+    active_counts = []
+    for model in (AcademicYear, ClassGroup, Subject):
+        count = int(
+            (
+                await db.execute(
+                    select(func.count()).select_from(model).where(
+                        model.tenant_id == tenant_id,
+                        model.school_id == school_id,
+                        model.status != "archived",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        active_counts.append(count)
+    if any(active_counts):
+        raise ResourceConflict(
+            "ابتدا سال‌های تحصیلی، کلاس‌ها و درس‌های فعال این مدرسه را بایگانی کنید."
+        )
+
+    school.status = "archived"
+    await record_event(
+        db,
+        event_type="school.archived",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="school",
+        aggregate_id=school.id,
+        event_data={"code": school.code},
     )
     await db.commit()
-    return accessible
+    return True
+
+
+async def update_academic_year(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    academic_year_id: UUID,
+    name: str | None = None,
+    starts_on: date | None = None,
+    ends_on: date | None = None,
+) -> AcademicYear:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="academic_year:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    year = (
+        await db.execute(
+            select(AcademicYear).where(
+                AcademicYear.id == academic_year_id,
+                AcademicYear.tenant_id == tenant_id,
+                AcademicYear.school_id == school_id,
+                AcademicYear.status != "archived",
+            )
+        )
+    ).scalar_one_or_none()
+    if year is None:
+        raise ResourceNotFound("سال تحصیلی فعال در این مدرسه پیدا نشد.")
+
+    normalized_name = year.name if name is None else name.strip()
+    new_start = year.starts_on if starts_on is None else starts_on
+    new_end = year.ends_on if ends_on is None else ends_on
+    if not 1 <= len(normalized_name) <= 64:
+        raise InvalidApplicationInput("نام سال تحصیلی باید بین ۱ تا ۶۴ نویسه باشد.")
+    if new_end <= new_start:
+        raise InvalidApplicationInput("تاریخ پایان باید بعد از تاریخ شروع باشد.")
+
+    overlapping = (
+        await db.execute(
+            select(AcademicYear.id).where(
+                AcademicYear.tenant_id == tenant_id,
+                AcademicYear.school_id == school_id,
+                AcademicYear.id != year.id,
+                AcademicYear.status != "archived",
+                AcademicYear.starts_on <= new_end,
+                AcademicYear.ends_on >= new_start,
+            )
+        )
+    ).scalar_one_or_none()
+    if overlapping is not None:
+        raise ResourceConflict("بازهٔ این سال تحصیلی با سال دیگری تداخل دارد.")
+
+    previous = {
+        "name": year.name,
+        "starts_on": year.starts_on.isoformat(),
+        "ends_on": year.ends_on.isoformat(),
+    }
+    updated = {
+        "name": normalized_name,
+        "starts_on": new_start.isoformat(),
+        "ends_on": new_end.isoformat(),
+    }
+    if previous == updated:
+        return year
+    year.name = normalized_name
+    year.starts_on = new_start
+    year.ends_on = new_end
+    await record_event(
+        db,
+        event_type="academic_year.updated",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="academic_year",
+        aggregate_id=year.id,
+        event_data={"previous": previous, "current": updated},
+    )
+    await _commit_or_conflict(db, "نام سال تحصیلی در این مدرسه قبلاً ثبت شده است.")
+    await db.refresh(year)
+    return year
+
+
+async def archive_academic_year(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    academic_year_id: UUID,
+) -> bool:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="academic_year:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    year = (
+        await db.execute(
+            select(AcademicYear).where(
+                AcademicYear.id == academic_year_id,
+                AcademicYear.tenant_id == tenant_id,
+                AcademicYear.school_id == school_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if year is None:
+        raise ResourceNotFound("سال تحصیلی در این مدرسه پیدا نشد.")
+    if year.status == "archived":
+        return False
+    active_classes = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(ClassGroup).where(
+                    ClassGroup.tenant_id == tenant_id,
+                    ClassGroup.school_id == school_id,
+                    ClassGroup.academic_year_id == academic_year_id,
+                    ClassGroup.status != "archived",
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if active_classes:
+        raise ResourceConflict("ابتدا کلاس‌های فعال این سال را بایگانی کنید.")
+    year.status = "archived"
+    await record_event(
+        db,
+        event_type="academic_year.archived",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="academic_year",
+        aggregate_id=year.id,
+        event_data={"name": year.name},
+    )
+    await db.commit()
+    return True
+
+
+async def update_class(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    class_group_id: UUID,
+    name: str | None = None,
+    grade: str | None = None,
+) -> ClassGroup:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="class:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    class_group = (
+        await db.execute(
+            select(ClassGroup).where(
+                ClassGroup.id == class_group_id,
+                ClassGroup.tenant_id == tenant_id,
+                ClassGroup.school_id == school_id,
+                ClassGroup.status != "archived",
+            )
+        )
+    ).scalar_one_or_none()
+    if class_group is None:
+        raise ResourceNotFound("کلاس فعال در این مدرسه پیدا نشد.")
+    new_name = class_group.name if name is None else name.strip()
+    new_grade = class_group.grade if grade is None else grade.strip()
+    if not 1 <= len(new_name) <= 120:
+        raise InvalidApplicationInput("نام کلاس باید بین ۱ تا ۱۲۰ نویسه باشد.")
+    if not 1 <= len(new_grade) <= 48:
+        raise InvalidApplicationInput("پایه/مقطع باید بین ۱ تا ۴۸ نویسه باشد.")
+    if new_name == class_group.name and new_grade == class_group.grade:
+        return class_group
+    previous = {"name": class_group.name, "grade": class_group.grade}
+    class_group.name = new_name
+    class_group.grade = new_grade
+    await record_event(
+        db,
+        event_type="class.updated",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="class",
+        aggregate_id=class_group.id,
+        event_data={
+            "previous": previous,
+            "current": {"name": new_name, "grade": new_grade},
+        },
+    )
+    await db.commit()
+    await db.refresh(class_group)
+    return class_group
+
+
+async def archive_class(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    class_group_id: UUID,
+) -> bool:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="class:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    class_group = (
+        await db.execute(
+            select(ClassGroup).where(
+                ClassGroup.id == class_group_id,
+                ClassGroup.tenant_id == tenant_id,
+                ClassGroup.school_id == school_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if class_group is None:
+        raise ResourceNotFound("کلاس در این مدرسه پیدا نشد.")
+    if class_group.status == "archived":
+        return False
+
+    now = datetime.now(UTC)
+    connection = (
+        await db.execute(
+            select(ClassTelegramGroup).where(
+                ClassTelegramGroup.class_group_id == class_group_id,
+                ClassTelegramGroup.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if connection is not None:
+        connection.status = "revoked"
+        connection.updated_at = now
+
+    await db.execute(
+        update(ClassGroupLinkHandshake)
+        .where(
+            ClassGroupLinkHandshake.class_group_id == class_group_id,
+            ClassGroupLinkHandshake.consumed_at.is_(None),
+            ClassGroupLinkHandshake.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(ClassSubject)
+        .where(
+            ClassSubject.class_group_id == class_group_id,
+            ClassSubject.status == "active",
+        )
+        .values(status="inactive", updated_at=now)
+    )
+    class_group.status = "archived"
+    await record_event(
+        db,
+        event_type="class.archived",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="class",
+        aggregate_id=class_group.id,
+        event_data={
+            "code": class_group.code,
+            "group_connection_revoked": connection is not None,
+        },
+    )
+    await db.commit()
+    return True
+
+
+async def update_subject(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    subject_id: UUID,
+    name: str,
+) -> Subject:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="subject:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    subject = (
+        await db.execute(
+            select(Subject).where(
+                Subject.id == subject_id,
+                Subject.tenant_id == tenant_id,
+                Subject.school_id == school_id,
+                Subject.status != "archived",
+            )
+        )
+    ).scalar_one_or_none()
+    if subject is None:
+        raise ResourceNotFound("درس فعال در این مدرسه پیدا نشد.")
+    normalized_name = name.strip()
+    if not 1 <= len(normalized_name) <= 120:
+        raise InvalidApplicationInput("نام درس باید بین ۱ تا ۱۲۰ نویسه باشد.")
+    if subject.name == normalized_name:
+        return subject
+    previous_name = subject.name
+    subject.name = normalized_name
+    await record_event(
+        db,
+        event_type="subject.updated",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="subject",
+        aggregate_id=subject.id,
+        event_data={"previous_name": previous_name, "name": normalized_name},
+    )
+    await db.commit()
+    await db.refresh(subject)
+    return subject
+
+
+async def archive_subject(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    subject_id: UUID,
+) -> bool:
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="subject:manage",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    subject = (
+        await db.execute(
+            select(Subject).where(
+                Subject.id == subject_id,
+                Subject.tenant_id == tenant_id,
+                Subject.school_id == school_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if subject is None:
+        raise ResourceNotFound("درس در این مدرسه پیدا نشد.")
+    if subject.status == "archived":
+        return False
+    now = datetime.now(UTC)
+    await db.execute(
+        update(ClassSubject)
+        .where(
+            ClassSubject.subject_id == subject_id,
+            ClassSubject.status == "active",
+        )
+        .values(status="inactive", updated_at=now)
+    )
+    subject.status = "archived"
+    await record_event(
+        db,
+        event_type="subject.archived",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="subject",
+        aggregate_id=subject.id,
+        event_data={"code": subject.code},
+    )
+    await db.commit()
+    return True
