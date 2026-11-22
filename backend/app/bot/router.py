@@ -10,11 +10,15 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,18 +90,21 @@ def wizard_controls(flow_token: str) -> InlineKeyboardMarkup:
     )
 
 
+MAIN_MENU_ACCOUNT = "👤 حساب مدیریتی من"
+MAIN_MENU_TENANTS = "🏢 فهرست مجموعه‌ها"
+MAIN_MENU_CREATE_TENANT = "➕ ایجاد مجموعه جدید"
+MAIN_MENU_HELP = "❓ راهنما"
+
+
 async def main_menu(
     db: AsyncSession,
     principal: TelegramPrincipal,
-) -> InlineKeyboardMarkup:
-    rows = [
-        [
-            InlineKeyboardButton(
-                text="حساب مدیریتی من",
-                callback_data="account:me",
-            )
-        ]
-    ]
+) -> ReplyKeyboardMarkup:
+    """Persistent reply keyboard for the root screen only.
+
+    Every operational screen uses an inline keyboard; the root keyboard is
+    removed on entry to those screens and restored only when returning home.
+    """
     can_list_tenants = await has_permission(
         db,
         user_id=principal.user.id,
@@ -127,16 +134,144 @@ async def main_menu(
             .limit(1)
         )
     ).scalar_one_or_none() is not None
+
+    first_row = [KeyboardButton(text=MAIN_MENU_ACCOUNT)]
     if can_list_tenants or has_active_membership:
-        rows.append(
-            [InlineKeyboardButton(text="فهرست مجموعه‌ها", callback_data="tenant:list")]
-        )
+        first_row.append(KeyboardButton(text=MAIN_MENU_TENANTS))
+
+    second_row = []
     if can_create_tenants:
-        rows.append(
-            [InlineKeyboardButton(text="ایجاد مجموعه جدید", callback_data="tenant:create")]
+        second_row.append(KeyboardButton(text=MAIN_MENU_CREATE_TENANT))
+    second_row.append(KeyboardButton(text=MAIN_MENU_HELP))
+
+    keyboard = [first_row]
+    if second_row:
+        keyboard.append(second_row)
+
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="یکی از بخش‌های مدیریت را انتخاب کنید",
+    )
+
+
+async def _hide_root_keyboard(message: Message) -> None:
+    """Remove the persistent root keyboard before showing an inline panel."""
+    removal_message = await message.answer("\u2063", reply_markup=ReplyKeyboardRemove())
+    try:
+        await removal_message.delete()
+    except TelegramBadRequest:
+        # The keyboard removal has already been sent; failure to delete the
+        # invisible carrier message must not block navigation.
+        pass
+
+
+async def _show_tenant_list(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+) -> None:
+    try:
+        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
+    except AccessDenied:
+        tenants = await list_accessible_tenants(
+            db,
+            actor_id=principal.user.id,
+            limit=50,
         )
-    rows.append([InlineKeyboardButton(text="راهنما", callback_data="help:show")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if not tenants:
+        await message.answer(
+            "هنوز مجموعه‌ای در سامانه ثبت نشده است.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")]
+                ]
+            ),
+        )
+        return
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{tenant.name} · {tenant.slug}",
+                callback_data=f"tenant:open:{tenant.id}",
+            )
+        ]
+        for tenant in tenants
+    ]
+    rows.append([InlineKeyboardButton(text="خانه", callback_data="root:menu")])
+    await message.answer(
+        "برای ورود به فضای مدیریتی هر مجموعه، آن را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+async def _begin_tenant_creation(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    allowed = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="platform:tenants:create",
+        tenant_id=None,
+        scope_type="platform",
+        scope_id=None,
+    )
+    if not allowed:
+        await message.answer(
+            "دسترسی ایجاد مجموعه را ندارید.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")]
+                ]
+            ),
+        )
+        return
+    await state.clear()
+    await state.update_data(flow_token=secrets.token_urlsafe(9))
+    await state.set_state(TenantCreation.name)
+    await _show_tenant_step(message, state, "name")
+
+
+async def _show_account_panel(
+    message: Message,
+    principal: TelegramPrincipal,
+) -> None:
+    account = principal.telegram_account
+    await message.answer(
+        "حساب مدیریتی\n\n"
+        f"نام: {principal.user.display_name}\n"
+        f"شناسه کاربر سامانه: {principal.user.id}\n"
+        f"Telegram ID: {account.telegram_user_id}\n"
+        f"وضعیت حساب: {principal.user.status}\n"
+        f"وضعیت اتصال تلگرام: {account.status}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="خانه", callback_data="root:menu")]
+            ]
+        ),
+    )
+
+
+async def _show_help_panel(message: Message) -> None:
+    await message.answer(
+        "راهنمای ClassMate Work\n\n"
+        "برای مدیریت مجموعه‌ها، یک مجموعه را از فهرست انتخاب کنید. "
+        "داخل هر مجموعه، مدیریت مدارس، سال‌های تحصیلی، کلاس‌ها و درس‌ها "
+        "از طریق دکمه‌های شیشه‌ای انجام می‌شود.\n\n"
+        "برای بازگشت از دکمه‌های «بازگشت» یا «خانه» استفاده کنید. "
+        "فرم‌های چندمرحله‌ای نیز دکمه لغو و بازگشت دارند.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="خانه", callback_data="root:menu")]
+            ]
+        ),
+    )
 
 
 async def show_main_menu(
@@ -147,9 +282,56 @@ async def show_main_menu(
     await message.answer(
         f"ClassMate Work — مرکز مدیریت\n\n"
         f"درود {principal.user.display_name}.\n"
-        "هویت تلگرامی شما تأیید شده است. گزینه‌های زیر بر اساس مجوزهای فعلی شما نمایش داده می‌شوند.",
+        "گزینه‌های اصلی را از کیبورد پایین انتخاب کنید. پنل‌های داخلی با دکمه‌های شیشه‌ای باز می‌شوند.",
         reply_markup=await main_menu(db, principal),
     )
+
+
+@router.message(
+    F.text.in_(
+        {
+            MAIN_MENU_ACCOUNT,
+            MAIN_MENU_TENANTS,
+            MAIN_MENU_CREATE_TENANT,
+            MAIN_MENU_HELP,
+        }
+    )
+)
+async def root_menu_button_handler(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Route root reply-keyboard selections, including selections during a wizard."""
+    selected = (message.text or "").strip()
+    await state.clear()
+    await _hide_root_keyboard(message)
+
+    if selected == MAIN_MENU_ACCOUNT:
+        await _show_account_panel(message, principal)
+    elif selected == MAIN_MENU_TENANTS:
+        await _show_tenant_list(message, principal, db)
+    elif selected == MAIN_MENU_CREATE_TENANT:
+        await _begin_tenant_creation(message, principal, db, state)
+    elif selected == MAIN_MENU_HELP:
+        await _show_help_panel(message)
+
+
+@router.callback_query(F.data == "root:menu")
+async def root_menu_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "به منوی اصلی برگشتید.",
+            reply_markup=await main_menu(db, principal),
+        )
 
 
 async def _show_tenant_step(
@@ -1014,35 +1196,10 @@ async def tenant_list_callback(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
-    try:
-        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
-    except AccessDenied:
-        tenants = await list_accessible_tenants(
-            db,
-            actor_id=principal.user.id,
-            limit=50,
-        )
     await callback.answer()
-    if not tenants:
-        body = "هنوز مجموعه‌ای در سامانه ثبت نشده است."
-        keyboard = await main_menu(db, principal)
-    else:
-        body = "برای ورود به فضای مدیریتی هر مجموعه، آن را انتخاب کنید:"
-        rows = [
-            [
-                InlineKeyboardButton(
-                    text=f"{tenant.name} · {tenant.slug}",
-                    callback_data=f"tenant:open:{tenant.id}",
-                )
-            ]
-            for tenant in tenants
-        ]
-        rows.append(
-            [InlineKeyboardButton(text="راهنما و منوی اصلی", callback_data="help:show")]
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
     if callback.message is not None:
-        await callback.message.answer(body, reply_markup=keyboard)
+        await _hide_root_keyboard(callback.message)
+        await _show_tenant_list(callback.message, principal, db)
 
 
 @router.callback_query(F.data == "tenant:create")
@@ -1052,23 +1209,10 @@ async def tenant_create_callback(
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
-    allowed = await has_permission(
-        db,
-        user_id=principal.user.id,
-        permission_key="platform:tenants:create",
-        tenant_id=None,
-        scope_type="platform",
-        scope_id=None,
-    )
-    if not allowed:
-        await callback.answer("دسترسی ایجاد مجموعه را ندارید.", show_alert=True)
-        return
     await callback.answer()
-    await state.clear()
-    await state.update_data(flow_token=secrets.token_urlsafe(9))
-    await state.set_state(TenantCreation.name)
     if callback.message is not None:
-        await _show_tenant_step(callback.message, state, "name")
+        await _hide_root_keyboard(callback.message)
+        await _begin_tenant_creation(callback.message, principal, db, state)
 
 
 @router.message(TenantCreation.name)
@@ -1286,28 +1430,17 @@ async def status_command(
 async def account_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
-    db: AsyncSession,
 ) -> None:
-    account = principal.telegram_account
     await callback.answer()
-    if callback.message is None:
-        return
-    await callback.message.answer(
-        "حساب مدیریتی\n\n"
-        f"نام: {principal.user.display_name}\n"
-        f"شناسه کاربر سامانه: {principal.user.id}\n"
-        f"Telegram ID: {account.telegram_user_id}\n"
-        f"وضعیت حساب: {principal.user.status}\n"
-        f"وضعیت اتصال تلگرام: {account.status}",
-        reply_markup=await main_menu(db, principal),
-    )
+    if callback.message is not None:
+        await _show_account_panel(callback.message, principal)
 
 
 @router.callback_query(F.data == "help:show")
 async def help_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("برای راهنمای فرمان‌ها از /help استفاده کنید.")
+        await _show_help_panel(callback.message)
 
 
 @router.callback_query()
