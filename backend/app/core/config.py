@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,12 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://classmate:local-dev-only@localhost:5432/classmatework"
     )
     redis_url: str = "redis://localhost:6379/0"
+    telegram_bot_token: SecretStr | None = None
+    bot_fsm_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
+    bot_update_lease_seconds: int = Field(default=180, ge=30, le=3600)
+    bot_message_rate_limit: int = Field(default=30, ge=1, le=1000)
+    bot_callback_rate_limit: int = Field(default=45, ge=1, le=1000)
+    bot_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
 
 
 @lru_cache

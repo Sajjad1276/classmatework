@@ -1,79 +1,109 @@
 # ClassMate Work
 
-سامانه‌ی مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛
-منطق آموزشی/دانش‌آموزی در مخزن جداگانه‌ی classmate2 باقی می‌ماند.
-این پروژه در فاز صفر قرار دارد و هنوز هیچ قابلیت مدیریتیِ احراز هویت‌شده‌ای
-برای استفاده‌ی عملیاتی ارائه نمی‌کند.
+سامانه مستقل مدیریت و عملیات ClassMate. این مخزن مالک منطق مدیریتی است؛ منطق آموزشی/دانش‌آموزی در مخزن جداگانه classmate2 باقی می‌ماند و فقط از طریق قراردادهای کنترل‌شده API/Event به آن متصل خواهد شد.
 
-## وضعیت فعلی
+## تصمیم قطعی محصول
 
-- اسکلت Modular Monolith با FastAPI و مرزهای اولیه‌ی ماژول‌ها
-- API نسخه‌دار در /api/v1
-- health check زنده‌بودن و آمادگی وابستگی‌ها
-- شناسه‌ی هم‌بستگی درخواست در هدر X-Request-ID
-- اتصال زیرساختی PostgreSQL و Redis
-- پیکربندی Alembic برای migrationهای بعدی
-- پوسته‌ی اولیه‌ی رابط فارسی و راست‌به‌چپ
-- تست و CI پایه
+**رابط انسانی مدیریت فقط ربات اختصاصی تلگرام است.** پنل وب، سایت ادمین، React، Telegram Web App و ورود مدیریتی مرورگری خارج از دامنه محصول‌اند.
+
+- Telegram Admin Bot: منوها، فرمان‌ها، فرم‌ها، تأییدها و گزارش‌های مدیر.
+- FastAPI: Health Check و APIهای داخلی/یکپارچه‌سازی؛ نه پنل انسانی.
+- Application Use Cases: منطق کسب‌وکار مستقل از Telegram Handler یا HTTP Route.
+- PostgreSQL: منبع اصلی داده، مجوز و Audit.
+- Redis: FSM، TTL، قفل Poller و کنترل نرخ درخواست.
+
+## نقشه تحویل
+
+کل پروژه دقیقاً در پنج فاز تحویل می‌شود. فاز جاری ۱ است. نقشه کامل و Gate هر فاز در:
+docs/MASTER_ROADMAP_5_PHASES_FA.md
+
+## وضعیت واقعی فاز ۱
+
+شاخه کاری: phase-1/core-identity-access  
+PR شماره ۲: Draft، باز و ادغام‌نشده.
+
+### پیاده‌سازی‌شده در شاخه
+
+- هویت مدیر بر اساس Telegram User ID عددی؛ username فقط metadata است.
+- Bootstrap مالک پلتفرم از CLI با Telegram ID عددی.
+- Pairing یک‌بارمصرف با Role و Scope مشخص، محدود به Telegram ID مقصد، Hash-only و Audit؛ پذیرش دعوت RoleBinding و در Scope مجموعه Membership را به‌صورت اتمیک می‌سازد.
+- Bot Runtime با aiogram 3، Long Polling، Redis FSM و قفل توزیع‌شده برای جلوگیری از دو Poller هم‌زمان.
+- Private Chat guard و رد حساب ناشناس/تعلیق‌شده.
+- فرمان‌های /start، /menu، /back، /cancel، /roles، /role-create، /members، /member-suspend، /member-reactivate، /invite، /invites، /revoke-invite، /help و /status.
+- Inline menu پویا بر اساس Permission.
+- فرم چندمرحله‌ای ساخت Tenant با اعتبارسنجی، Preview، تأیید، Back، Cancel و شناسه Flow برای رد Callbackهای قدیمی.
+- Use Caseهای مستقل برای ساخت/فهرست Tenant، School، Academic Year، Class، Subject، نقش‌های Tenant، فهرست اعضای فعال، تعلیق و فعال‌سازی مجدد کنترل‌شدهٔ عضویت و فهرست دعوت‌های باز/منقضی.
+- فرم‌های تلگرام برای انتخاب Tenant/School و فهرست/ایجاد مدرسه، سال تحصیلی، کلاس و درس با Preview، Confirm، Back و Cancel.
+- RBAC با ارث‌بری از والد به فرزند، Deny-overrides-Allow و کنترل Membership.
+- Composite Foreign Key برای جلوگیری از اتصال School، Academic Year، Class و Subject به Tenant/School اشتباه.
+- Migrationهای هویت تلگرام و وضعیت پردازش Telegram Update.
+- جلوگیری از پردازش دوباره Update با ثبت Durable در PostgreSQL و Lease؛ Actionهای دامنه همچنان باید Idempotent بمانند.
+- CI بدون Frontend Build و دارای PostgreSQL 16 و Redis 7 واقعی برای Migration و تست‌های یکپارچگی.
+- آخرین CI برای Commit 85eb8e32a90e2203c5d578c426a9f6d7d8d912e7 موفق است: Ruff، شش Migration PostgreSQL و ۴۷ تست با یک Warning غیرمسدودکننده. [مشاهده اجرای CI](https://github.com/Sajjad1276/classmatework/actions/runs/44938684499).
+
+### هنوز انجام‌نشده یا نیازمند تأیید
+
+- تست‌های واقعی علیه Telegram Bot API با Token اختصاصی و تأیید اجرای واقعی در محیط توسعه.
+- اجرای واقعی Bot با Token آزمایشی در Telegram و آزمون End-to-End هنوز انجام نشده است؛ CI موفق، جایگزین این آزمون نیست.
+- قطع اتصال Telegram، بازیابی مدیر، MFA/Step-up و سیاست تأیید دوم.
+- ویرایش/آرشیو موجودیت‌های آموزشی، Pagination و Search کامل در Bot هنوز باقی مانده‌اند؛ فرم‌های ایجاد و فهرست پایه پیاده‌سازی شده‌اند.
+- ویرایش/آرشیو نقش، Permission Registry مستقل، لغو/بازیابی و فعال‌سازی مجدد عضویت و Pagination فهرست اعضا هنوز باقی است؛ تعلیق کنترل‌شده، فهرست اعضا، فهرست دعوت‌ها و دعوت/لغو دعوت پیاده‌سازی شده‌اند.
+- API احراز هویت‌شده Machine-to-Machine؛ در حال حاضر API عمومی فقط Health را ارائه می‌کند.
+- Audit correlation برای Telegram Update ایجاد شده، اما بازبینی کامل end-to-end و پوشش Readهای حساس باقی است.
+- اتصال عملیاتی و Deploy در Railway انجام نشده است.
+
+**وجود کد Bot به معنی Deploy یا آماده‌بودن Production نیست.** هیچ Bot Token یا Secret واقعی در Git قرار نگرفته است.
+
+## معماری استقرار هدف در Railway
+
+در همان Railway Project موجود، بدون ساخت Project جدید:
+
+| Service | مسئولیت |
+|---|---|
+| classmatework-api | FastAPI، Health Check و APIهای سرویس‌به‌سرویس |
+| classmatework-admin-bot | ربات مدیریت تلگرام با Long Polling |
+| PostgreSQL | ذخیره‌سازی اصلی |
+| Redis | FSM، Rate Limit، Lease و قفل Poller |
+
+API و Bot دو فرایند با مسئولیت جدا هستند؛ دو Worker تکراری نیستند. در شروع فقط یک Replica از Bot Poller مجاز است. Worker عمومی سوم تا زمان وجود نیاز عملیاتی و صف Durable ساخته نمی‌شود.
+
+هیچ Railway Service، Variable یا Deployment در این مرحله تغییر داده نشده است.
 
 ## اجرای محلی
 
-نیازمندی‌ها: Python 3.12+، Node.js 22+، npm و Docker Compose.
+نیازمندی‌ها: Python 3.12+ و Docker Compose.
 
-1. فایل نمونه‌ی محیط را کپی کنید: cp .env.example .env
-2. سرویس‌های زیرساخت و API را اجرا کنید: docker compose up --build
-3. رابط مدیریتی را در ترمینال جداگانه اجرا کنید:
-   cd frontend && npm install && npm run dev
+1. فایل نمونه را به .env کپی کنید.
+2. PostgreSQL، Redis و API را با docker compose up --build اجرا کنید.
+3. Migrationها را با alembic -c backend/alembic.ini upgrade head اعمال کنید.
+4. پس از آماده بودن دیتابیس، اولین مالک را با PYTHONPATH=backend python -m app.cli create-platform-owner بسازید. فرمان، Telegram User ID عددی و نام را می‌گیرد.
+5. برای اجرای محلی Bot، مقدار TELEGRAM_BOT_TOKEN را فقط در .env محلی تنظیم و سرویس را با docker compose --profile bot up --build admin-bot اجرا کنید.
 
-API روی http://localhost:8000 و رابط وب روی http://localhost:5173 در دسترس خواهد بود.
+Token واقعی نباید در مخزن، Log یا پیام خطا قرار گیرد. اجرای Bot نیازمند Telegram Bot Token معتبر و یک Telegram User ID است که به‌صورت امن در CLI provision شده باشد.
 
-### اجرای API بدون Docker
-
-python -m venv .venv  
-فعال‌سازی محیط مجازی و سپس:
-
-pip install -r requirements-dev.txt  
-uvicorn app.main:app --app-dir backend --reload
-
-PostgreSQL و Redis باید مطابق مقادیر .env در دسترس باشند.
-
-## مسیرهای زیرساختی
-
-| روش | مسیر | کاربرد |
-| --- | --- | --- |
-| GET | /api/v1/health/live | بررسی زنده‌بودن process |
-| GET | /api/v1/health/ready | بررسی اتصال PostgreSQL و Redis |
-| GET | /docs | مستندات OpenAPI در محیط توسعه |
-
-پاسخ readiness فقط وضعیت کلی وابستگی‌ها را می‌دهد و جزئیات اتصال یا secretها را افشا نمی‌کند.
-
-## ساختار مخزن
-
-- backend/app/api: لایه‌ی HTTP و قراردادهای API
-- backend/app/core: تنظیمات، logging و request context
-- backend/app/db: زیرساخت persistence و base مدل‌ها
-- backend/app/modules: مرزهای دامنه‌ای مستقل
-- backend/alembic: migrationهای پایگاه داده
-- frontend: پوسته‌ی React/TypeScript با RTL
-- tests: تست‌های backend
-- docs: اسناد تصمیم، معماری و خط مبنای امنیت
-
-## کنترل کیفیت
-
-ruff check backend tests  
-pytest  
-cd frontend && npm install && npm run build
+API روی پورت 8000 ارائه می‌شود. مسیرهای فعلی API:
+- GET /api/v1/health/live
+- GET /api/v1/health/ready
 
 ## اصول غیرقابل نقض
 
-1. این مخزن مستقل از classmate2 است؛ تغییرات آن پروژه خارج از دامنه‌ی این مخزن است.
-2. شناسه‌ی tenant ارسال‌شده از client هویت یا مجوز محسوب نمی‌شود.
-3. هیچ endpoint مدیریتی پیش از پیاده‌سازی identity و authorization امن فعال نمی‌شود.
-4. health check جایگزین authentication یا کنترل دسترسی نیست.
-5. secret واقعی، داده‌ی مدرسه یا اطلاعات کاربر وارد Git نمی‌شود.
-6. آمار داشبورد تا زمان اتصال به منبع معتبر نمایش داده نمی‌شود.
+1. رابط انسانی مدیریت فقط Bot تلگرام است.
+2. Telegram User ID از Update معتبر استخراج می‌شود؛ username یا Callback Data هویت و مجوز نیست.
+3. فقط Private Chat مجاز است.
+4. هر Handler قبل از عملیات، هویت، وضعیت حساب، Permission و Scope را بررسی می‌کند.
+5. Handler و Route منطق دامنه یا Query/Mutation مستقیم ORM را در خود نگه نمی‌دارند؛ Use Case مالک منطق است.
+6. Callback قدیمی، تکراری یا متعلق به Flow قبلی نباید عملیات را اجرا کند.
+7. هر عملیات تغییردهنده باید در برابر Replay و اجرای تکراری مقاوم باشد.
+8. Audit append-only است و Secret یا Token خام در Audit/Log ذخیره نمی‌شود.
+9. هیچ تغییر یا Deploy در classmate2 از این مخزن انجام نمی‌شود.
+10. PR2 تا تکمیل Gate فاز ۱ Draft باقی می‌ماند.
 
-## وضعیت تصمیم‌های محصول
+## اسناد مرجع
 
-تصمیم‌های باز و فرض‌های موقت در docs/PHASE_ZERO_DECISIONS_FA.md ثبت شده‌اند.
-تا تعیین تکلیف آن‌ها، فقط زیرساخت و قراردادهای کم‌ریسک توسعه می‌یابند.
+- طراحی مرجع: docs/SYSTEM_DESIGN_FA.md
+- نقشه پنج فاز: docs/MASTER_ROADMAP_5_PHASES_FA.md
+- برنامه و موانع فاز یک: docs/PHASE_ONE_IMPLEMENTATION_FA.md
+- بازبینی معماری: docs/ARCHITECTURE_REVIEW_FA.md
+- یافته‌های بازبینی کد: docs/ARCHITECTURE_REVIEW_SECOND_PASS_FA.md
+- خط مبنای امنیت: docs/SECURITY_BASELINE_FA.md
+- قرارداد Health/API: docs/PHASE_ZERO_API_FA.md

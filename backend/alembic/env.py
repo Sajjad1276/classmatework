@@ -3,16 +3,23 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from app.core.config import get_settings
+from app.db import models as _models  # noqa: F401
 from app.db.base import Base
+from app.db.runtime import (
+    DATABASE_SCHEMA,
+    DATABASE_SEARCH_PATH,
+    normalize_async_database_url,
+)
 
 config = context.config
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+database_url = normalize_async_database_url(settings.database_url)
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -22,11 +29,13 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.database_url,
+        url=database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_schemas=True,
+        version_table_schema=DATABASE_SCHEMA,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -37,6 +46,8 @@ def do_run_migrations(connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_schemas=True,
+        version_table_schema=DATABASE_SCHEMA,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -47,8 +58,22 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"server_settings": {"search_path": DATABASE_SEARCH_PATH}},
     )
     async with connectable.connect() as connection:
+        # Use the already-provisioned Railway Postgres instance, but isolate
+        # every ClassMate Work table from ClassMate 2 and other applications.
+        await connection.execute(
+            text(f"CREATE SCHEMA IF NOT EXISTS {DATABASE_SCHEMA}")
+        )
+        # Commit schema provisioning before Alembic opens its own migration
+        # transaction; otherwise Alembic may inherit this implicit transaction
+        # and the connection close can roll back the entire migration batch.
+        await connection.commit()
+
+        await connection.execute(text(f"SET search_path TO {DATABASE_SEARCH_PATH}"))
+        await connection.commit()
+
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 

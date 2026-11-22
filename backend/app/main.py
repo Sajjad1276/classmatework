@@ -11,7 +11,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.request_context import request_id_context
-from app.db.runtime import create_database_engine, create_redis_client
+from app.db.runtime import create_database_engine, create_redis_client, create_session_factory
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
@@ -22,6 +22,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     engine = create_database_engine(settings.database_url)
     redis_client = create_redis_client(settings.redis_url)
     application.state.db_engine = engine
+    application.state.session_factory = create_session_factory(engine)
     application.state.redis = redis_client
     try:
         yield
@@ -35,7 +36,7 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
     application = FastAPI(
         title=settings.app_name,
-        version="0.1.0",
+        version="0.2.0",
         description="ClassMate Work versioned management API.",
         lifespan=lifespan,
     )

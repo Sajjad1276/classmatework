@@ -1,0 +1,260 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import secrets
+from contextlib import suppress
+from datetime import timedelta
+
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.base import DefaultKeyBuilder
+from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.types import BotCommand
+from redis.asyncio import Redis
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.bot.academic_router import router as academic_router
+from app.bot.idempotency import TelegramUpdateDedupMiddleware
+from app.bot.middleware import (
+    DatabaseSessionMiddleware,
+    PrivateChatOnlyMiddleware,
+    TelegramIdentityMiddleware,
+)
+from app.bot.rate_limit import TelegramRateLimitMiddleware
+from app.bot.router import router
+from app.core.config import get_settings
+from app.core.logging import configure_logging
+from app.db.runtime import (
+    DATABASE_SCHEMA,
+    create_database_engine,
+    create_redis_client,
+    create_session_factory,
+)
+
+logger = logging.getLogger(__name__)
+
+_LOCK_KEY = "classmatework:admin-bot:poller-lock"
+_LOCK_TTL_SECONDS = 45
+_LOCK_ACQUIRE_TIMEOUT_SECONDS = 90
+_LOCK_RETRY_INTERVAL_SECONDS = 1
+_LOCK_RENEW_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('expire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+_LOCK_RELEASE_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+
+async def _acquire_poller_lock(redis: Redis, token: str) -> None:
+    """Wait for the previous Railway replica to release its polling lease.
+
+    During a rolling deploy the old replica may still own the lock when the
+    replacement starts. Failing immediately would turn a healthy handover
+    into a crash loop. The bounded wait is longer than the lease TTL so that
+    an abruptly terminated owner can also expire safely.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _LOCK_ACQUIRE_TIMEOUT_SECONDS
+    next_notice = loop.time()
+
+    while True:
+        acquired = await redis.set(
+            _LOCK_KEY,
+            token,
+            nx=True,
+            ex=_LOCK_TTL_SECONDS,
+        )
+        if acquired:
+            logger.info("Admin bot poller lock acquired.")
+            return
+
+        now = loop.time()
+        if now >= deadline:
+            raise RuntimeError(
+                "Timed out waiting for the previous admin bot poller to release its lock."
+            )
+
+        if now >= next_notice:
+            logger.info("Previous admin bot poller still holds the lock; waiting for handover.")
+            next_notice = now + 10
+
+        await asyncio.sleep(_LOCK_RETRY_INTERVAL_SECONDS)
+
+
+async def _renew_poller_lock(redis: Redis, token: str) -> None:
+    while True:
+        await asyncio.sleep(15)
+        renewed = await redis.eval(
+            _LOCK_RENEW_SCRIPT,
+            1,
+            _LOCK_KEY,
+            token,
+            _LOCK_TTL_SECONDS,
+        )
+        if not renewed:
+            raise RuntimeError("Admin bot poller lock was lost; stopping polling.")
+
+
+async def _run_polling(dispatcher: Dispatcher, bot: Bot) -> None:
+    await dispatcher.start_polling(
+        bot,
+        allowed_updates=dispatcher.resolve_used_update_types(),
+        handle_signals=True,
+        close_bot_session=False,
+    )
+
+
+async def main() -> None:
+    settings = get_settings()
+    if (
+        settings.telegram_bot_token is None
+        or not settings.telegram_bot_token.get_secret_value().strip()
+    ):
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is required to run the admin bot.")
+
+    configure_logging(settings.log_level)
+    engine = create_database_engine(settings.database_url)
+    session_factory: async_sessionmaker[AsyncSession] = create_session_factory(engine)
+    redis = create_redis_client(settings.redis_url)
+    token = secrets.token_urlsafe(32)
+    bot = Bot(token=settings.telegram_bot_token.get_secret_value())
+    storage = RedisStorage.from_url(
+        settings.redis_url,
+        key_builder=DefaultKeyBuilder(
+            prefix="classmatework:fsm",
+            with_bot_id=True,
+        ),
+        state_ttl=timedelta(seconds=settings.bot_fsm_ttl_seconds),
+        data_ttl=timedelta(seconds=settings.bot_fsm_ttl_seconds),
+    )
+    dispatcher = Dispatcher(storage=storage)
+    dispatcher["redis"] = redis
+    dispatcher.update.outer_middleware(
+        TelegramUpdateDedupMiddleware(
+                session_factory,
+                lease_ttl=timedelta(seconds=settings.bot_update_lease_seconds),
+            )
+    )
+
+    try:
+        await redis.ping()
+        async with engine.connect() as connection:
+            diagnostic = await connection.execute(
+                text(
+                    "SELECT current_database() AS database, "
+                    "current_user AS database_user, "
+                    "current_schema() AS schema, "
+                    "current_setting('search_path') AS search_path, "
+                    "(SELECT array_agg(schema_name ORDER BY schema_name) "
+                    " FROM information_schema.schemata "
+                    " WHERE schema_name IN ('public', 'classmatework')) AS available_schemas, "
+                    "CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata "
+                    " WHERE schema_name = 'classmatework') "
+                    "THEN has_schema_privilege(current_user, 'classmatework', 'USAGE') "
+                    "ELSE FALSE END AS classmatework_schema_usage, "
+                    "to_regclass('classmatework.processed_telegram_updates')::text AS processed_table, "
+                    "to_regclass('public.processed_telegram_updates')::text AS public_processed_table, "
+                    "to_regclass('classmatework.alembic_version')::text AS version_table, "
+                    "to_regclass('public.alembic_version')::text AS public_version_table"
+                )
+            )
+            database_state = diagnostic.mappings().one()
+            if database_state["processed_table"] is None:
+                raise RuntimeError(
+                    "ClassMate Work migration check failed: "
+                    f"database_state={dict(database_state)}"
+                )
+            if database_state["version_table"] is None:
+                raise RuntimeError(
+                    "ClassMate Work Alembic version table is missing: "
+                    f"database_state={dict(database_state)}"
+                )
+            versions = (
+                await connection.execute(
+                    text(f"SELECT version_num FROM {DATABASE_SCHEMA}.alembic_version")
+                )
+            ).scalars().all()
+        logger.info(
+            "ClassMate Work database ready; database=%s schema=%s search_path=%s migrations=%s",
+            database_state["database"],
+            DATABASE_SCHEMA,
+            database_state["search_path"],
+            versions,
+        )
+
+        await _acquire_poller_lock(redis, token)
+
+        for observer in (dispatcher.message, dispatcher.callback_query):
+            observer.outer_middleware(PrivateChatOnlyMiddleware())
+            observer.outer_middleware(TelegramRateLimitMiddleware(
+                redis,
+                message_limit=settings.bot_message_rate_limit,
+                callback_limit=settings.bot_callback_rate_limit,
+                window_seconds=settings.bot_rate_limit_window_seconds,
+            ))
+            observer.outer_middleware(DatabaseSessionMiddleware(session_factory))
+            observer.outer_middleware(TelegramIdentityMiddleware())
+
+        dispatcher.include_router(academic_router)
+        dispatcher.include_router(router)
+
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="شروع و بررسی دسترسی"),
+                BotCommand(command="menu", description="منوی اصلی"),
+                BotCommand(command="back", description="بازگشت یک مرحله"),
+                BotCommand(command="cancel", description="لغو عملیات جاری"),
+                BotCommand(command="roles", description="فهرست نقش‌های قابل واگذاری"),
+                BotCommand(command="role_create", description="ساخت نقش در مجموعه"),
+                BotCommand(command="members", description="فهرست اعضای مجموعه"),
+                BotCommand(command="member_suspend", description="تعلیق عضویت پس از تأیید"),
+                BotCommand(command="member_reactivate", description="فعال‌سازی مجدد عضویت"),
+                BotCommand(command="invite", description="دعوت مدیر با نقش مشخص"),
+                BotCommand(command="invites", description="فهرست دعوت‌های باز"),
+                BotCommand(command="revoke_invite", description="لغو دعوت پذیرفته‌نشده"),
+                BotCommand(command="help", description="راهنمای ربات"),
+                BotCommand(command="status", description="وضعیت سرویس‌ها"),
+            ]
+        )
+        await bot.delete_webhook(drop_pending_updates=False)
+        me = await bot.get_me()
+        logger.info("ClassMate Work admin bot starting; bot_id=%s", me.id)
+
+        polling_task = asyncio.create_task(_run_polling(dispatcher, bot))
+        heartbeat_task = asyncio.create_task(_renew_poller_lock(redis, token))
+        done, _ = await asyncio.wait(
+            {polling_task, heartbeat_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if heartbeat_task in done:
+            await heartbeat_task
+        await polling_task
+    finally:
+        for task in (locals().get("polling_task"), locals().get("heartbeat_task")):
+            if task is not None and not task.done():
+                task.cancel()
+        pending_tasks = [
+            task
+            for task in (locals().get("polling_task"), locals().get("heartbeat_task"))
+            if task is not None
+        ]
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+        with suppress(Exception):
+            await redis.eval(_LOCK_RELEASE_SCRIPT, 1, _LOCK_KEY, token)
+        await storage.close()
+        await redis.aclose()
+        await engine.dispose()
+        await bot.session.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
