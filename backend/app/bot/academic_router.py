@@ -36,7 +36,7 @@ from app.application.tenants import (
     list_subjects,
     list_tenants,
 )
-from app.db.models import AcademicYear, ClassGroup, School, Tenant
+from app.db.models import AcademicYear, School, Tenant
 from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
@@ -1355,23 +1355,6 @@ async def _accept_field(
     )
 
 
-def _nonempty(value: str, maximum: int) -> str | None:
-    return value if 1 <= len(value) <= maximum else None
-
-
-def _school_code(value: str) -> str | None:
-    normalized = value.strip().upper()
-    return normalized if re.fullmatch(r"[A-Z0-9_-]{1,48}", normalized) else None
-
-
-def _iso_date(value: str) -> str | None:
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed.isoformat()
-
-
 @router.message(StructureWizard.school_name)
 async def school_name_step(message: Message, state: FSMContext) -> None:
     await _accept_field(
@@ -1420,6 +1403,141 @@ async def class_name_step(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("structure:confirm:"))
+async def structure_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    flow_name = data.get("flow_name")
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        flow_name not in _CONFIRM_STATES
+        or await state.get_state() != _CONFIRM_STATES[flow_name]
+        or not token
+        or token != data.get("flow_token")
+    ):
+        await callback.answer(
+            "این دکمه متعلق به فرم قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
+
+    try:
+        tenant_id, school_id, year_id = await _context_ids(state)
+        if flow_name in {"year", "subject", "class"} and school_id is None:
+            raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
+
+        if flow_name == "school":
+            entity = await create_school(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                name=data.get("school_name", ""),
+                code=_generated_code("SCH"),
+            )
+            result_text = f"مدرسه ایجاد شد: {entity.name} · کد سیستمی {entity.code}"
+            success_school_id = entity.id
+            success_year_id = None
+            next_message = "اکنون می‌توانید سال تحصیلی این مدرسه را ثبت کنید."
+        elif flow_name == "year":
+            starts_on, ends_on = _default_academic_year_range(data.get("year_name", ""))
+            entity = await create_academic_year(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                name=data.get("year_name", ""),
+                starts_on=starts_on,
+                ends_on=ends_on,
+            )
+            result_text = (
+                f"سال تحصیلی {entity.name} ایجاد شد. "
+                f"بازهٔ پیش‌فرض {entity.starts_on.isoformat()} تا {entity.ends_on.isoformat()}"
+            )
+            success_school_id = school_id
+            success_year_id = entity.id
+            next_message = "اکنون می‌توانید کلاس‌های این سال را ایجاد کنید."
+        elif flow_name == "subject":
+            entity = await create_subject(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                name=data.get("subject_name", ""),
+                code=_generated_code("SUB"),
+            )
+            result_text = f"درس {entity.name} افزوده شد."
+            success_school_id = school_id
+            success_year_id = year_id
+            next_message = "درس به فهرست درس‌های مدرسه اضافه شد."
+        else:
+            if year_id is None:
+                raise ResourceNotFound("سال تحصیلی انتخاب نشده است.")
+            entity = await create_class(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=school_id,
+                academic_year_id=year_id,
+                name=data.get("class_name", ""),
+                code=_generated_code("CLS"),
+                grade=data.get("class_grade", ""),
+            )
+            result_text = f"کلاس {entity.name} ایجاد شد."
+            success_school_id = school_id
+            success_year_id = year_id
+            next_message = "کلاس به فهرست کلاس‌های این سال اضافه شد."
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except ValueError:
+        await callback.answer(
+            "نام سال تحصیلی یا اطلاعات واردشده معتبر نیست.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer("ثبت انجام شد.")
+    await _clear_flow(state)
+    await state.update_data(
+        context_tenant_id=str(tenant_id),
+        context_school_id=str(success_school_id) if success_school_id else None,
+        context_academic_year_id=str(success_year_id) if success_year_id else None,
+    )
+    if callback.message is not None:
+        notice = f"✅ {result_text}\n{next_message}"
+        if success_school_id is not None and success_year_id is not None:
+            await _show_year_menu(
+                callback.message,
+                db=db,
+                principal=principal,
+                tenant_id=tenant_id,
+                school_id=success_school_id,
+                year_id=success_year_id,
+                notice=notice,
+            )
+        elif success_school_id is not None:
+            await _show_school_menu(
+                callback.message,
+                db=db,
+                principal=principal,
+                tenant_id=tenant_id,
+                school_id=success_school_id,
+                notice=notice,
+            )
+        else:
+            await _show_tenant_menu(
+                callback.message,
+                db=db,
+                principal=principal,
+                tenant_id=tenant_id,
+                notice=notice,
+            )
+
+
 @router.message(StructureWizard.class_grade)
 async def class_grade_step(message: Message, state: FSMContext) -> None:
     await _accept_field(
@@ -1430,114 +1548,6 @@ async def class_grade_step(message: Message, state: FSMContext) -> None:
         validator=lambda value: value if 1 <= len(value) <= 48 else None,
         error_message="پایه/مقطع باید بین ۱ تا ۴۸ نویسه باشد.",
     )
-
-@router.message(StructureWizard.school_code)
-async def school_code_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="school_code",
-        next_state=StructureWizard.school_confirm,
-        validator=_school_code,
-        error_message="کد مدرسه فقط می‌تواند شامل حروف انگلیسی، عدد، خط تیره و زیرخط باشد.",
-    )
-
-
-@router.message(StructureWizard.year_name)
-async def year_name_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="year_name",
-        next_state=StructureWizard.year_start,
-        validator=lambda value: value if 1 <= len(value) <= 64 else None,
-        error_message="نام سال تحصیلی باید بین ۱ تا ۶۴ نویسه باشد.",
-    )
-
-
-@router.message(StructureWizard.year_start)
-async def year_start_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="year_start",
-        next_state=StructureWizard.year_end,
-        validator=_iso_date,
-        error_message="تاریخ شروع معتبر نیست. قالب ورودی YYYY-MM-DD است.",
-    )
-
-
-@router.message(StructureWizard.year_end)
-async def year_end_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="year_end",
-        next_state=StructureWizard.year_confirm,
-        validator=_iso_date,
-        error_message="تاریخ پایان معتبر نیست. قالب ورودی YYYY-MM-DD است.",
-    )
-
-
-@router.message(StructureWizard.subject_name)
-async def subject_name_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="subject_name",
-        next_state=StructureWizard.subject_code,
-        validator=lambda value: value if 1 <= len(value) <= 120 else None,
-        error_message="نام درس باید بین ۱ تا ۱۲۰ نویسه باشد.",
-    )
-
-
-@router.message(StructureWizard.subject_code)
-async def subject_code_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="subject_code",
-        next_state=StructureWizard.subject_confirm,
-        validator=_school_code,
-        error_message="کد درس فقط می‌تواند شامل حروف انگلیسی، عدد، خط تیره و زیرخط باشد.",
-    )
-
-
-@router.message(StructureWizard.class_name)
-async def class_name_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="class_name",
-        next_state=StructureWizard.class_code,
-        validator=lambda value: value if 1 <= len(value) <= 120 else None,
-        error_message="نام کلاس باید بین ۱ تا ۱۲۰ نویسه باشد.",
-    )
-
-
-@router.message(StructureWizard.class_code)
-async def class_code_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="class_code",
-        next_state=StructureWizard.class_grade,
-        validator=_school_code,
-        error_message="کد کلاس فقط می‌تواند شامل حروف انگلیسی، عدد، خط تیره و زیرخط باشد.",
-    )
-
-
-@router.message(StructureWizard.class_grade)
-async def class_grade_step(message: Message, state: FSMContext) -> None:
-    await _accept_field(
-        message,
-        state,
-        key="class_grade",
-        next_state=StructureWizard.class_confirm,
-        validator=lambda value: value if 1 <= len(value) <= 48 else None,
-        error_message="پایه/مقطع باید بین ۱ تا ۴۸ نویسه باشد.",
-    )
-
 
 async def _return_to_context_menu(
     message: Message,
@@ -1551,6 +1561,7 @@ async def _return_to_context_menu(
         tenant_id, school_id, year_id = await _context_ids(state)
     except ResourceNotFound:
         return
+
     if school_id is not None and year_id is not None:
         await _show_year_menu(
             message,
