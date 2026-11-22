@@ -14,9 +14,15 @@ from app.application.tenants import (
     create_school,
     create_subject,
     list_academic_years,
+    list_archived_school_structure,
+    list_archived_schools,
     list_classes,
     list_schools,
     list_subjects,
+    restore_academic_year,
+    restore_class,
+    restore_school,
+    restore_subject,
     update_academic_year,
     update_class,
     update_school,
@@ -249,6 +255,10 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
             name="ریاضی", code="MATH",
         )
+        manually_removed_subject = await create_subject(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
+            name="فارسی", code="PERSIAN",
+        )
         subject = await update_subject(
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
             subject_id=subject.id, name="ریاضی و آمار",
@@ -265,7 +275,12 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
             chat_type="supergroup", status="active", connected_by_id=owner.id,
             integration_bot_id=900000001,
         )
-        db.add_all([assignment, group_connection])
+        manually_inactive_assignment = ClassSubject(
+            tenant_id=tenant.id, school_id=school.id, class_group_id=class_group.id,
+            subject_id=manually_removed_subject.id, assigned_by_id=owner.id,
+            status="inactive",
+        )
+        db.add_all([assignment, group_connection, manually_inactive_assignment])
         await db.commit()
 
         with pytest.raises(ResourceConflict):
@@ -287,7 +302,8 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
         await db.refresh(assignment)
         assert class_group.status == "archived"
         assert group_connection.status == "revoked"
-        assert assignment.status == "inactive"
+        assert assignment.status == "suspended"
+        assert manually_inactive_assignment.status == "inactive"
         assert not await archive_class(
             db, actor_id=owner.id, tenant_id=tenant.id,
             school_id=school.id, class_group_id=class_group.id,
@@ -320,5 +336,51 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
         assert await list_schools(
             db, actor_id=owner.id, tenant_id=tenant.id
         ) == []
+
+        school_bin = await list_archived_schools(
+            db, actor_id=owner.id, tenant_id=tenant.id
+        )
+        assert [item.id for item in school_bin["items"]] == [school.id]
+        assert await restore_school(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
+        )
+        await db.refresh(school)
+        assert school.status == "setup"
+
+        structure_bin = await list_archived_school_structure(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        )
+        assert {item["kind"] for item in structure_bin["items"]} == {
+            "year", "class", "subject"
+        }
+
+        with pytest.raises(ResourceConflict):
+            await restore_class(
+                db, actor_id=owner.id, tenant_id=tenant.id,
+                school_id=school.id, class_group_id=class_group.id,
+            )
+        assert await restore_academic_year(
+            db, actor_id=owner.id, tenant_id=tenant.id,
+            school_id=school.id, academic_year_id=year.id,
+        )
+        assert await restore_subject(
+            db, actor_id=owner.id, tenant_id=tenant.id,
+            school_id=school.id, subject_id=subject.id,
+        )
+        await db.refresh(assignment)
+        assert assignment.status == "suspended"
+        assert await restore_class(
+            db, actor_id=owner.id, tenant_id=tenant.id,
+            school_id=school.id, class_group_id=class_group.id,
+        )
+        await db.refresh(class_group)
+        await db.refresh(assignment)
+        await db.refresh(group_connection)
+        await db.refresh(manually_inactive_assignment)
+        assert class_group.status == "active"
+        assert assignment.status == "active"
+        assert manually_inactive_assignment.status == "inactive"
+        # The bot was not silently re-added to the Telegram group.
+        assert group_connection.status == "revoked"
 
     await engine.dispose()

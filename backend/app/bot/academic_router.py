@@ -35,10 +35,16 @@ from app.application.tenants import (
     create_subject,
     list_academic_years,
     list_accessible_tenants,
+    list_archived_school_structure,
+    list_archived_schools,
     list_classes,
     list_schools,
     list_subjects,
     list_tenants,
+    restore_academic_year,
+    restore_class,
+    restore_school,
+    restore_subject,
     update_academic_year,
     update_class,
     update_school,
@@ -245,12 +251,15 @@ def _tenant_keyboard(
     *,
     can_list: bool,
     can_create: bool,
+    can_archive: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_list:
         rows.append([InlineKeyboardButton(text="🏫 مدارس مجموعه", callback_data="school:list")])
     if can_create:
         rows.append([InlineKeyboardButton(text="➕ ایجاد مدرسه", callback_data="school:create")])
+    if can_archive:
+        rows.append([InlineKeyboardButton(text="🗄 مدارس بایگانی‌شده", callback_data="life:bin:s:1")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tenant:directory")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -282,6 +291,14 @@ async def _show_tenant_menu(
         scope_type="tenant",
         scope_id=tenant_id,
     )
+    can_archive = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="school:manage",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    )
     body = (
         f"🏢 مدیریت مجموعه: {tenant.name}\n"
         f"شناسه: {tenant.slug}\n\n"
@@ -289,7 +306,15 @@ async def _show_tenant_menu(
     )
     if notice:
         body = f"{notice}\n\n{body}"
-    await _render_panel(message, body, _tenant_keyboard(can_list=can_list, can_create=can_create))
+    await _render_panel(
+        message,
+        body,
+        _tenant_keyboard(
+            can_list=can_list,
+            can_create=can_create,
+            can_archive=can_archive,
+        ),
+    )
 
 async def _show_school_menu(
     message: Message,
@@ -341,6 +366,7 @@ async def _show_school_menu(
     if can_subject:
         rows.append([InlineKeyboardButton(text="➕ افزودن درس", callback_data="subject:create")])
     if can_manage_school:
+        rows.append([InlineKeyboardButton(text="🗄 صندوق بازیابی", callback_data=f"life:bin:o:{school.id.hex}:1")])
         rows.append([InlineKeyboardButton(text="✏️ ویرایش نام مدرسه", callback_data=f"life:e:school:{school.id}:name")])
         rows.append([InlineKeyboardButton(text="🗄 بایگانی مدرسه", callback_data=f"life:a:s:{school.id}")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="school:list")])
@@ -2123,6 +2149,309 @@ async def structure_archive_prompt_callback(
                 ]
             ),
         )
+
+
+
+
+@router.callback_query(F.data.regexp(r"^life:bin:s:[0-9]+$"))
+async def archived_schools_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        page = int(parts[3])
+        if page < 1:
+            raise ValueError
+        result = await list_archived_schools(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            limit=8,
+            offset=(page - 1) * 8,
+        )
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if result["pages"] and page > result["pages"]:
+        page = result["pages"]
+        result = await list_archived_schools(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            limit=8,
+            offset=(page - 1) * 8,
+        )
+    await callback.answer()
+    lines = [
+        "╔  🗄 مدارس بایگانی‌شده",
+        "║",
+        f"╣  تعداد: {result['total']:,}",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in result["items"]:
+        lines.append(f"╣  🏫 {item.name[:72]} · {item.code}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"♻️ بازیابی · {item.name[:38]}",
+                    callback_data=f"life:rp:s:{item.id.hex}:{page}",
+                )
+            ]
+        )
+    if not result["items"]:
+        lines.append("╣  مدرسهٔ بایگانی‌شده‌ای وجود ندارد.")
+    lines.extend(["║", f"╚  صفحهٔ {page} از {max(1, result['pages'])}"])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"life:bin:s:{page - 1}",
+            )
+        ] if page > 1 else [
+            InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data="tenant:menu")
+        ]
+    )
+    if page < result["pages"]:
+        rows[-1].append(
+            InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"life:bin:s:{page + 1}",
+            )
+        )
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^life:bin:o:[0-9a-fA-F]{32}:[0-9]+$"))
+async def archived_school_structure_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    try:
+        tenant_id, current_school_id, _ = await _context_ids(state)
+        school_id = UUID(hex=parts[3])
+        page = int(parts[4])
+        if current_school_id != school_id or page < 1:
+            raise ValueError
+        result = await list_archived_school_structure(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            limit=8,
+            offset=(page - 1) * 8,
+        )
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if result["pages"] and page > result["pages"]:
+        page = result["pages"]
+        result = await list_archived_school_structure(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            limit=8,
+            offset=(page - 1) * 8,
+        )
+    await callback.answer()
+    labels = {
+        "year": ("📅", "سال تحصیلی", "y"),
+        "class": ("🏫", "کلاس", "c"),
+        "subject": ("📚", "درس", "u"),
+    }
+    lines = [
+        "╔  🗄 صندوق بازیابی مدرسه",
+        "║",
+        f"╣  مدرسه: {result['school_name']}",
+        f"╣  موارد بایگانی‌شده: {result['total']:,}",
+        "║",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in result["items"]:
+        icon, label, code = labels[item["kind"]]
+        lines.append(f"╣  {icon} {label}: {item['name'][:72]}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"♻️ بازیابی {label} · {item['name'][:28]}",
+                    callback_data=f"life:rp:{code}:{item['id'].hex}:{page}",
+                )
+            ]
+        )
+    if not result["items"]:
+        lines.append("╣  مورد بایگانی‌شده‌ای برای این مدرسه وجود ندارد.")
+    lines.extend(["║", f"╚  صفحهٔ {page} از {max(1, result['pages'])}"])
+    navigation = []
+    if page > 1:
+        navigation.append(
+            InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"life:bin:o:{school_id.hex}:{page - 1}",
+            )
+        )
+    if page < result["pages"]:
+        navigation.append(
+            InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"life:bin:o:{school_id.hex}:{page + 1}",
+            )
+        )
+    if navigation:
+        rows.append(navigation)
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ بازگشت به مدرسه", callback_data="school:menu")]
+    )
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^life:rp:[sycu]:[0-9a-fA-F]{32}:[0-9]+$"))
+async def restore_structure_prompt_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    code, raw_id, page = parts[2], parts[3], parts[4]
+    labels = {
+        "s": ("مدرسه", "وضعیت مدرسه به «آماده‌سازی» برمی‌گردد؛ موارد داخلی همچنان جداگانه بایگانی می‌مانند."),
+        "y": ("سال تحصیلی", "سال به وضعیت «برنامه‌ریزی‌شده» برمی‌گردد؛ کلاس‌های بایگانی‌شده خودکار فعال نمی‌شوند."),
+        "c": ("کلاس", "تخصیص‌های درسِ تعلیق‌شده فقط در صورت فعال بودن درس بازمی‌گردند؛ اتصال گروه تلگرام باید مجدداً انجام شود."),
+        "u": ("درس", "تخصیص‌های تعلیق‌شده فقط برای کلاس‌های فعال بازمی‌گردند؛ تخصیص‌های دستیِ برداشته‌شده برنمی‌گردند."),
+    }
+    title, explanation = labels[code]
+    if code == "s":
+        back_callback = f"life:bin:s:{page}"
+    else:
+        data = await state.get_data()
+        school_value = data.get("context_school_id")
+        if not school_value:
+            await callback.answer("مدرسهٔ انتخاب‌شده منقضی شده است.", show_alert=True)
+            return
+        back_callback = f"life:bin:o:{UUID(school_value).hex}:{page}"
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"آیا {title} بازیابی شود؟\\n\\n{explanation}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="تأیید بازیابی",
+                            callback_data=f"life:rc:{code}:{raw_id}:{page}",
+                        )
+                    ],
+                    [InlineKeyboardButton(text="لغو", callback_data=back_callback)],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^life:rc:[sycu]:[0-9a-fA-F]{32}:[0-9]+$"))
+async def restore_structure_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    code, raw_id, page = parts[2], parts[3], int(parts[4])
+    resource_id = UUID(hex=raw_id)
+    try:
+        tenant_id, school_id, _ = await _context_ids(state)
+        if code == "s":
+            restored = await restore_school(
+                db,
+                actor_id=principal.user.id,
+                tenant_id=tenant_id,
+                school_id=resource_id,
+            )
+            await callback.answer(
+                "مدرسه بازیابی شد." if restored else "این مدرسه قبلاً بازیابی شده بود."
+            )
+            await _clear_flow(state)
+            await state.update_data(
+                context_tenant_id=str(tenant_id),
+                context_school_id=None,
+                context_academic_year_id=None,
+            )
+            if callback.message is not None:
+                await _show_tenant_menu(
+                    callback.message,
+                    db=db,
+                    principal=principal,
+                    tenant_id=tenant_id,
+                    notice="✅ مدرسه بازیابی شد؛ موارد داخلی آن همچنان جداگانه بایگانی هستند.",
+                )
+            return
+
+        if school_id is None:
+            raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
+        operations = {
+            "y": restore_academic_year,
+            "c": restore_class,
+            "u": restore_subject,
+        }
+        operation = operations[code]
+        kwargs = {
+            "db": db,
+            "actor_id": principal.user.id,
+            "tenant_id": tenant_id,
+            "school_id": school_id,
+        }
+        if code == "y":
+            restored = await operation(**kwargs, academic_year_id=resource_id)
+        elif code == "c":
+            restored = await operation(**kwargs, class_group_id=resource_id)
+        else:
+            restored = await operation(**kwargs, subject_id=resource_id)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "بازیابی ممکن نیست.", show_alert=True)
+        return
+
+    await callback.answer(
+        "بازیابی انجام شد." if restored else "این مورد قبلاً بازیابی شده بود."
+    )
+    await _clear_flow(state)
+    await state.update_data(
+        context_tenant_id=str(tenant_id),
+        context_school_id=str(school_id),
+        context_academic_year_id=None,
+    )
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "✅ بازیابی انجام شد. برای مشاهدهٔ فهرست به‌روز صندوق بایگانی برگردید.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به صندوق بازیابی",
+                            callback_data=f"life:bin:o:{school_id.hex}:{page}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="بازگشت به مدرسه",
+                            callback_data="school:menu",
+                        )
+                    ],
+                ]
+            ),
+        )
+
 
 
 @router.callback_query()

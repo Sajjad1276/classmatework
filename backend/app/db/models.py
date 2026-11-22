@@ -307,7 +307,7 @@ class ClassSubject(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "status IN ('active', 'inactive')",
+            "status IN ('active', 'inactive', 'suspended')",
             name="ck_class_subjects_status",
         ),
         Index(
