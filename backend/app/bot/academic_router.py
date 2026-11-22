@@ -142,7 +142,7 @@ def _jalali_to_gregorian(year: int, month: int, day: int) -> date:
 def _default_academic_year_range(name: str) -> tuple[date, date]:
     normalized = _ascii_digits(name)
     match = re.search(
-        r"(?<!\\d)(13\\d{2}|14\\d{2})\\s*[-–/]\\s*(13\\d{2}|14\\d{2})(?!\\d)",
+        r"(?<!\d)(13\d{2}|14\d{2})\s*[-–/]\s*(13\d{2}|14\d{2})(?!\d)",
         normalized,
     )
     if match:
@@ -494,6 +494,59 @@ async def _show_context_after_flow(
         )
 
 
+
+async def _show_tenant_directory(
+    message: Message,
+    *,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+) -> None:
+    try:
+        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
+    except AccessDenied:
+        tenants = await list_accessible_tenants(
+            db,
+            actor_id=principal.user.id,
+            limit=50,
+        )
+
+    rows = [
+        [InlineKeyboardButton(
+            text=f"{tenant.name} · {tenant.slug}",
+            callback_data=f"tenant:open:{tenant.id}",
+        )]
+        for tenant in tenants
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="structure:root")])
+    body = (
+        "🏫 مدیریت مدارس و کلاس‌ها\n\nمجموعه را انتخاب کنید:"
+        if tenants
+        else "هنوز مجموعه‌ای ثبت نشده است."
+    )
+    await _render_panel(
+        message,
+        body,
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data == "tenant:directory")
+async def tenant_directory_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await _clear_flow(state)
+        await state.set_data({})
+        await _show_tenant_directory(
+            callback.message,
+            principal=principal,
+            db=db,
+        )
+
 @router.callback_query(F.data.startswith("tenant:open:"))
 async def tenant_open_callback(
     callback: CallbackQuery,
@@ -536,30 +589,13 @@ async def tenant_switch_callback(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
-    try:
-        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
     await callback.answer()
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{tenant.name} · {tenant.slug}",
-                callback_data=f"tenant:open:{tenant.id}",
-            )
-        ]
-        for tenant in tenants
-    ]
-    rows.append(
-        [InlineKeyboardButton(text="منوی اصلی", callback_data="structure:root")]
-    )
     if callback.message is not None:
-        await callback.message.answer(
-            "مجموعه موردنظر را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        await _show_tenant_directory(
+            callback.message,
+            principal=principal,
+            db=db,
         )
-
 
 @router.callback_query(F.data == "tenant:menu")
 async def tenant_menu_callback(
@@ -621,31 +657,40 @@ async def school_list_callback(
             tenant_id=tenant_id,
             limit=50,
         )
-    except (AccessDenied, ResourceNotFound) as exc:
-        await callback.answer(str(exc) or "دسترسی ندارید.", show_alert=True)
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
         return
-    await callback.answer()
+
     rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{school.name} · {school.code}",
-                callback_data=f"school:open:{school.id}",
-            )
-        ]
+        [InlineKeyboardButton(
+            text=f"{school.name} · {school.code}",
+            callback_data=f"school:open:{school.id}",
+        )]
         for school in schools
     ]
-    rows.append(
-        [InlineKeyboardButton(text="ایجاد مدرسه", callback_data="school:create")]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="بازگشت به مجموعه", callback_data="tenant:menu")]
+    if await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="school:create",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    ):
+        rows.append([InlineKeyboardButton(text="➕ ایجاد مدرسه", callback_data="school:create")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tenant:menu")])
+
+    await callback.answer()
+    body = (
+        f"🏫 مدارس مجموعه\n\nتعداد مدارس: {len(schools)}"
+        if schools
+        else "هنوز مدرسه‌ای در این مجموعه ثبت نشده است."
     )
     if callback.message is not None:
-        await callback.message.answer(
-            "فهرست مدارس" if schools else "هنوز مدرسه‌ای ایجاد نشده است.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        await _render_panel(
+            callback.message,
+            body,
+            InlineKeyboardMarkup(inline_keyboard=rows),
         )
-
 
 @router.callback_query(F.data.startswith("school:open:"))
 async def school_open_callback(
@@ -769,28 +814,36 @@ async def academic_year_list_callback(
     except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
-    await callback.answer()
+
     rows = [
-        [
-            InlineKeyboardButton(
-                text=f"{year.name} · {year.status}",
-                callback_data=f"year:open:{year.id}",
-            )
-        ]
+        [InlineKeyboardButton(
+            text=f"{year.name} · {year.status}",
+            callback_data=f"year:open:{year.id}",
+        )]
         for year in years
     ]
-    rows.append(
-        [InlineKeyboardButton(text="ایجاد سال تحصیلی", callback_data="year:create")]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="بازگشت به مدرسه", callback_data="school:menu")]
+    if await _has_school_permission(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        school_id=school_id,
+        permission="academic_year:create",
+    ):
+        rows.append([InlineKeyboardButton(text="➕ ایجاد سال تحصیلی", callback_data="year:create")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="school:menu")])
+
+    await callback.answer()
+    body = (
+        f"📅 سال‌های تحصیلی\n\nتعداد: {len(years)}"
+        if years
+        else "هنوز سال تحصیلی ثبت نشده است. برای ساخت کلاس ابتدا یک سال تحصیلی بسازید."
     )
     if callback.message is not None:
-        await callback.message.answer(
-            "سال‌های تحصیلی" if years else "هنوز سال تحصیلی ثبت نشده است.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        await _render_panel(
+            callback.message,
+            body,
+            InlineKeyboardMarkup(inline_keyboard=rows),
         )
-
 
 @router.callback_query(F.data.startswith("year:open:"))
 async def academic_year_open_callback(
@@ -835,6 +888,32 @@ async def academic_year_open_callback(
             year_id=year_id,
         )
 
+
+
+@router.callback_query(F.data == "year:menu")
+async def academic_year_menu_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, school_id, year_id = await _context_ids(state)
+        if school_id is None or year_id is None:
+            raise ResourceNotFound("ابتدا سال تحصیلی را انتخاب کنید.")
+    except ResourceNotFound as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await _show_year_menu(
+            callback.message,
+            db=db,
+            principal=principal,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            year_id=year_id,
+        )
 
 @router.callback_query(F.data == "year:create")
 async def academic_year_create_start(
@@ -894,23 +973,61 @@ async def subject_list_callback(
     except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
-    await callback.answer()
-    lines = [
-        f"{index}. {subject.name} · {subject.code}"
-        for index, subject in enumerate(subjects, start=1)
-    ]
-    body = "\n".join(lines) if lines else "هنوز درسی ثبت نشده است."
-    if callback.message is not None:
-        await callback.message.answer(
-            f"فهرست درس‌ها\n\n{body}",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="ایجاد درس", callback_data="subject:create")],
-                    [InlineKeyboardButton(text="بازگشت به مدرسه", callback_data="school:menu")],
-                ]
-            ),
-        )
 
+    rows = [
+        [InlineKeyboardButton(text=f"{subject.name} · {subject.code}", callback_data=f"subject:open:{subject.id}")]
+        for subject in subjects
+    ]
+    if await _has_school_permission(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        school_id=school_id,
+        permission="subject:create",
+    ):
+        rows.append([InlineKeyboardButton(text="➕ افزودن درس", callback_data="subject:create")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="school:menu")])
+
+    await callback.answer()
+    body = f"📚 درس‌های مدرسه\n\nتعداد: {len(subjects)}" if subjects else "هنوز درسی ثبت نشده است."
+    if callback.message is not None:
+        await _render_panel(callback.message, body, InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("subject:open:"))
+async def subject_open_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, school_id, _ = await _context_ids(state)
+        if school_id is None:
+            raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
+        subject_id = UUID((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        subjects = await list_subjects(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            limit=100,
+        )
+        subject = next((item for item in subjects if item.id == subject_id), None)
+        if subject is None:
+            raise ResourceNotFound("درس موردنظر در این مدرسه پیدا نشد.")
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await _render_panel(
+            callback.message,
+            f"📚 درس: {subject.name}\nکد سیستمی: {subject.code}\nوضعیت: {subject.status}",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="subject:list")]
+            ]),
+        )
 
 @router.callback_query(F.data == "subject:create")
 async def subject_create_start(
@@ -971,25 +1088,81 @@ async def class_list_callback(
     except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
-    await callback.answer()
-    lines = [
-        f"{index}. {item.name} · {item.code} · پایه {item.grade}"
-        for index, item in enumerate(classes, start=1)
+
+    rows = [
+        [InlineKeyboardButton(
+            text=f"{item.name} · پایه {item.grade}",
+            callback_data=f"class:open:{item.id}",
+        )]
+        for item in classes
     ]
-    body = "\n".join(lines) if lines else "در این محدوده کلاسی ثبت نشده است."
+    if await _has_school_permission(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        school_id=school_id,
+        permission="class:create",
+    ):
+        rows.append([InlineKeyboardButton(text="➕ ایجاد کلاس", callback_data="class:choose-year")])
+
+    parent_callback = "year:menu" if year_id is not None else "school:menu"
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)])
+
+    await callback.answer()
+    heading = "کلاس‌های سال انتخاب‌شده" if year_id is not None else "کلاس‌های مدرسه"
+    body = f"🏫 {heading}\n\nتعداد کلاس‌ها: {len(classes)}" if classes else "در این محدوده کلاسی ثبت نشده است."
     if callback.message is not None:
-        await callback.message.answer(
-            f"فهرست کلاس‌ها\n\n{body}",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="ایجاد کلاس", callback_data="class:choose-year")],
-                    [InlineKeyboardButton(text="بازگشت به مدرسه", callback_data="school:menu")],
-                ]
-            ),
+        await _render_panel(
+            callback.message,
+            body,
+            InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
 
+@router.callback_query(F.data.startswith("class:open:"))
+async def class_open_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, school_id, year_id = await _context_ids(state)
+        if school_id is None:
+            raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
+        class_id = UUID((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        classes = await list_classes(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            academic_year_id=year_id,
+            limit=100,
+        )
+        class_item = next((item for item in classes if item.id == class_id), None)
+        if class_item is None:
+            raise ResourceNotFound("کلاس در محدوده انتخاب‌شده پیدا نشد.")
+        academic_year = await db.get(AcademicYear, class_item.academic_year_id)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
 
+    parent_callback = "year:menu" if year_id is not None else "class:list"
+    await callback.answer()
+    if callback.message is not None:
+        await _render_panel(
+            callback.message,
+            (
+                f"🏫 کلاس: {class_item.name}\n"
+                f"پایه: {class_item.grade}\n"
+                f"کد سیستمی: {class_item.code}\n"
+                f"سال تحصیلی: {academic_year.name if academic_year else '-'}\n"
+                f"وضعیت: {class_item.status}"
+            ),
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)]
+            ]),
+        )
 
 @router.callback_query(F.data == "class:create-selected")
 async def class_create_selected_year_callback(
@@ -1063,30 +1236,56 @@ async def class_choose_year_callback(
             limit=50,
         )
     except ApplicationError as exc:
-        await callback.answer(str(exc) or "دسترسی ندارید.", show_alert=True)
+        await callback.answer(str(exc), show_alert=True)
         return
-    await callback.answer()
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=year.name,
-                callback_data=f"class:year:{year.id}",
+
+    if len(years) == 1:
+        await _clear_flow(state)
+        await state.update_data(
+            context_tenant_id=str(tenant_id),
+            context_school_id=str(school_id),
+            context_academic_year_id=str(years[0].id),
+        )
+        await _start_flow(
+            state,
+            flow_name="class",
+            first_state=StructureWizard.class_name,
+        )
+        await callback.answer()
+        if callback.message is not None:
+            await _render_step(
+                callback.message,
+                state=state,
+                step_name=StructureWizard.class_name.state,
             )
-        ]
+        return
+
+    rows = [
+        [InlineKeyboardButton(text=year.name, callback_data=f"class:year:{year.id}")]
         for year in years
     ]
-    rows.append(
-        [InlineKeyboardButton(text="ایجاد سال تحصیلی", callback_data="year:create")]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="بازگشت به مدرسه", callback_data="school:menu")]
-    )
-    if callback.message is not None:
-        await callback.message.answer(
-            "سال تحصیلی موردنظر برای کلاس جدید را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-        )
+    if not years and await _has_school_permission(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        school_id=school_id,
+        permission="academic_year:create",
+    ):
+        rows.append([InlineKeyboardButton(text="➕ ایجاد سال تحصیلی", callback_data="year:create")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="school:menu")])
 
+    body = (
+        "برای ایجاد کلاس، سال تحصیلی را انتخاب کنید:"
+        if years
+        else "برای این مدرسه هنوز سال تحصیلی ثبت نشده است. ابتدا یک سال تحصیلی بسازید."
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _render_panel(
+            callback.message,
+            body,
+            InlineKeyboardMarkup(inline_keyboard=rows),
+        )
 
 @router.callback_query(F.data.startswith("class:year:"))
 async def class_year_selected_callback(
@@ -1179,11 +1378,58 @@ async def school_name_step(message: Message, state: FSMContext) -> None:
         message,
         state,
         key="school_name",
-        next_state=StructureWizard.school_code,
+        next_state=StructureWizard.school_confirm,
         validator=lambda value: value if 2 <= len(value) <= 180 else None,
         error_message="نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.",
     )
 
+
+@router.message(StructureWizard.year_name)
+async def year_name_step(message: Message, state: FSMContext) -> None:
+    await _accept_field(
+        message,
+        state,
+        key="year_name",
+        next_state=StructureWizard.year_confirm,
+        validator=lambda value: value if 1 <= len(value) <= 64 else None,
+        error_message="نام سال تحصیلی باید بین ۱ تا ۶۴ نویسه باشد.",
+    )
+
+
+@router.message(StructureWizard.subject_name)
+async def subject_name_step(message: Message, state: FSMContext) -> None:
+    await _accept_field(
+        message,
+        state,
+        key="subject_name",
+        next_state=StructureWizard.subject_confirm,
+        validator=lambda value: value if 1 <= len(value) <= 120 else None,
+        error_message="نام درس باید بین ۱ تا ۱۲۰ نویسه باشد.",
+    )
+
+
+@router.message(StructureWizard.class_name)
+async def class_name_step(message: Message, state: FSMContext) -> None:
+    await _accept_field(
+        message,
+        state,
+        key="class_name",
+        next_state=StructureWizard.class_grade,
+        validator=lambda value: value if 1 <= len(value) <= 120 else None,
+        error_message="نام کلاس باید بین ۱ تا ۱۲۰ نویسه باشد.",
+    )
+
+
+@router.message(StructureWizard.class_grade)
+async def class_grade_step(message: Message, state: FSMContext) -> None:
+    await _accept_field(
+        message,
+        state,
+        key="class_grade",
+        next_state=StructureWizard.class_confirm,
+        validator=lambda value: value if 1 <= len(value) <= 48 else None,
+        error_message="پایه/مقطع باید بین ۱ تا ۴۸ نویسه باشد.",
+    )
 
 @router.message(StructureWizard.school_code)
 async def school_code_step(message: Message, state: FSMContext) -> None:
@@ -1293,139 +1539,36 @@ async def class_grade_step(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("structure:confirm:"))
-async def structure_confirm_callback(
-    callback: CallbackQuery,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-    state: FSMContext,
-) -> None:
-    data = await state.get_data()
-    flow_name = data.get("flow_name")
-    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
-    if (
-        flow_name not in _CONFIRM_STATES
-        or await state.get_state() != _CONFIRM_STATES[flow_name]
-        or not token
-        or token != data.get("flow_token")
-    ):
-        await callback.answer(
-            "این دکمه متعلق به فرم قبلی است یا منقضی شده است.",
-            show_alert=True,
-        )
-        return
-
-    try:
-        tenant_id, school_id, year_id = await _context_ids(state)
-        if flow_name in {"year", "subject", "class"} and school_id is None:
-            raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
-
-        if flow_name == "school":
-            entity = await create_school(
-                db,
-                actor_id=principal.user.id,
-                tenant_id=tenant_id,
-                name=data.get("school_name", ""),
-                code=data.get("school_code", ""),
-            )
-            result_text = f"مدرسه ایجاد شد: {entity.name} · {entity.code}"
-            success_school_id = entity.id
-            success_year_id = None
-        elif flow_name == "year":
-            entity = await create_academic_year(
-                db,
-                actor_id=principal.user.id,
-                tenant_id=tenant_id,
-                school_id=school_id,
-                name=data.get("year_name", ""),
-                starts_on=date.fromisoformat(data.get("year_start", "")),
-                ends_on=date.fromisoformat(data.get("year_end", "")),
-            )
-            result_text = f"سال تحصیلی ایجاد شد: {entity.name}"
-            success_school_id = school_id
-            success_year_id = entity.id
-        elif flow_name == "subject":
-            entity = await create_subject(
-                db,
-                actor_id=principal.user.id,
-                tenant_id=tenant_id,
-                school_id=school_id,
-                name=data.get("subject_name", ""),
-                code=data.get("subject_code", ""),
-            )
-            result_text = f"درس ایجاد شد: {entity.name} · {entity.code}"
-            success_school_id = school_id
-            success_year_id = year_id
-        else:
-            if year_id is None:
-                raise ResourceNotFound("سال تحصیلی انتخاب نشده است.")
-            entity = await create_class(
-                db,
-                actor_id=principal.user.id,
-                tenant_id=tenant_id,
-                school_id=school_id,
-                academic_year_id=year_id,
-                name=data.get("class_name", ""),
-                code=data.get("class_code", ""),
-                grade=data.get("class_grade", ""),
-            )
-            result_text = f"کلاس ایجاد شد: {entity.name} · {entity.code}"
-            success_school_id = school_id
-            success_year_id = year_id
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    except ValueError:
-        await callback.answer(
-            "تاریخ یا مقدار ورودی معتبر نیست. فرم را بررسی و دوباره تلاش کنید.",
-            show_alert=True,
-        )
-        return
-
-    await callback.answer("ثبت انجام شد.")
-    await _clear_flow(state)
-    await state.update_data(
-        context_tenant_id=str(tenant_id),
-        context_school_id=str(success_school_id) if success_school_id else None,
-        context_academic_year_id=str(success_year_id) if success_year_id else None,
-    )
-    if callback.message is not None:
-        await callback.message.answer(result_text)
-        if success_school_id is not None:
-            await _show_school_menu(
-                callback.message,
-                db=db,
-                principal=principal,
-                tenant_id=tenant_id,
-                school_id=success_school_id,
-            )
-        else:
-            await _show_tenant_menu(
-                callback.message,
-                db=db,
-                principal=principal,
-                tenant_id=tenant_id,
-            )
-
-
 async def _return_to_context_menu(
     message: Message,
     state: FSMContext,
     db: AsyncSession,
     principal: TelegramPrincipal,
+    notice: str | None = None,
 ) -> None:
     await _clear_flow(state)
     try:
-        tenant_id, school_id, _ = await _context_ids(state)
+        tenant_id, school_id, year_id = await _context_ids(state)
     except ResourceNotFound:
         return
-    if school_id is not None:
+    if school_id is not None and year_id is not None:
+        await _show_year_menu(
+            message,
+            db=db,
+            principal=principal,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            year_id=year_id,
+            notice=notice,
+        )
+    elif school_id is not None:
         await _show_school_menu(
             message,
             db=db,
             principal=principal,
             tenant_id=tenant_id,
             school_id=school_id,
+            notice=notice,
         )
     else:
         await _show_tenant_menu(
@@ -1433,8 +1576,8 @@ async def _return_to_context_menu(
             db=db,
             principal=principal,
             tenant_id=tenant_id,
+            notice=notice,
         )
-
 
 @router.callback_query(F.data.startswith("structure:back:"))
 async def structure_back_callback(
@@ -1461,13 +1604,7 @@ async def structure_back_callback(
         return
     await callback.answer()
     if callback.message is not None:
-        await _return_to_context_menu(
-            callback.message,
-            state,
-            db,
-            principal,
-        )
-
+        await _return_to_context_menu(callback.message, state, db, principal)
 
 @router.callback_query(F.data.startswith("structure:cancel:"))
 async def structure_cancel_callback(
@@ -1479,20 +1616,22 @@ async def structure_cancel_callback(
     data = await state.get_data()
     token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
     if not token or token != data.get("flow_token"):
-        await callback.answer("این دکمه متعلق به فرم قبلی است یا منقضی شده است.", show_alert=True)
+        await callback.answer(
+            "این دکمه متعلق به فرم قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
         return
-    await callback.answer()
+    await callback.answer("عملیات لغو شد.")
     if callback.message is not None:
-        await callback.message.answer("عملیات لغو شد؛ هیچ تغییری ثبت نشد.")
         await _return_to_context_menu(
             callback.message,
             state,
             db,
             principal,
+            notice="❌ عملیات لغو شد؛ هیچ تغییری ثبت نشد.",
         )
     else:
         await _clear_flow(state)
-
 
 @router.message(Command("back"))
 async def structure_back_command(
