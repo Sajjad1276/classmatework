@@ -446,6 +446,7 @@ async def ingest_usage_event(
             event_name=event_name,
             tenant_id=tenant_id,
             actor_id=actor_id,
+            actor_key_hash=actor_key_hash,
             aggregate_type=aggregate_type[:80],
             aggregate_id=aggregate_id,
             attributes=safe_attributes,
