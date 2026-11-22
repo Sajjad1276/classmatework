@@ -11,7 +11,9 @@ from app.application.control_center import (
     create_class_group_handshake,
     get_platform_report,
     ingest_usage_event,
+    get_class_subject_catalog,
     list_school_class_group_directory,
+    set_class_subject_assignment,
 )
 from app.application.errors import AccessDenied
 from app.core.config import Settings
@@ -24,6 +26,7 @@ from app.db.models import (
     RoleBinding,
     RolePermission,
     School,
+    Subject,
     TelegramAccount,
     Tenant,
     TenantMembership,
@@ -39,6 +42,7 @@ async def _setup_group_admin(db):
     permissions = [
         Permission(key="class:group:manage", description="Manage class group"),
         Permission(key="school:read", description="Read class data"),
+        Permission(key="class:subjects:manage", description="Manage class subjects"),
     ]
     db.add_all([tenant, user, role, *permissions])
     await db.flush()
@@ -345,4 +349,90 @@ async def test_integration_authentication_is_closed_by_default_and_compares_secr
         x_classmate_integration_key="shared-secret",
         settings=configured,
     )
+
+@pytest.mark.asyncio
+async def test_class_subject_assignment_is_scoped_to_the_same_school() -> None:
+    from app.application.errors import ResourceNotFound
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as db:
+        user, tenant, class_group = await _setup_group_admin(db)
+        subject = Subject(
+            tenant_id=tenant.id,
+            school_id=class_group.school_id,
+            name="Mathematics",
+            code=f"M-{uuid4().hex[:6]}",
+            status="active",
+        )
+        other_school = School(
+            tenant_id=tenant.id,
+            name="Other School",
+            code=f"OS-{uuid4().hex[:6]}",
+            status="active",
+        )
+        db.add_all([subject, other_school])
+        await db.flush()
+        other_subject = Subject(
+            tenant_id=tenant.id,
+            school_id=other_school.id,
+            name="Physics",
+            code=f"P-{uuid4().hex[:6]}",
+            status="active",
+        )
+        db.add(other_subject)
+        await db.commit()
+
+        initial = await get_class_subject_catalog(
+            db,
+            actor_id=user.id,
+            class_group_id=class_group.id,
+        )
+        assert initial["subject_count"] == 1
+        assert initial["assigned_count"] == 0
+        assert initial["items"][0]["assigned"] is False
+
+        assert await set_class_subject_assignment(
+            db,
+            actor_id=user.id,
+            class_group_id=class_group.id,
+            subject_id=subject.id,
+            assigned=True,
+        )
+        assigned = await get_class_subject_catalog(
+            db,
+            actor_id=user.id,
+            class_group_id=class_group.id,
+        )
+        assert assigned["assigned_count"] == 1
+        assert assigned["items"][0]["assigned"] is True
+
+        assert await set_class_subject_assignment(
+            db,
+            actor_id=user.id,
+            class_group_id=class_group.id,
+            subject_id=subject.id,
+            assigned=False,
+        )
+        removed = await get_class_subject_catalog(
+            db,
+            actor_id=user.id,
+            class_group_id=class_group.id,
+        )
+        assert removed["assigned_count"] == 0
+        assert removed["items"][0]["assigned"] is False
+
+        with pytest.raises(ResourceNotFound):
+            await set_class_subject_assignment(
+                db,
+                actor_id=user.id,
+                class_group_id=class_group.id,
+                subject_id=other_subject.id,
+                assigned=True,
+            )
+
+    await engine.dispose()
 

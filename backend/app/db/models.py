@@ -116,6 +116,7 @@ class ClassGroup(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "school_id", "academic_year_id", "code", name="uq_class_groups_code"),
         UniqueConstraint("tenant_id", "id", name="uq_class_groups_tenant_id"),
+        UniqueConstraint("tenant_id", "school_id", "id", name="uq_class_groups_tenant_school_id"),
         ForeignKeyConstraint(
             ["tenant_id", "school_id"],
             ["schools.tenant_id", "schools.id"],
@@ -263,6 +264,7 @@ class Subject(Base):
     __tablename__ = "subjects"
     __table_args__ = (
         UniqueConstraint("tenant_id", "school_id", "code", name="uq_subjects_school_code"),
+        UniqueConstraint("tenant_id", "school_id", "id", name="uq_subjects_tenant_school_id"),
         ForeignKeyConstraint(
             ["tenant_id", "school_id"],
             ["schools.tenant_id", "schools.id"],
@@ -282,6 +284,53 @@ class Subject(Base):
     code: Mapped[str] = mapped_column(String(48))
     status: Mapped[str] = mapped_column(String(24), default="active", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ClassSubject(Base):
+    __tablename__ = "class_subjects"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_group_id",
+            "subject_id",
+            name="uq_class_subjects_class_subject",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id", "class_group_id"],
+            ["class_groups.tenant_id", "class_groups.school_id", "class_groups.id"],
+            name="fk_class_subjects_tenant_school_class",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id", "subject_id"],
+            ["subjects.tenant_id", "subjects.school_id", "subjects.id"],
+            name="fk_class_subjects_tenant_school_subject",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'inactive')",
+            name="ck_class_subjects_status",
+        ),
+        Index(
+            "ix_class_subjects_tenant_school_status",
+            "tenant_id",
+            "school_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    school_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    class_group_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subject_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    assigned_by_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class User(Base):

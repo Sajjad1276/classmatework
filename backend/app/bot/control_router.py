@@ -20,10 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.control_center import (
     create_class_group_handshake,
+    get_class_subject_catalog,
     get_class_telegram_group,
     get_platform_report,
     list_school_class_group_directory,
     revoke_class_telegram_group,
+    set_class_subject_assignment,
 )
 from app.application.errors import ApplicationError
 from app.db.models import ClassGroup
@@ -442,4 +444,194 @@ async def school_group_directory_callback(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
+
+async def _render_class_subject_panel(
+    callback: CallbackQuery,
+    *,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    class_group_id: UUID,
+    page: int = 1,
+) -> None:
+    catalog = await get_class_subject_catalog(
+        db,
+        actor_id=principal.user.id,
+        class_group_id=class_group_id,
+    )
+    class_group = catalog["class_group"]
+    can_manage = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="class:subjects:manage",
+        tenant_id=class_group.tenant_id,
+        scope_type="class",
+        scope_id=class_group.id,
+    )
+    items = catalog["items"]
+    page_size = 8
+    pages = max(1, (len(items) + page_size - 1) // page_size)
+    page = min(max(page, 1), pages)
+    start = (page - 1) * page_size
+    visible = items[start : start + page_size]
+    choices: dict[str, str] = {}
+
+    lines = [
+        f"╔  📚 درس‌های کلاس {class_group.name}",
+        "║",
+        f"╣  🏫 پایه: {class_group.grade}",
+        f"╣  📖 کل درس‌های مدرسه: {catalog['subject_count']:,}",
+        f"╣  ✅ درس‌های تخصیص‌یافته: {catalog['assigned_count']:,}",
+        f"╣  ➕ درس‌های قابل تخصیص: {catalog['subject_count'] - catalog['assigned_count']:,}",
+        "║",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, item in enumerate(visible, start=1):
+        subject = item["subject"]
+        assigned = item["assigned"]
+        choices[str(index)] = str(subject.id)
+        status_label = "تخصیص‌یافته" if assigned else "تخصیص‌نیافته"
+        lines.append(f"╣  {start + index:02d}. {subject.name[:72]} · {status_label}")
+        if can_manage:
+            action = "🗑 برداشتن" if assigned else "➕ افزودن"
+            callback_data = f"cs:askremove:{index}" if assigned else f"cs:add:{index}"
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{action} · {subject.name[:35]}",
+                        callback_data=callback_data,
+                    )
+                ]
+            )
+
+    if not items:
+        lines.append("╣  هنوز درسی برای این مدرسه ثبت نشده است.")
+    elif not can_manage:
+        lines.append("║")
+        lines.append("╣  این صفحه فقط‌خواندنی است؛ مجوز تخصیص درس ندارید.")
+
+    await state.update_data(
+        context_class_subject_class_id=str(class_group.id),
+        context_class_subject_page=page,
+        context_class_subject_choices=choices,
+    )
+
+    lines.extend(["║", f"╚  صفحهٔ {page} از {pages}"])
+    navigation: list[InlineKeyboardButton] = []
+    if page > 1:
+        navigation.append(
+            InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"cs:page:{page - 1}",
+            )
+        )
+    if page < pages:
+        navigation.append(
+            InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"cs:page:{page + 1}",
+            )
+        )
+    if navigation:
+        rows.append(navigation)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ بازگشت به کلاس",
+                callback_data=f"class:open:{class_group.id}",
+            )
+        ]
+    )
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(F.data.startswith("cs:"))
+async def class_subject_management_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    data = await state.get_data()
+
+    try:
+        if action == "open":
+            class_group_id = UUID(parts[2])
+            page = 1
+        else:
+            class_group_id = UUID(data["context_class_subject_class_id"])
+            page = int(data.get("context_class_subject_page", 1))
+            if action == "page":
+                page = int(parts[2])
+            elif action in {"add", "askremove", "remove"}:
+                subject_id_value = data["context_class_subject_choices"][parts[2]]
+                subject_id = UUID(subject_id_value)
+            else:
+                raise ValueError
+
+        if action == "add":
+            await set_class_subject_assignment(
+                db,
+                actor_id=principal.user.id,
+                class_group_id=class_group_id,
+                subject_id=subject_id,
+                assigned=True,
+            )
+            await callback.answer("درس به کلاس تخصیص یافت.")
+        elif action == "askremove":
+            await callback.answer()
+            if callback.message is not None:
+                await callback.message.edit_text(
+                    "آیا این درس از کلاس برداشته شود؟\n"
+                    "این عمل فقط رابطهٔ درس و کلاس را غیرفعال می‌کند؛ خود درس حذف نمی‌شود.",
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="تأیید برداشتن درس",
+                                    callback_data=f"cs:remove:{parts[2]}",
+                                )
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text="لغو",
+                                    callback_data=f"cs:page:{page}",
+                                )
+                            ],
+                        ]
+                    ),
+                )
+            return
+        elif action == "remove":
+            removed = await set_class_subject_assignment(
+                db,
+                actor_id=principal.user.id,
+                class_group_id=class_group_id,
+                subject_id=subject_id,
+                assigned=False,
+            )
+            await callback.answer(
+                "درس از کلاس برداشته شد." if removed else "این درس قبلاً تخصیص نداشت."
+            )
+        else:
+            await callback.answer()
+    except (KeyError, ValueError, TypeError, ApplicationError) as exc:
+        message = str(exc) if isinstance(exc, ApplicationError) else "اطلاعات صفحه منقضی شده؛ دوباره وارد بخش درس‌های کلاس شوید."
+        await callback.answer(message, show_alert=True)
+        return
+
+    await _render_class_subject_panel(
+        callback,
+        principal=principal,
+        db=db,
+        state=state,
+        class_group_id=class_group_id,
+        page=page,
+    )
 

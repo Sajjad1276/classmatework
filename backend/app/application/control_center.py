@@ -19,6 +19,7 @@ from app.application.errors import (
 from app.db.models import (
     ClassGroup,
     ClassGroupLinkHandshake,
+    ClassSubject,
     ClassTelegramGroup,
     School,
     Subject,
@@ -641,4 +642,153 @@ async def list_school_class_group_directory(
         "pages": pages,
         "items": items,
     }
+
+async def get_class_subject_catalog(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    class_group_id: UUID,
+) -> dict[str, Any]:
+    class_group = (
+        await db.execute(select(ClassGroup).where(ClassGroup.id == class_group_id))
+    ).scalar_one_or_none()
+    if class_group is None:
+        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="school:read",
+        tenant_id=class_group.tenant_id,
+        scope_type="class",
+        scope_id=class_group.id,
+    )
+    subjects_result = await db.execute(
+        select(Subject)
+        .where(
+            Subject.tenant_id == class_group.tenant_id,
+            Subject.school_id == class_group.school_id,
+            Subject.status == "active",
+        )
+        .order_by(Subject.name, Subject.code)
+    )
+    subjects = list(subjects_result.scalars().all())
+    assignment_result = await db.execute(
+        select(ClassSubject.subject_id).where(
+            ClassSubject.tenant_id == class_group.tenant_id,
+            ClassSubject.school_id == class_group.school_id,
+            ClassSubject.class_group_id == class_group.id,
+            ClassSubject.status == "active",
+        )
+    )
+    assigned_ids = set(assignment_result.scalars().all())
+    await record_event(
+        db,
+        event_type="class.subject_catalog.read",
+        actor_id=actor_id,
+        tenant_id=class_group.tenant_id,
+        aggregate_type="class",
+        aggregate_id=class_group.id,
+        event_data={
+            "subject_count": len(subjects),
+            "assigned_count": len(assigned_ids),
+        },
+    )
+    await db.commit()
+    return {
+        "class_group": class_group,
+        "subject_count": len(subjects),
+        "assigned_count": len(assigned_ids),
+        "items": [
+            {"subject": subject, "assigned": subject.id in assigned_ids}
+            for subject in subjects
+        ],
+    }
+
+
+async def set_class_subject_assignment(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    class_group_id: UUID,
+    subject_id: UUID,
+    assigned: bool,
+) -> bool:
+    class_group = (
+        await db.execute(select(ClassGroup).where(ClassGroup.id == class_group_id))
+    ).scalar_one_or_none()
+    if class_group is None:
+        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="class:subjects:manage",
+        tenant_id=class_group.tenant_id,
+        scope_type="class",
+        scope_id=class_group.id,
+    )
+    subject = (
+        await db.execute(
+            select(Subject).where(
+                Subject.id == subject_id,
+                Subject.tenant_id == class_group.tenant_id,
+                Subject.school_id == class_group.school_id,
+                Subject.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if subject is None:
+        raise ResourceNotFound("این درس در مدرسهٔ متعلق به کلاس پیدا نشد.")
+
+    link = (
+        await db.execute(
+            select(ClassSubject).where(
+                ClassSubject.class_group_id == class_group.id,
+                ClassSubject.subject_id == subject.id,
+            )
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(UTC)
+
+    if assigned:
+        if link is not None and link.status == "active":
+            return True
+        if link is None:
+            link = ClassSubject(
+                tenant_id=class_group.tenant_id,
+                school_id=class_group.school_id,
+                class_group_id=class_group.id,
+                subject_id=subject.id,
+                assigned_by_id=actor_id,
+                status="active",
+                assigned_at=now,
+                updated_at=now,
+            )
+            db.add(link)
+        else:
+            link.status = "active"
+            link.assigned_by_id = actor_id
+            link.assigned_at = now
+            link.updated_at = now
+        event_type = "class.subject.assigned"
+    else:
+        if link is None or link.status != "active":
+            return False
+        link.status = "inactive"
+        link.updated_at = now
+        event_type = "class.subject.unassigned"
+
+    await record_event(
+        db,
+        event_type=event_type,
+        actor_id=actor_id,
+        tenant_id=class_group.tenant_id,
+        aggregate_type="class_subject",
+        aggregate_id=link.id,
+        event_data={
+            "class_group_id": str(class_group.id),
+            "subject_id": str(subject.id),
+        },
+    )
+    await db.commit()
+    return assigned
 

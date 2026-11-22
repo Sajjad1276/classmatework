@@ -1165,6 +1165,12 @@ async def class_open_callback(
                 callback_data=f"class:group:{class_item.id}",
             )
         ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="📚 مدیریت درس‌های کلاس",
+            callback_data=f"cs:open:{class_item.id}",
+        )
+    ])
     buttons.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)])
     await callback.answer()
     if callback.message is not None:
