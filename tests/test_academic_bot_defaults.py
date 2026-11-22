@@ -1,7 +1,11 @@
-from datetime import date, timedelta
 import re
+from datetime import date, timedelta
 
-from app.bot.academic_router import _default_academic_year_range, _generated_code, _jalali_to_gregorian
+from app.bot.academic_router import (
+    _default_academic_year_range,
+    _generated_code,
+    _jalali_to_gregorian,
+)
 
 
 def test_jalali_academic_year_defaults_to_gregorian_boundaries() -> None:
