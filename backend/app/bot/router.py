@@ -1209,7 +1209,6 @@ async def tenant_create_callback(
 ) -> None:
     await callback.answer()
     if callback.message is not None:
-        await _hide_root_keyboard(callback.message)
         await _begin_tenant_creation(callback.message, principal, db, state)
 
 
