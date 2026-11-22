@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.academic_router import router as academic_router
+from app.bot.control_router import router as control_router
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
 from app.bot.middleware import (
     DatabaseSessionMiddleware,
@@ -203,6 +204,7 @@ async def main() -> None:
             observer.outer_middleware(TelegramIdentityMiddleware())
 
         dispatcher.include_router(academic_router)
+        dispatcher.include_router(control_router)
         dispatcher.include_router(router)
 
         await bot.set_my_commands(
@@ -221,6 +223,7 @@ async def main() -> None:
                 BotCommand(command="revoke_invite", description="لغو دعوت پذیرفته‌نشده"),
                 BotCommand(command="help", description="راهنمای ربات"),
                 BotCommand(command="status", description="وضعیت سرویس‌ها"),
+                BotCommand(command="reports", description="داشبورد و گزارش‌های سامانه"),
             ]
         )
         await bot.delete_webhook(drop_pending_updates=False)

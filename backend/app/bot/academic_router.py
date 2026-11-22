@@ -1160,7 +1160,8 @@ async def class_open_callback(
                 f"وضعیت: {class_item.status}"
             ),
             InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)]
+                [InlineKeyboardButton(text="📡 مدیریت گروه تلگرام", callback_data=f"class:group:{class_item.id}")],
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)],
             ]),
         )
 

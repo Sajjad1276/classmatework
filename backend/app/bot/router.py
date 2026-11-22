@@ -81,6 +81,7 @@ MAIN_MENU_ACCOUNT = "👤 حساب مدیریتی من"
 MAIN_MENU_TENANTS = "🏫 مدیریت مدارس و کلاس‌ها"
 MAIN_MENU_CREATE_TENANT = "➕ ایجاد مجموعه جدید"
 MAIN_MENU_HELP = "❓ راهنما"
+MAIN_MENU_REPORTS = "📊 داشبورد و گزارش‌ها"
 
 
 async def main_menu(
@@ -109,6 +110,14 @@ async def main_menu(
         scope_id=None,
     )
     now = datetime.now(UTC)
+    can_read_reports = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="platform:reports:read",
+        tenant_id=None,
+        scope_type="platform",
+        scope_id=None,
+    )
     has_active_membership = (
         await db.execute(
             select(TenantMembership.id)
@@ -127,6 +136,8 @@ async def main_menu(
         first_row.append(KeyboardButton(text=MAIN_MENU_TENANTS))
 
     second_row = []
+    if can_read_reports:
+        second_row.append(KeyboardButton(text=MAIN_MENU_REPORTS))
     if can_create_tenants:
         second_row.append(KeyboardButton(text=MAIN_MENU_CREATE_TENANT))
     second_row.append(KeyboardButton(text=MAIN_MENU_HELP))
