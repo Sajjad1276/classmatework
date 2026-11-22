@@ -751,7 +751,7 @@ async def set_class_subject_assignment(
 
     if assigned:
         if link is not None and link.status == "active":
-            return True
+            return False
         if link is None:
             link = ClassSubject(
                 tenant_id=class_group.tenant_id,
@@ -790,5 +790,5 @@ async def set_class_subject_assignment(
         },
     )
     await db.commit()
-    return assigned
+    return True
 
