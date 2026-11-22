@@ -6,6 +6,7 @@ from datetime import date
 from uuid import UUID
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -617,6 +618,10 @@ async def structure_root_callback(
     await state.set_data({})
     await callback.answer()
     if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
         from app.bot.router import main_menu
 
         await callback.message.answer(
