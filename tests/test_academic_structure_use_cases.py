@@ -292,32 +292,33 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
             db, actor_id=owner.id, tenant_id=tenant.id,
             school_id=school.id, class_group_id=class_group.id,
         )
+        assert await list_classes(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        ) == []
 
         assert await archive_academic_year(
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
             academic_year_id=year.id,
         )
+        assert await list_academic_years(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        ) == []
+
         assert await archive_subject(
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
             subject_id=subject.id,
         )
+        assert await list_subjects(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        ) == []
+
         assert await archive_school(
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
         )
         await db.refresh(school)
         assert school.status == "archived"
-
         assert await list_schools(
             db, actor_id=owner.id, tenant_id=tenant.id
-        ) == []
-        assert await list_academic_years(
-            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
-        ) == []
-        assert await list_classes(
-            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
-        ) == []
-        assert await list_subjects(
-            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
         ) == []
 
     await engine.dispose()
