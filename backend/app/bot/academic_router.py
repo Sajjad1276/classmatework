@@ -105,7 +105,7 @@ async def _render_panel(
 
 
 def _generated_code(prefix: str) -> str:
-    return f"{prefix}-{secrets.token_hex(4).upper()}"
+    return f"{prefix}-{secrets.token_hex(8).upper()}"
 
 
 def _ascii_digits(value: str) -> str:
