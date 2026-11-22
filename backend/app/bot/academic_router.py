@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from datetime import date
+from datetime import date, timedelta
 from uuid import UUID
 
 from aiogram import F, Router
@@ -29,13 +29,14 @@ from app.application.tenants import (
     create_class,
     create_school,
     create_subject,
+    list_accessible_tenants,
     list_academic_years,
     list_classes,
     list_schools,
     list_subjects,
     list_tenants,
 )
-from app.db.models import AcademicYear, School, Tenant
+from app.db.models import AcademicYear, ClassGroup, School, Tenant
 from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
@@ -44,20 +45,12 @@ router = Router(name="academic-structure")
 
 class StructureWizard(StatesGroup):
     school_name = State()
-    school_code = State()
     school_confirm = State()
-
     year_name = State()
-    year_start = State()
-    year_end = State()
     year_confirm = State()
-
     subject_name = State()
-    subject_code = State()
     subject_confirm = State()
-
     class_name = State()
-    class_code = State()
     class_grade = State()
     class_confirm = State()
 
@@ -68,39 +61,24 @@ _CONTEXT_KEYS = {
     "context_academic_year_id",
 }
 _FIELD_PROMPTS = {
-    StructureWizard.school_name.state: "نام مدرسه را وارد کنید (۲ تا ۱۸۰ نویسه):",
-    StructureWizard.school_code.state: "کد مدرسه را وارد کنید (حروف انگلیسی، عدد، خط تیره یا زیرخط):",
+    StructureWizard.school_name.state: "نام مدرسه را وارد کنید:",
     StructureWizard.year_name.state: "نام سال تحصیلی را وارد کنید؛ نمونه: ۱۴۰۵-۱۴۰۶",
-    StructureWizard.year_start.state: "تاریخ شروع را به شکل میلادی YYYY-MM-DD وارد کنید؛ نمونه: 2026-03-21",
-    StructureWizard.year_end.state: "تاریخ پایان را به شکل میلادی YYYY-MM-DD وارد کنید؛ نمونه: 2027-03-20",
     StructureWizard.subject_name.state: "نام درس را وارد کنید:",
-    StructureWizard.subject_code.state: "کد درس را وارد کنید:",
-    StructureWizard.class_name.state: "نام کلاس را وارد کنید:",
-    StructureWizard.class_code.state: "کد کلاس را وارد کنید:",
+    StructureWizard.class_name.state: "نام کلاس را وارد کنید؛ نمونه: دهم الف",
     StructureWizard.class_grade.state: "پایه/مقطع کلاس را وارد کنید؛ نمونه: دهم",
 }
 _FIELD_KEYS = {
     StructureWizard.school_name.state: "school_name",
-    StructureWizard.school_code.state: "school_code",
     StructureWizard.year_name.state: "year_name",
-    StructureWizard.year_start.state: "year_start",
-    StructureWizard.year_end.state: "year_end",
     StructureWizard.subject_name.state: "subject_name",
-    StructureWizard.subject_code.state: "subject_code",
     StructureWizard.class_name.state: "class_name",
-    StructureWizard.class_code.state: "class_code",
     StructureWizard.class_grade.state: "class_grade",
 }
 _PREVIOUS = {
-    StructureWizard.school_code.state: StructureWizard.school_name,
-    StructureWizard.school_confirm.state: StructureWizard.school_code,
-    StructureWizard.year_start.state: StructureWizard.year_name,
-    StructureWizard.year_end.state: StructureWizard.year_start,
-    StructureWizard.year_confirm.state: StructureWizard.year_end,
-    StructureWizard.subject_code.state: StructureWizard.subject_name,
-    StructureWizard.subject_confirm.state: StructureWizard.subject_code,
-    StructureWizard.class_code.state: StructureWizard.class_name,
-    StructureWizard.class_grade.state: StructureWizard.class_code,
+    StructureWizard.school_confirm.state: StructureWizard.school_name,
+    StructureWizard.year_confirm.state: StructureWizard.year_name,
+    StructureWizard.subject_confirm.state: StructureWizard.subject_name,
+    StructureWizard.class_grade.state: StructureWizard.class_name,
     StructureWizard.class_confirm.state: StructureWizard.class_grade,
 }
 _CONFIRM_STATES = {
@@ -109,6 +87,72 @@ _CONFIRM_STATES = {
     "subject": StructureWizard.subject_confirm.state,
     "class": StructureWizard.class_confirm.state,
 }
+
+
+async def _render_panel(
+    message: Message,
+    body: str,
+    keyboard: InlineKeyboardMarkup,
+) -> None:
+    """Edit the active bot message instead of stacking a new message for every screen."""
+    if message.from_user is not None and message.from_user.is_bot:
+        try:
+            await message.edit_text(body, reply_markup=keyboard)
+            return
+        except TelegramBadRequest:
+            pass
+    await message.answer(body, reply_markup=keyboard)
+
+
+def _generated_code(prefix: str) -> str:
+    return f"{prefix}-{secrets.token_hex(4).upper()}"
+
+
+def _ascii_digits(value: str) -> str:
+    return value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+
+
+def _jalali_to_gregorian(year: int, month: int, day: int) -> date:
+    """Convert a Jalali date to Gregorian without an extra runtime dependency."""
+    year += 1595
+    days = (
+        -355668
+        + 365 * year
+        + (year // 33) * 8
+        + ((year % 33 + 3) // 4)
+        + day
+    )
+    days += (month - 1) * 31 if month < 7 else 186 + (month - 7) * 30
+    gregorian_year = 400 * (days // 146097)
+    days %= 146097
+    if days > 36524:
+        gregorian_year += 100 * ((days - 1) // 36524)
+        days = (days - 1) % 36524
+        if days >= 365:
+            gregorian_year += days // 365
+            days %= 365
+    gregorian_year += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        gregorian_year += (days - 1) // 365
+        days = (days - 1) % 365
+    return date.fromordinal(date(gregorian_year, 1, 1).toordinal() + days)
+
+
+def _default_academic_year_range(name: str) -> tuple[date, date]:
+    normalized = _ascii_digits(name)
+    match = re.search(
+        r"(?<!\\d)(13\\d{2}|14\\d{2})\\s*[-–/]\\s*(13\\d{2}|14\\d{2})(?!\\d)",
+        normalized,
+    )
+    if match:
+        first_year, second_year = (int(value) for value in match.groups())
+        if second_year == first_year + 1:
+            starts_on = _jalali_to_gregorian(first_year, 1, 1)
+            next_year_start = _jalali_to_gregorian(second_year, 1, 1)
+            return starts_on, next_year_start - timedelta(days=1)
+    starts_on = date.today()
+    return starts_on, starts_on + timedelta(days=364)
 
 
 async def _clear_flow(state: FSMContext) -> None:
@@ -191,26 +235,11 @@ def _tenant_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_list:
-        rows.append(
-            [InlineKeyboardButton(text="فهرست مدارس", callback_data="school:list")]
-        )
+        rows.append([InlineKeyboardButton(text="🏫 مدارس مجموعه", callback_data="school:list")])
     if can_create:
-        rows.append(
-            [InlineKeyboardButton(text="ایجاد مدرسه", callback_data="school:create")]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="انتخاب مجموعه دیگر",
-                callback_data="tenant:switch",
-            )
-        ]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="منوی اصلی", callback_data="structure:root")]
-    )
+        rows.append([InlineKeyboardButton(text="➕ ایجاد مدرسه", callback_data="school:create")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tenant:directory")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
 
 async def _show_tenant_menu(
     message: Message,
@@ -218,6 +247,7 @@ async def _show_tenant_menu(
     db: AsyncSession,
     principal: TelegramPrincipal,
     tenant_id: UUID,
+    notice: str | None = None,
 ) -> None:
     tenant = await db.get(Tenant, tenant_id)
     if tenant is None or tenant.status != "active":
@@ -239,14 +269,14 @@ async def _show_tenant_menu(
         scope_type="tenant",
         scope_id=tenant_id,
     )
-    await message.answer(
-        f"مدیریت مجموعه: {tenant.name}\nشناسه: {tenant.slug}\n\nبخش موردنظر را انتخاب کنید:",
-        reply_markup=_tenant_keyboard(
-            can_list=can_list,
-            can_create=can_create,
-        ),
+    body = (
+        f"🏢 مدیریت مجموعه: {tenant.name}\n"
+        f"شناسه: {tenant.slug}\n\n"
+        "مدیریت مدارس، سال‌های تحصیلی، کلاس‌ها و درس‌ها از این بخش انجام می‌شود."
     )
-
+    if notice:
+        body = f"{notice}\n\n{body}"
+    await _render_panel(message, body, _tenant_keyboard(can_list=can_list, can_create=can_create))
 
 async def _show_school_menu(
     message: Message,
@@ -255,79 +285,54 @@ async def _show_school_menu(
     principal: TelegramPrincipal,
     tenant_id: UUID,
     school_id: UUID,
+    notice: str | None = None,
 ) -> None:
     school = await db.get(School, school_id)
-    if (
-        school is None
-        or school.tenant_id != tenant_id
-        or school.status == "archived"
-    ):
+    if school is None or school.tenant_id != tenant_id or school.status == "archived":
         await message.answer("مدرسه در مجموعه انتخاب‌شده پیدا نشد.")
         return
 
     can_read = await _has_school_permission(
-        db,
-        actor_id=principal.user.id,
-        tenant_id=tenant_id,
-        school_id=school_id,
-        permission="school:read",
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="school:read",
     )
     can_year = await _has_school_permission(
-        db,
-        actor_id=principal.user.id,
-        tenant_id=tenant_id,
-        school_id=school_id,
-        permission="academic_year:create",
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="academic_year:create",
     )
     can_class = await _has_school_permission(
-        db,
-        actor_id=principal.user.id,
-        tenant_id=tenant_id,
-        school_id=school_id,
-        permission="class:create",
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="class:create",
     )
     can_subject = await _has_school_permission(
-        db,
-        actor_id=principal.user.id,
-        tenant_id=tenant_id,
-        school_id=school_id,
-        permission="subject:create",
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="subject:create",
     )
 
     rows: list[list[InlineKeyboardButton]] = []
     if can_read:
-        rows.append(
-            [InlineKeyboardButton(text="فهرست سال‌های تحصیلی", callback_data="year:list")]
-        )
-        rows.append(
-            [InlineKeyboardButton(text="فهرست کلاس‌ها", callback_data="class:list")]
-        )
-        rows.append(
-            [InlineKeyboardButton(text="فهرست درس‌ها", callback_data="subject:list")]
-        )
+        rows.append([
+            InlineKeyboardButton(text="📅 سال‌های تحصیلی", callback_data="year:list"),
+            InlineKeyboardButton(text="🏫 کلاس‌ها", callback_data="class:list"),
+        ])
+        rows.append([InlineKeyboardButton(text="📚 درس‌ها", callback_data="subject:list")])
     if can_year:
-        rows.append(
-            [InlineKeyboardButton(text="ایجاد سال تحصیلی", callback_data="year:create")]
-        )
+        rows.append([InlineKeyboardButton(text="➕ ایجاد سال تحصیلی", callback_data="year:create")])
     if can_class:
-        rows.append(
-            [InlineKeyboardButton(text="ایجاد کلاس", callback_data="class:choose-year")]
-        )
+        rows.append([InlineKeyboardButton(text="➕ ایجاد کلاس", callback_data="class:choose-year")])
     if can_subject:
-        rows.append(
-            [InlineKeyboardButton(text="ایجاد درس", callback_data="subject:create")]
-        )
-    rows.append(
-        [InlineKeyboardButton(text="بازگشت به فهرست مدارس", callback_data="school:list")]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="بازگشت به مجموعه", callback_data="tenant:menu")]
-    )
-    await message.answer(
-        f"مدرسه: {school.name}\nکد: {school.code}\n\nعملیات آموزشی را انتخاب کنید:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+        rows.append([InlineKeyboardButton(text="➕ افزودن درس", callback_data="subject:create")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="school:list")])
 
+    body = (
+        f"🏫 مدرسه: {school.name}\n"
+        f"کد سیستمی: {school.code}\n"
+        f"وضعیت: {school.status}\n\n"
+        "عملیات موردنظر را انتخاب کنید."
+    )
+    if notice:
+        body = f"{notice}\n\n{body}"
+    await _render_panel(message, body, InlineKeyboardMarkup(inline_keyboard=rows))
 
 async def _show_year_menu(
     message: Message,
@@ -337,63 +342,34 @@ async def _show_year_menu(
     tenant_id: UUID,
     school_id: UUID,
     year_id: UUID,
+    notice: str | None = None,
 ) -> None:
     year = await db.get(AcademicYear, year_id)
-    if (
-        year is None
-        or year.tenant_id != tenant_id
-        or year.school_id != school_id
-    ):
+    if year is None or year.tenant_id != tenant_id or year.school_id != school_id:
         await message.answer("سال تحصیلی در مدرسه انتخاب‌شده پیدا نشد.")
         return
     can_read = await _has_school_permission(
-        db,
-        actor_id=principal.user.id,
-        tenant_id=tenant_id,
-        school_id=school_id,
-        permission="school:read",
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="school:read",
     )
     can_create_class = await _has_school_permission(
-        db,
-        actor_id=principal.user.id,
-        tenant_id=tenant_id,
-        school_id=school_id,
-        permission="class:create",
+        db, actor_id=principal.user.id, tenant_id=tenant_id,
+        school_id=school_id, permission="class:create",
     )
     rows: list[list[InlineKeyboardButton]] = []
     if can_read:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="فهرست کلاس‌های این سال",
-                    callback_data="class:list",
-                )
-            ]
-        )
+        rows.append([InlineKeyboardButton(text="👥 کلاس‌های این سال", callback_data="class:list")])
     if can_create_class:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="ایجاد کلاس در این سال",
-                    callback_data="class:create-selected",
-                )
-            ]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="بازگشت به مدرسه",
-                callback_data="school:menu",
-            )
-        ]
+        rows.append([InlineKeyboardButton(text="➕ ایجاد کلاس در این سال", callback_data="class:create-selected")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="year:list")])
+    body = (
+        f"📅 سال تحصیلی: {year.name}\n"
+        f"بازهٔ پیش‌فرض: {year.starts_on.isoformat()} تا {year.ends_on.isoformat()}\n"
+        f"وضعیت: {year.status}"
     )
-    await message.answer(
-        f"سال تحصیلی: {year.name}\n"
-        f"شروع: {year.starts_on.isoformat()}\n"
-        f"پایان: {year.ends_on.isoformat()}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-
+    if notice:
+        body = f"{notice}\n\n{body}"
+    await _render_panel(message, body, InlineKeyboardMarkup(inline_keyboard=rows))
 
 async def _start_flow(
     state: FSMContext,
@@ -414,57 +390,36 @@ async def _start_flow(
 def _flow_keyboard(flow_token: str, *, confirm: bool = False) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if confirm:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="تأیید و ثبت",
-                    callback_data=f"structure:confirm:{flow_token}",
-                )
-            ]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="بازگشت",
-                callback_data=f"structure:back:{flow_token}",
-            ),
-            InlineKeyboardButton(
-                text="لغو عملیات",
-                callback_data=f"structure:cancel:{flow_token}",
-            ),
-        ]
-    )
+        rows.append([InlineKeyboardButton(
+            text="✅ تأیید و ثبت",
+            callback_data=f"structure:confirm:{flow_token}",
+        )])
+    rows.append([InlineKeyboardButton(
+        text="⬅️ بازگشت",
+        callback_data=f"structure:back:{flow_token}",
+    )])
+    rows.append([InlineKeyboardButton(
+        text="❌ لغو عملیات",
+        callback_data=f"structure:cancel:{flow_token}",
+    )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
 
 def _summary(flow_name: str, data: dict) -> str:
     summaries = {
-        "school": [
-            ("نام مدرسه", "school_name"),
-            ("کد مدرسه", "school_code"),
-        ],
-        "year": [
-            ("نام سال تحصیلی", "year_name"),
-            ("تاریخ شروع", "year_start"),
-            ("تاریخ پایان", "year_end"),
-        ],
-        "subject": [
-            ("نام درس", "subject_name"),
-            ("کد درس", "subject_code"),
-        ],
-        "class": [
-            ("نام کلاس", "class_name"),
-            ("کد کلاس", "class_code"),
-            ("پایه/مقطع", "class_grade"),
-            ("شناسه سال تحصیلی", "context_academic_year_id"),
-        ],
+        "school": [("نام مدرسه", "school_name")],
+        "year": [("نام سال تحصیلی", "year_name")],
+        "subject": [("نام درس", "subject_name")],
+        "class": [("نام کلاس", "class_name"), ("پایه/مقطع", "class_grade")],
     }
-    lines = ["پیش‌نمایش عملیات\n"]
+    lines = ["پیش‌نمایش ثبت اطلاعات\n"]
     for label, key in summaries[flow_name]:
         lines.append(f"{label}: {data.get(key, '-')}")
-    lines.append("\nبرای ثبت نهایی تأیید کنید.")
+    if flow_name == "year":
+        starts_on, ends_on = _default_academic_year_range(data.get("year_name", ""))
+        lines.append(f"بازهٔ پیش‌فرض: {starts_on.isoformat()} تا {ends_on.isoformat()}")
+    lines.append("\nکد سیستمی به‌صورت خودکار ساخته می‌شود.")
+    lines.append("برای ثبت نهایی تأیید کنید.")
     return "\n".join(lines)
-
 
 async def _render_step(
     message: Message,
@@ -479,18 +434,39 @@ async def _render_step(
         await message.answer("فرم منقضی شده است. از منو دوباره شروع کنید.")
         return
     if step_name.endswith("_confirm"):
-        flow_name = data.get("flow_name")
-        await message.answer(
-            _summary(flow_name, data),
-            reply_markup=_flow_keyboard(flow_token, confirm=True),
-        )
-        return
-    prompt = _FIELD_PROMPTS.get(step_name)
-    if prompt is None:
-        await message.answer("مرحله فرم شناخته نشد؛ عملیات را لغو کنید.")
-        return
-    await message.answer(prompt, reply_markup=_flow_keyboard(flow_token))
+        body = _summary(data.get("flow_name", ""), data)
+        keyboard = _flow_keyboard(flow_token, confirm=True)
+    else:
+        body = _FIELD_PROMPTS.get(step_name)
+        if body is None:
+            await message.answer("مرحلهٔ فرم شناخته نشد؛ عملیات را لغو کنید.")
+            return
+        keyboard = _flow_keyboard(flow_token)
 
+    prompt_id = data.get("flow_prompt_message_id")
+    chat_id = data.get("flow_chat_id") or message.chat.id
+    if prompt_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=prompt_id,
+                text=body,
+                reply_markup=keyboard,
+            )
+            return
+        except TelegramBadRequest:
+            pass
+    if message.from_user is not None and message.from_user.is_bot:
+        try:
+            sent = await message.edit_text(body, reply_markup=keyboard)
+        except TelegramBadRequest:
+            sent = await message.answer(body, reply_markup=keyboard)
+    else:
+        sent = await message.answer(body, reply_markup=keyboard)
+    await state.update_data(
+        flow_prompt_message_id=sent.message_id,
+        flow_chat_id=sent.chat.id,
+    )
 
 async def _show_context_after_flow(
     message: Message,
