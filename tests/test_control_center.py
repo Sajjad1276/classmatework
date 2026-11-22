@@ -16,6 +16,10 @@ from app.application.control_center import (
     set_class_subject_assignment,
 )
 from app.application.errors import AccessDenied
+from app.bot.control_router import (
+    _decode_subject_callback_id,
+    _encode_subject_callback_id,
+)
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import (
@@ -435,4 +439,14 @@ async def test_class_subject_assignment_is_scoped_to_the_same_school() -> None:
             )
 
     await engine.dispose()
+
+def test_subject_callback_id_is_compact_and_round_trips_without_fsm_state() -> None:
+    class_id = uuid4()
+    subject_id = uuid4()
+    subject_ref = _encode_subject_callback_id(subject_id)
+
+    assert len(subject_ref) == 22
+    assert _decode_subject_callback_id(subject_ref) == subject_id
+    assert len(f"cs:a:{class_id.hex}:{subject_ref}".encode("utf-8")) <= 64
+    assert len(f"cs:r:{class_id.hex}:{subject_ref}".encode("utf-8")) <= 64
 

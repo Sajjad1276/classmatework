@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from html import escape
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -445,12 +447,31 @@ async def school_group_directory_callback(
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
+def _encode_subject_callback_id(subject_id: UUID) -> str:
+    return base64.urlsafe_b64encode(subject_id.bytes).decode("ascii").rstrip("=")
+
+
+def _decode_subject_callback_id(value: str) -> UUID:
+    if len(value) != 22:
+        raise ValueError("شناسه درس معتبر نیست.")
+    try:
+        raw = base64.urlsafe_b64decode(value + "==")
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("شناسه درس معتبر نیست.") from exc
+    if len(raw) != 16:
+        raise ValueError("شناسه درس معتبر نیست.")
+    return UUID(bytes=raw)
+
+
+def _class_callback_id(class_group_id: UUID) -> str:
+    return class_group_id.hex
+
+
 async def _render_class_subject_panel(
     callback: CallbackQuery,
     *,
     principal: TelegramPrincipal,
     db: AsyncSession,
-    state: FSMContext,
     class_group_id: UUID,
     page: int = 1,
 ) -> None:
@@ -474,7 +495,7 @@ async def _render_class_subject_panel(
     page = min(max(page, 1), pages)
     start = (page - 1) * page_size
     visible = items[start : start + page_size]
-    choices: dict[str, str] = {}
+    class_ref = _class_callback_id(class_group.id)
 
     lines = [
         f"╔  📚 درس‌های کلاس {class_group.name}",
@@ -489,17 +510,17 @@ async def _render_class_subject_panel(
     for index, item in enumerate(visible, start=1):
         subject = item["subject"]
         assigned = item["assigned"]
-        choices[str(index)] = str(subject.id)
         status_label = "تخصیص‌یافته" if assigned else "تخصیص‌نیافته"
         lines.append(f"╣  {start + index:02d}. {subject.name[:72]} · {status_label}")
         if can_manage:
+            subject_ref = _encode_subject_callback_id(subject.id)
             action = "🗑 برداشتن" if assigned else "➕ افزودن"
-            callback_data = f"cs:askremove:{index}" if assigned else f"cs:add:{index}"
+            action_key = "d" if assigned else "a"
             rows.append(
                 [
                     InlineKeyboardButton(
                         text=f"{action} · {subject.name[:35]}",
-                        callback_data=callback_data,
+                        callback_data=f"cs:{action_key}:{class_ref}:{subject_ref}",
                     )
                 ]
             )
@@ -510,26 +531,20 @@ async def _render_class_subject_panel(
         lines.append("║")
         lines.append("╣  این صفحه فقط‌خواندنی است؛ مجوز تخصیص درس ندارید.")
 
-    await state.update_data(
-        context_class_subject_class_id=str(class_group.id),
-        context_class_subject_page=page,
-        context_class_subject_choices=choices,
-    )
-
     lines.extend(["║", f"╚  صفحهٔ {page} از {pages}"])
     navigation: list[InlineKeyboardButton] = []
     if page > 1:
         navigation.append(
             InlineKeyboardButton(
                 text="⬅️ صفحه قبل",
-                callback_data=f"cs:page:{page - 1}",
+                callback_data=f"cs:p:{class_ref}:{page - 1}",
             )
         )
     if page < pages:
         navigation.append(
             InlineKeyboardButton(
                 text="صفحه بعد ➡️",
-                callback_data=f"cs:page:{page + 1}",
+                callback_data=f"cs:p:{class_ref}:{page + 1}",
             )
         )
     if navigation:
@@ -554,39 +569,42 @@ async def class_subject_management_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
-    state: FSMContext,
 ) -> None:
     parts = (callback.data or "").split(":")
     action = parts[1] if len(parts) > 1 else ""
-    data = await state.get_data()
 
     try:
-        if action == "open":
-            class_group_id = UUID(parts[2])
+        if action == "o" and len(parts) == 3:
+            class_group_id = UUID(hex=parts[2])
+            page = 1
+        elif action == "p" and len(parts) == 4:
+            class_group_id = UUID(hex=parts[2])
+            page = int(parts[3])
+            if page < 1:
+                raise ValueError
+        elif action in {"a", "d", "r"} and len(parts) == 4:
+            class_group_id = UUID(hex=parts[2])
+            subject_id = _decode_subject_callback_id(parts[3])
             page = 1
         else:
-            class_group_id = UUID(data["context_class_subject_class_id"])
-            page = int(data.get("context_class_subject_page", 1))
-            if action == "page":
-                page = int(parts[2])
-            elif action in {"add", "askremove", "remove"}:
-                subject_id_value = data["context_class_subject_choices"][parts[2]]
-                subject_id = UUID(subject_id_value)
-            else:
-                raise ValueError
+            raise ValueError
 
-        if action == "add":
-            await set_class_subject_assignment(
+        if action == "a":
+            changed = await set_class_subject_assignment(
                 db,
                 actor_id=principal.user.id,
                 class_group_id=class_group_id,
                 subject_id=subject_id,
                 assigned=True,
             )
-            await callback.answer("درس به کلاس تخصیص یافت.")
-        elif action == "askremove":
+            await callback.answer(
+                "درس به کلاس تخصیص یافت." if changed else "این درس از قبل در کلاس بود."
+            )
+        elif action == "d":
             await callback.answer()
             if callback.message is not None:
+                class_ref = _class_callback_id(class_group_id)
+                subject_ref = _encode_subject_callback_id(subject_id)
                 await callback.message.edit_text(
                     "آیا این درس از کلاس برداشته شود؟\n"
                     "این عمل فقط رابطهٔ درس و کلاس را غیرفعال می‌کند؛ خود درس حذف نمی‌شود.",
@@ -595,21 +613,21 @@ async def class_subject_management_callback(
                             [
                                 InlineKeyboardButton(
                                     text="تأیید برداشتن درس",
-                                    callback_data=f"cs:remove:{parts[2]}",
+                                    callback_data=f"cs:r:{class_ref}:{subject_ref}",
                                 )
                             ],
                             [
                                 InlineKeyboardButton(
                                     text="لغو",
-                                    callback_data=f"cs:page:{page}",
+                                    callback_data=f"cs:p:{class_ref}:1",
                                 )
                             ],
                         ]
                     ),
                 )
             return
-        elif action == "remove":
-            removed = await set_class_subject_assignment(
+        elif action == "r":
+            changed = await set_class_subject_assignment(
                 db,
                 actor_id=principal.user.id,
                 class_group_id=class_group_id,
@@ -617,12 +635,16 @@ async def class_subject_management_callback(
                 assigned=False,
             )
             await callback.answer(
-                "درس از کلاس برداشته شد." if removed else "این درس قبلاً تخصیص نداشت."
+                "درس از کلاس برداشته شد." if changed else "این درس قبلاً تخصیص نداشت."
             )
         else:
             await callback.answer()
-    except (KeyError, ValueError, TypeError, ApplicationError) as exc:
-        message = str(exc) if isinstance(exc, ApplicationError) else "اطلاعات صفحه منقضی شده؛ دوباره وارد بخش درس‌های کلاس شوید."
+    except (ValueError, TypeError, ApplicationError) as exc:
+        message = (
+            str(exc)
+            if isinstance(exc, ApplicationError)
+            else "شناسه یا مسیر صفحه معتبر نیست؛ دوباره وارد بخش درس‌های کلاس شوید."
+        )
         await callback.answer(message, show_alert=True)
         return
 
@@ -630,8 +652,6 @@ async def class_subject_management_callback(
         callback,
         principal=principal,
         db=db,
-        state=state,
         class_group_id=class_group_id,
         page=page,
     )
-

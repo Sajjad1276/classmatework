@@ -1168,7 +1168,7 @@ async def class_open_callback(
     buttons.append([
         InlineKeyboardButton(
             text="📚 مدیریت درس‌های کلاس",
-            callback_data=f"cs:open:{class_item.id}",
+            callback_data=f"cs:o:{class_item.id.hex}",
         )
     ])
     buttons.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)])
