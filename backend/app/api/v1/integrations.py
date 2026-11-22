@@ -115,8 +115,10 @@ async def receive_usage_event(
 ) -> dict[str, object]:
     actor_key_hash = None
     if payload.actor_telegram_user_id is not None:
-        hash_secret = settings.classmate_telemetry_hash_key or settings.classmate_integration_token
-        if hash_secret is None:
+        hash_secret = settings.classmate_telemetry_hash_key
+        if hash_secret is None or not hash_secret.get_secret_value().strip():
+            hash_secret = settings.classmate_integration_token
+        if hash_secret is None or not hash_secret.get_secret_value().strip():
             raise HTTPException(status_code=503, detail="Telemetry fingerprint key is not configured.")
         actor_key_hash = hmac.new(
             hash_secret.get_secret_value().encode("utf-8"),

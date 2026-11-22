@@ -25,6 +25,7 @@ from app.application.control_center import (
 )
 from app.application.errors import ApplicationError
 from app.db.models import ClassGroup
+from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="control-center")
@@ -134,6 +135,7 @@ async def _render_group_panel(
     *,
     class_group: ClassGroup,
     connection,
+    can_manage: bool,
 ) -> None:
     rows: list[list[InlineKeyboardButton]] = []
     if connection is None:
@@ -155,23 +157,25 @@ async def _render_group_panel(
             f"وضعیت: {connection.status}\n"
             f"آخرین بررسی: {verified}"
         )
+        if can_manage:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="🔌 قطع اتصال گروه",
+                        callback_data=f"class:group:revoke:{class_group.id}",
+                    )
+                ]
+            )
+
+    if can_manage:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🔌 قطع اتصال گروه",
-                    callback_data=f"class:group:revoke:{class_group.id}",
+                    text="🔗 صدور کد اتصال گروه",
+                    callback_data=f"class:group:code:{class_group.id}",
                 )
             ]
         )
-
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="🔗 صدور کد اتصال گروه",
-                callback_data=f"class:group:code:{class_group.id}",
-            )
-        ]
-    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -206,12 +210,25 @@ async def class_group_panel_callback(
             actor_id=principal.user.id,
             class_group_id=class_id,
         )
+        can_manage = await has_permission(
+            db,
+            user_id=principal.user.id,
+            permission_key="class:group:manage",
+            tenant_id=class_group.tenant_id,
+            scope_type="class",
+            scope_id=class_group.id,
+        )
     except (ValueError, ApplicationError) as exc:
         await callback.answer(str(exc), show_alert=True)
         return
 
     await callback.answer()
-    await _render_group_panel(callback, class_group=class_group, connection=connection)
+    await _render_group_panel(
+        callback,
+        class_group=class_group,
+        connection=connection,
+        can_manage=can_manage,
+    )
 
 
 @router.callback_query(F.data.startswith("class:group:code:"))
@@ -287,6 +304,7 @@ async def class_group_revoke_confirm_callback(
             callback,
             class_group=class_group,
             connection=connection,
+            can_manage=True,
         )
 
 

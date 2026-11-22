@@ -1148,6 +1148,23 @@ async def class_open_callback(
         return
 
     parent_callback = "year:menu" if year_id is not None else "class:list"
+    can_manage_group = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="class:group:manage",
+        tenant_id=class_item.tenant_id,
+        scope_type="class",
+        scope_id=class_item.id,
+    )
+    buttons = []
+    if can_manage_group:
+        buttons.append([
+            InlineKeyboardButton(
+                text="📡 مدیریت گروه تلگرام",
+                callback_data=f"class:group:{class_item.id}",
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)])
     await callback.answer()
     if callback.message is not None:
         await _render_panel(
@@ -1159,10 +1176,7 @@ async def class_open_callback(
                 f"سال تحصیلی: {academic_year.name if academic_year else '-'}\n"
                 f"وضعیت: {class_item.status}"
             ),
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📡 مدیریت گروه تلگرام", callback_data=f"class:group:{class_item.id}")],
-                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=parent_callback)],
-            ]),
+            InlineKeyboardMarkup(inline_keyboard=buttons),
         )
 
 @router.callback_query(F.data == "class:create-selected")
