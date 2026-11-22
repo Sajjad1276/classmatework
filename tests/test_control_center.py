@@ -12,7 +12,9 @@ from app.application.control_center import (
     ingest_usage_event,
     list_school_class_group_directory,
 )
+from app.api.v1.integrations import _require_integration_key
 from app.application.errors import AccessDenied
+from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import (
     AcademicYear,
@@ -236,6 +238,23 @@ async def test_usage_events_are_idempotent_and_report_real_activity() -> None:
         assert stored.attributes["feature"] == "class"
         assert stored.actor_key_hash == "a" * 64
 
+        assert await ingest_usage_event(
+            db,
+            external_event_id=uuid4(),
+            source_service="main-bot",
+            event_name="user.deactivated",
+            actor_telegram_user_id=123456789,
+            actor_key_hash="a" * 64,
+            tenant_id=None,
+            aggregate_type="user",
+            aggregate_id=None,
+            attributes={"action": "deactivated"},
+            occurred_at=now,
+        )
+        inactive_report = await get_platform_report(db, actor_id=user.id)
+        assert inactive_report["active_users"] == 0
+        assert inactive_report["active_users_1h"] == 0
+
     await engine.dispose()
 
 @pytest.mark.asyncio
@@ -302,4 +321,28 @@ async def test_school_group_directory_reports_connected_and_missing_classes_by_p
         assert second_page["items"][0]["connection"] is None
 
     await engine.dispose()
+
+@pytest.mark.asyncio
+async def test_integration_authentication_is_closed_by_default_and_compares_secret() -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as missing:
+        await _require_integration_key(
+            x_classmate_integration_key=None,
+            settings=Settings(),
+        )
+    assert missing.value.status_code == 503
+
+    configured = Settings(classmate_integration_token="shared-secret")
+    with pytest.raises(HTTPException) as invalid:
+        await _require_integration_key(
+            x_classmate_integration_key="wrong-secret",
+            settings=configured,
+        )
+    assert invalid.value.status_code == 401
+
+    await _require_integration_key(
+        x_classmate_integration_key="shared-secret",
+        settings=configured,
+    )
 

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -543,3 +543,102 @@ async def get_platform_report(
     )
     await db.commit()
     return report
+
+async def list_school_class_group_directory(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    school_id: UUID,
+    limit: int = 8,
+    offset: int = 0,
+) -> dict[str, Any]:
+    if not 1 <= limit <= 25 or offset < 0:
+        raise InvalidApplicationInput("بازهٔ صفحه‌بندی فهرست گروه‌ها معتبر نیست.")
+    await _require(
+        db,
+        actor_id=actor_id,
+        permission_key="school:read",
+        tenant_id=tenant_id,
+        scope_type="school",
+        scope_id=school_id,
+    )
+    school = (
+        await db.execute(
+            select(School).where(
+                School.id == school_id,
+                School.tenant_id == tenant_id,
+                School.status != "archived",
+            )
+        )
+    ).scalar_one_or_none()
+    if school is None:
+        raise ResourceNotFound("مدرسه در مجموعه انتخاب‌شده پیدا نشد.")
+
+    class_filter = (
+        ClassGroup.tenant_id == tenant_id,
+        ClassGroup.school_id == school_id,
+    )
+    total = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(ClassGroup).where(*class_filter)
+            )
+        ).scalar_one()
+        or 0
+    )
+    active_link = and_(
+        ClassTelegramGroup.class_group_id == ClassGroup.id,
+        ClassTelegramGroup.status == "active",
+    )
+    connected = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(ClassGroup)
+                .join(ClassTelegramGroup, active_link)
+                .where(*class_filter)
+            )
+        ).scalar_one()
+        or 0
+    )
+    result = await db.execute(
+        select(ClassGroup, ClassTelegramGroup)
+        .outerjoin(ClassTelegramGroup, active_link)
+        .where(*class_filter)
+        .order_by(ClassGroup.name, ClassGroup.grade, ClassGroup.code)
+        .offset(offset)
+        .limit(limit)
+    )
+    items = [
+        {"class_group": class_group, "connection": connection}
+        for class_group, connection in result.all()
+    ]
+    pages = (total + limit - 1) // limit
+    page = offset // limit + 1
+    await record_event(
+        db,
+        event_type="class.telegram_group.directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="class_group_directory",
+        aggregate_id=school_id,
+        event_data={
+            "school_id": str(school_id),
+            "offset": offset,
+            "limit": limit,
+            "returned_count": len(items),
+            "total_classes": total,
+        },
+    )
+    await db.commit()
+    return {
+        "school_name": school.name,
+        "total_classes": total,
+        "connected_classes": connected,
+        "disconnected_classes": max(0, total - connected),
+        "page": page,
+        "pages": pages,
+        "items": items,
+    }
+
