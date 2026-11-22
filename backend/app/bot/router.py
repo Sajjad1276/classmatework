@@ -328,6 +328,10 @@ async def root_menu_callback(
     await state.clear()
     await callback.answer()
     if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
         await callback.message.answer(
             "به منوی اصلی برگشتید.",
             reply_markup=await main_menu(db, principal),
@@ -1433,6 +1437,7 @@ async def account_callback(
 ) -> None:
     await callback.answer()
     if callback.message is not None:
+        await _hide_root_keyboard(callback.message)
         await _show_account_panel(callback.message, principal)
 
 
@@ -1440,6 +1445,7 @@ async def account_callback(
 async def help_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     if callback.message is not None:
+        await _hide_root_keyboard(callback.message)
         await _show_help_panel(callback.message)
 
 
