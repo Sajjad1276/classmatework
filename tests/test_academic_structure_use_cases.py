@@ -203,8 +203,6 @@ async def test_academic_year_use_case_rejects_invalid_date_range() -> None:
 
 @pytest.mark.asyncio
 async def test_structure_edit_and_archive_preserve_history_and_dependencies() -> None:
-    from datetime import date
-
     from app.application.errors import ResourceConflict
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
