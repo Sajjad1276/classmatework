@@ -7,10 +7,10 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -158,7 +158,7 @@ async def main_menu(
 
 async def _hide_root_keyboard(message: Message) -> None:
     """Remove the persistent root keyboard before showing an inline panel."""
-    removal_message = await message.answer("\u2063", reply_markup=ReplyKeyboardRemove())
+    removal_message = await message.answer("·", reply_markup=ReplyKeyboardRemove())
     try:
         await removal_message.delete()
     except TelegramBadRequest:
