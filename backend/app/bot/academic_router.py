@@ -316,6 +316,7 @@ async def _show_school_menu(
             InlineKeyboardButton(text="🏫 کلاس‌ها", callback_data="class:list"),
         ])
         rows.append([InlineKeyboardButton(text="📚 درس‌ها", callback_data="subject:list")])
+        rows.append([InlineKeyboardButton(text="📡 گروه‌های کلاس‌ها", callback_data="school:groups:1")])
     if can_year:
         rows.append([InlineKeyboardButton(text="➕ ایجاد سال تحصیلی", callback_data="year:create")])
     if can_class:

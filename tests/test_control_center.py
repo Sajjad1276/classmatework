@@ -10,6 +10,7 @@ from app.application.control_center import (
     create_class_group_handshake,
     get_platform_report,
     ingest_usage_event,
+    list_school_class_group_directory,
 )
 from app.application.errors import AccessDenied
 from app.db.base import Base
@@ -236,3 +237,69 @@ async def test_usage_events_are_idempotent_and_report_real_activity() -> None:
         assert stored.actor_key_hash == "a" * 64
 
     await engine.dispose()
+
+@pytest.mark.asyncio
+async def test_school_group_directory_reports_connected_and_missing_classes_by_page() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as db:
+        user, tenant, class_group = await _setup_group_admin(db)
+        second_class = ClassGroup(
+            tenant_id=tenant.id,
+            school_id=class_group.school_id,
+            academic_year_id=class_group.academic_year_id,
+            name="Class B",
+            code=f"B-{uuid4().hex[:6]}",
+            grade="11",
+            status="active",
+        )
+        db.add(second_class)
+        await db.commit()
+
+        code, _, _ = await create_class_group_handshake(
+            db,
+            actor_id=user.id,
+            class_group_id=class_group.id,
+        )
+        await complete_class_group_handshake(
+            db,
+            token=code,
+            telegram_chat_id=-100223344,
+            chat_title="Class A Group",
+            chat_username=None,
+            chat_type="supergroup",
+            actor_telegram_user_id=987654321,
+            integration_bot_id=900000001,
+            bot_is_admin=True,
+        )
+
+        first_page = await list_school_class_group_directory(
+            db,
+            actor_id=user.id,
+            tenant_id=tenant.id,
+            school_id=class_group.school_id,
+            limit=1,
+            offset=0,
+        )
+        second_page = await list_school_class_group_directory(
+            db,
+            actor_id=user.id,
+            tenant_id=tenant.id,
+            school_id=class_group.school_id,
+            limit=1,
+            offset=1,
+        )
+
+        assert first_page["total_classes"] == 2
+        assert first_page["connected_classes"] == 1
+        assert first_page["disconnected_classes"] == 1
+        assert first_page["pages"] == 2
+        assert first_page["items"][0]["connection"].chat_title == "Class A Group"
+        assert second_page["items"][0]["class_group"].name == "Class B"
+        assert second_page["items"][0]["connection"] is None
+
+    await engine.dispose()
+

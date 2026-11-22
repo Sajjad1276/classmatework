@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -21,6 +22,7 @@ from app.application.control_center import (
     create_class_group_handshake,
     get_class_telegram_group,
     get_platform_report,
+    list_school_class_group_directory,
     revoke_class_telegram_group,
 )
 from app.application.errors import ApplicationError
@@ -332,3 +334,112 @@ async def class_group_revoke_prompt_callback(callback: CallbackQuery) -> None:
                 ]
             ),
         )
+
+@router.callback_query(F.data.regexp(r"^school:groups(?::[0-9]+)?$"))
+async def school_group_directory_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    try:
+        tenant_id = UUID(data["context_tenant_id"])
+        school_id = UUID(data["context_school_id"])
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
+        if page < 1:
+            raise ValueError
+        directory = await list_school_class_group_directory(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            limit=8,
+            offset=(page - 1) * 8,
+        )
+    except (KeyError, TypeError, ValueError):
+        await callback.answer(
+            "مدرسه یا شماره صفحه معتبر نیست؛ دوباره مدرسه را انتخاب کنید.",
+            show_alert=True,
+        )
+        return
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    if directory["pages"] and page > directory["pages"]:
+        page = directory["pages"]
+        directory = await list_school_class_group_directory(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            school_id=school_id,
+            limit=8,
+            offset=(page - 1) * 8,
+        )
+    await callback.answer()
+
+    lines = [
+        "╔  📡 مدیریت گروه‌های کلاس",
+        "║",
+        f"╣  🏫 مدرسه: {directory['school_name']}",
+        f"╣  👥 تعداد کلاس‌ها: {directory['total_classes']:,}",
+        f"╣  🔗 گروه‌های متصل: {directory['connected_classes']:,}",
+        f"╣  ⚠️ کلاس‌های بدون گروه: {directory['disconnected_classes']:,}",
+        "║",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    if not directory["items"]:
+        lines.append("╣  هنوز کلاسی برای این مدرسه ثبت نشده است.")
+    else:
+        for index, item in enumerate(directory["items"], start=(page - 1) * 8 + 1):
+            class_group = item["class_group"]
+            connection = item["connection"]
+            if connection is None:
+                lines.append(
+                    f"╣  {index:02d}. {class_group.name[:72]} · پایه {class_group.grade[:24]} · بدون گروه"
+                )
+                label = f"⚠️ {class_group.name[:42]} · بدون گروه"
+            else:
+                lines.append(
+                    f"╣  {index:02d}. {class_group.name[:72]} · پایه {class_group.grade[:24]}"
+                )
+                lines.append(f"║      🔗 {connection.chat_title[:72]}")
+                label = f"🔗 {class_group.name[:42]} · متصل"
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=label[:60],
+                        callback_data=f"class:group:{class_group.id}",
+                    )
+                ]
+            )
+
+    lines.extend(["║", f"╚  صفحهٔ {page} از {max(1, directory['pages'])}"])
+    navigation: list[InlineKeyboardButton] = []
+    if page > 1:
+        navigation.append(
+            InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"school:groups:{page - 1}",
+            )
+        )
+    if page < directory["pages"]:
+        navigation.append(
+            InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"school:groups:{page + 1}",
+            )
+        )
+    if navigation:
+        rows.append(navigation)
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ بازگشت به مدرسه", callback_data="school:menu")]
+    )
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+

@@ -498,8 +498,15 @@ async def get_platform_report(
 
     async def active_users_since(delta: timedelta) -> int:
         return await count(
-            select(func.count(func.distinct(UsageEvent.actor_key_hash))).where(
+            select(func.count(func.distinct(UsageEvent.actor_key_hash)))
+            .select_from(UsageEvent)
+            .join(
+                UsageIdentity,
+                UsageIdentity.actor_key_hash == UsageEvent.actor_key_hash,
+            )
+            .where(
                 UsageEvent.actor_key_hash.is_not(None),
+                UsageIdentity.status == "active",
                 UsageEvent.occurred_at >= now - delta,
             )
         )
