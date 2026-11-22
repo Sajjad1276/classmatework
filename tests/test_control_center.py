@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.v1.integrations import _require_integration_key
 from app.application.control_center import (
     complete_class_group_handshake,
     create_class_group_handshake,
@@ -12,7 +13,6 @@ from app.application.control_center import (
     ingest_usage_event,
     list_school_class_group_directory,
 )
-from app.api.v1.integrations import _require_integration_key
 from app.application.errors import AccessDenied
 from app.core.config import Settings
 from app.db.base import Base
