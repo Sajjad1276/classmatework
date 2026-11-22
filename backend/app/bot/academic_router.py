@@ -6,8 +6,8 @@ from datetime import date
 from uuid import UUID
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.dispatcher.event.bases import UNHANDLED
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
