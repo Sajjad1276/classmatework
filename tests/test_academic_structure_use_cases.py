@@ -328,6 +328,13 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
         )
         assert [item.id for item in remaining_subjects] == [manually_removed_subject.id]
+        assert await archive_subject(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
+            subject_id=manually_removed_subject.id,
+        )
+        assert await list_subjects(
+            db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
+        ) == []
 
         assert await archive_school(
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
@@ -380,6 +387,12 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
         await db.refresh(manually_inactive_assignment)
         assert class_group.status == "active"
         assert assignment.status == "active"
+        assert manually_inactive_assignment.status == "inactive"
+        assert await restore_subject(
+            db, actor_id=owner.id, tenant_id=tenant.id,
+            school_id=school.id, subject_id=manually_removed_subject.id,
+        )
+        await db.refresh(manually_inactive_assignment)
         assert manually_inactive_assignment.status == "inactive"
         # The bot was not silently re-added to the Telegram group.
         assert group_connection.status == "revoked"
