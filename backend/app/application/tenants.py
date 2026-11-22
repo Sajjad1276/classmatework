@@ -102,6 +102,7 @@ _TENANT_ROLE_TEMPLATES = {
             "academic_year:create",
             "class:create",
             "subject:create",
+            "class:group:manage",
             "membership:read",
             "membership:invite",
             "membership:manage",
