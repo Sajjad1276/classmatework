@@ -324,9 +324,10 @@ async def test_structure_edit_and_archive_preserve_history_and_dependencies() ->
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
             subject_id=subject.id,
         )
-        assert await list_subjects(
+        remaining_subjects = await list_subjects(
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id
-        ) == []
+        )
+        assert [item.id for item in remaining_subjects] == [manually_removed_subject.id]
 
         assert await archive_school(
             db, actor_id=owner.id, tenant_id=tenant.id, school_id=school.id,
