@@ -34,12 +34,6 @@ from app.application.tenant_access import (
     preview_tenant_member_reactivation,
     reactivate_tenant_member,
 )
-from app.modules.identity.pairing import (
-    PairingNotAllowed,
-    PairingRejected,
-    create_admin_pairing,
-    revoke_admin_pairing,
-)
 from app.application.tenants import (
     archive_academic_year,
     archive_class,
@@ -68,6 +62,12 @@ from app.application.tenants import (
 )
 from app.db.models import AcademicYear, ClassGroup, School, Subject, Tenant
 from app.modules.access.policy import has_permission
+from app.modules.identity.pairing import (
+    PairingNotAllowed,
+    PairingRejected,
+    create_admin_pairing,
+    revoke_admin_pairing,
+)
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="academic-structure")
