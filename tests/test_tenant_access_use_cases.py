@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.application.errors import AccessDenied, InvalidApplicationInput, ResourceConflict
 from app.application.tenant_access import (
     create_tenant_role,
+    list_assignable_tenant_permissions,
     list_admin_invitations,
     list_tenant_members,
     list_tenant_members_page,
@@ -208,6 +209,29 @@ async def test_tenant_manager_cannot_create_role_with_permission_they_do_not_hol
                 )
             )
         ).scalar_one_or_none() is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_assignable_permission_catalog_is_scoped_to_actor_and_tenant() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, _ = await _seed_manager_and_member(db)
+        permissions = await list_assignable_tenant_permissions(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+        )
+
+        assert set(permissions) == {
+            "role:manage",
+            "membership:read",
+            "membership:invite",
+            "membership:manage",
+            "school:read",
+            "class:create",
+        }
+        assert not any(key.startswith("platform:") for key in permissions)
     await engine.dispose()
 
 

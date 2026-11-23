@@ -24,6 +24,11 @@ from app.application.errors import (
     ApplicationError,
     ResourceNotFound,
 )
+from app.application.tenant_access import (
+    create_tenant_role,
+    list_assignable_tenant_permissions,
+    list_tenant_roles,
+)
 from app.application.tenants import (
     archive_academic_year,
     archive_class,
@@ -55,6 +60,13 @@ from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="academic-structure")
+
+
+class TenantRoleWizard(StatesGroup):
+    key = State()
+    name = State()
+    permissions = State()
+    confirm = State()
 
 
 class StructureWizard(StatesGroup):
@@ -254,6 +266,7 @@ def _tenant_keyboard(
     can_create: bool,
     can_archive: bool,
     can_read_members: bool,
+    can_manage_roles: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_read_members:
@@ -262,6 +275,15 @@ def _tenant_keyboard(
                 InlineKeyboardButton(
                     text="👥 مدیریت اعضای مجموعه",
                     callback_data=f"member:directory:{tenant_id}",
+                )
+            ]
+        )
+    if can_manage_roles:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🛡 نقش‌ها و دسترسی‌ها",
+                    callback_data="role:directory",
                 )
             ]
         )
@@ -318,6 +340,14 @@ async def _show_tenant_menu(
         scope_type="tenant",
         scope_id=tenant_id,
     )
+    can_manage_roles = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="role:manage",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    )
     body = (
         f"🏢 مدیریت مجموعه: {tenant.name}\n"
         f"شناسه: {tenant.slug}\n\n"
@@ -334,8 +364,460 @@ async def _show_tenant_menu(
             can_create=can_create,
             can_archive=can_archive,
             can_read_members=can_read_members,
+            can_manage_roles=can_manage_roles,
         ),
     )
+
+async def _show_role_directory(
+    message: Message,
+    *,
+    db: AsyncSession,
+    principal: TelegramPrincipal,
+    tenant_id: UUID,
+    notice: str | None = None,
+) -> None:
+    roles = await list_tenant_roles(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        limit=50,
+    )
+    lines = ["🛡 نقش‌ها و دسترسی‌های مجموعه", ""]
+    if not roles:
+        lines.append("هنوز نقش اختصاصی برای این مجموعه تعریف نشده است.")
+    else:
+        for role in roles[:12]:
+            permissions = [
+                f"{'−' if effect == 'deny' else '+'}{key}"
+                for key, effect in role.permissions
+            ]
+            permission_text = "، ".join(permissions[:8]) or "بدون مجوز"
+            if len(permissions) > 8:
+                permission_text += f" و {len(permissions) - 8} مورد دیگر"
+            lines.extend(
+                [
+                    f"• {role.name} ({role.key})",
+                    f"  دسترسی‌ها: {permission_text}",
+                    "",
+                ]
+            )
+        if len(roles) > 12:
+            lines.append(f"۱۲ نقش از {len(roles)} نقش نمایش داده شد.")
+    if notice:
+        lines.insert(0, notice)
+        lines.insert(1, "")
+
+    await _render_panel(
+        message,
+        "\n".join(lines).strip(),
+        InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="➕ ساخت نقش جدید", callback_data="role:create")],
+                [InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data="tenant:menu")],
+            ]
+        ),
+    )
+
+
+def _role_cancel_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ لغو و بازگشت", callback_data=f"role:cancel:{token}")]
+        ]
+    )
+
+
+async def _show_role_permission_picker(
+    message: Message,
+    state: FSMContext,
+    *,
+    page: int = 0,
+) -> None:
+    data = await state.get_data()
+    token = data.get("role_flow_token", "")
+    available = data.get("role_available_permissions", [])
+    selected = set(data.get("role_selected_permissions", []))
+    if not token or not available:
+        await state.clear()
+        await message.answer("فهرست مجوزها منقضی شده است؛ دوباره وارد بخش نقش‌ها شوید.")
+        return
+
+    page_size = 8
+    total_pages = max(1, (len(available) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    end = min(start + page_size, len(available))
+    rows: list[list[InlineKeyboardButton]] = []
+    for index in range(start, end):
+        key = available[index]
+        marker = "✅" if key in selected else "▫️"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{marker} {key}",
+                    callback_data=f"role:toggle:{token}:{index}:{page}",
+                )
+            ]
+        )
+
+    if total_pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 0:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ قبلی",
+                    callback_data=f"role:page:{token}:{page - 1}",
+                )
+            )
+        if page < total_pages - 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="بعدی ➡️",
+                    callback_data=f"role:page:{token}:{page + 1}",
+                )
+            )
+        if navigation:
+            rows.append(navigation)
+
+    if selected:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"ادامه · {len(selected)} مجوز انتخاب‌شده",
+                    callback_data=f"role:review:{token}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ لغو و بازگشت", callback_data=f"role:cancel:{token}")]
+    )
+    body = (
+        "انتخاب مجوزهای نقش\n\n"
+        f"شناسه: {data.get('role_key')}\n"
+        f"نام: {data.get('role_name')}\n"
+        f"انتخاب‌شده: {len(selected)} از ۲۰\n"
+        f"صفحه {page + 1} از {total_pages}\n\n"
+        "برای فعال/غیرفعال کردن هر مجوز روی آن بزنید."
+    )
+    await _render_panel(
+        message,
+        body,
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await state.update_data(role_permissions_page=page)
+
+
+@router.callback_query(F.data == "role:directory")
+async def role_directory_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        if callback.message is not None:
+            await _show_role_directory(
+                callback.message,
+                db=db,
+                principal=principal,
+                tenant_id=tenant_id,
+            )
+    except (ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "مجوز مدیریت نقش‌ها را ندارید.", show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(F.data == "role:create")
+async def role_create_start_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        available = await list_assignable_tenant_permissions(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+        )
+    except (ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "امکان ساخت نقش را ندارید.", show_alert=True)
+        return
+    if not available:
+        await callback.answer("هیچ مجوز قابل واگذاری در دسترس شما نیست.", show_alert=True)
+        return
+
+    await _clear_flow(state)
+    token = secrets.token_urlsafe(6)
+    await state.update_data(
+        role_flow_token=token,
+        role_tenant_id=str(tenant_id),
+        role_available_permissions=list(available),
+        role_selected_permissions=[],
+        role_permissions_page=0,
+    )
+    await state.set_state(TenantRoleWizard.key)
+    await callback.answer()
+    if callback.message is not None:
+        await _render_panel(
+            callback.message,
+            "ساخت نقش جدید\n\n"
+            "ابتدا شناسه کوتاه نقش را وارد کنید؛ فقط حروف انگلیسی کوچک، عدد و زیرخط. "
+            "نمونه: teacher_assistant",
+            _role_cancel_keyboard(token),
+        )
+
+
+@router.message(TenantRoleWizard.key, F.text)
+async def tenant_role_key_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    token = data.get("role_flow_token")
+    if not token:
+        await state.clear()
+        await message.answer("فرم ساخت نقش منقضی شده است.")
+        return
+
+    key = (message.text or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", key):
+        await message.answer("شناسه باید با حرف انگلیسی کوچک شروع شود و ۲ تا ۶۴ نویسه باشد.")
+        return
+    await state.update_data(role_key=key)
+    await state.set_state(TenantRoleWizard.name)
+    await message.answer(
+        "نام نمایشی نقش را وارد کنید (۲ تا ۱۲۰ نویسه):",
+        reply_markup=_role_cancel_keyboard(token),
+    )
+
+
+@router.message(TenantRoleWizard.name, F.text)
+async def tenant_role_name_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    token = data.get("role_flow_token")
+    if not token:
+        await state.clear()
+        await message.answer("فرم ساخت نقش منقضی شده است.")
+        return
+
+    name = (message.text or "").strip()
+    if not 2 <= len(name) <= 120:
+        await message.answer("نام نقش باید بین ۲ تا ۱۲۰ نویسه باشد.")
+        return
+    await state.update_data(role_name=name)
+    await state.set_state(TenantRoleWizard.permissions)
+    await _show_role_permission_picker(message, state, page=0)
+
+
+@router.callback_query(F.data.startswith("role:toggle:"))
+async def role_permission_toggle_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[2] if len(parts) == 5 else ""
+    if (
+        await state.get_state() != TenantRoleWizard.permissions.state
+        or not token
+        or token != data.get("role_flow_token")
+    ):
+        await callback.answer("این فرم دیگر فعال نیست.", show_alert=True)
+        return
+    try:
+        index = int(parts[3])
+        page = int(parts[4])
+        available = data.get("role_available_permissions", [])
+        if not 0 <= index < len(available):
+            raise ValueError
+    except (ValueError, IndexError):
+        await callback.answer("گزینه انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+
+    selected = set(data.get("role_selected_permissions", []))
+    key = available[index]
+    if key in selected:
+        selected.remove(key)
+    elif len(selected) >= 20:
+        await callback.answer("حداکثر ۲۰ مجوز برای هر نقش قابل انتخاب است.", show_alert=True)
+        return
+    else:
+        selected.add(key)
+
+    await state.update_data(role_selected_permissions=sorted(selected))
+    await callback.answer()
+    if callback.message is not None:
+        await _show_role_permission_picker(callback.message, state, page=page)
+
+
+@router.callback_query(F.data.startswith("role:page:"))
+async def role_permission_page_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[2] if len(parts) == 4 else ""
+    if (
+        await state.get_state() != TenantRoleWizard.permissions.state
+        or not token
+        or token != data.get("role_flow_token")
+    ):
+        await callback.answer("این فرم دیگر فعال نیست.", show_alert=True)
+        return
+    try:
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("شماره صفحه معتبر نیست.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await _show_role_permission_picker(callback.message, state, page=page)
+
+
+@router.callback_query(F.data.startswith("role:review:"))
+async def role_review_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    selected = data.get("role_selected_permissions", [])
+    if (
+        await state.get_state() != TenantRoleWizard.permissions.state
+        or not token
+        or token != data.get("role_flow_token")
+        or not 1 <= len(selected) <= 20
+    ):
+        await callback.answer("ابتدا بین ۱ تا ۲۰ مجوز انتخاب کنید.", show_alert=True)
+        return
+
+    await state.set_state(TenantRoleWizard.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        body = (
+            "پیش‌نمایش ساخت نقش\n\n"
+            f"شناسه: {data.get('role_key')}\n"
+            f"نام: {data.get('role_name')}\n"
+            f"تعداد مجوزها: {len(selected)}\n\n"
+            + "\n".join(f"• {key}" for key in selected)
+            + "\n\nاین نقش فقط در همین مجموعه قابل واگذاری است."
+        )
+        await _render_panel(
+            callback.message,
+            body,
+            InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ ساخت نقش", callback_data=f"role:confirm:{token}")],
+                    [InlineKeyboardButton(text="⬅️ تغییر مجوزها", callback_data=f"role:back:{token}")],
+                    [InlineKeyboardButton(text="لغو", callback_data=f"role:cancel:{token}")],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("role:back:"))
+async def role_permission_back_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    if (
+        await state.get_state() != TenantRoleWizard.confirm.state
+        or not token
+        or token != data.get("role_flow_token")
+    ):
+        await callback.answer("این فرم دیگر فعال نیست.", show_alert=True)
+        return
+    await state.set_state(TenantRoleWizard.permissions)
+    await callback.answer()
+    if callback.message is not None:
+        await _show_role_permission_picker(
+            callback.message,
+            state,
+            page=int(data.get("role_permissions_page", 0)),
+        )
+
+
+@router.callback_query(F.data.startswith("role:confirm:"))
+async def role_create_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    if (
+        await state.get_state() != TenantRoleWizard.confirm.state
+        or not token
+        or token != data.get("role_flow_token")
+    ):
+        await callback.answer("این تأیید متعلق به فرم قبلی است یا منقضی شده است.", show_alert=True)
+        return
+
+    try:
+        tenant_id = UUID(data["role_tenant_id"])
+        role = await create_tenant_role(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            key=data.get("role_key", ""),
+            name=data.get("role_name", ""),
+            permission_keys=tuple(data.get("role_selected_permissions", [])),
+        )
+    except AccessDenied:
+        await _clear_flow(state)
+        await callback.answer("مجوز واگذاری یکی از دسترسی‌های انتخاب‌شده را ندارید.", show_alert=True)
+        return
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await _clear_flow(state)
+        await callback.answer(str(exc) or "ساخت نقش انجام نشد.", show_alert=True)
+        return
+
+    await _clear_flow(state)
+    await callback.answer("نقش ایجاد شد.")
+    if callback.message is not None:
+        await _show_role_directory(
+            callback.message,
+            db=db,
+            principal=principal,
+            tenant_id=tenant_id,
+            notice=f"✅ نقش «{role.name}» ایجاد شد.",
+        )
+
+
+@router.callback_query(F.data.startswith("role:cancel:"))
+async def role_create_cancel_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    if not token or token != data.get("role_flow_token"):
+        await callback.answer("این دکمه متعلق به فرم قبلی یا منقضی شده است.", show_alert=True)
+        return
+    try:
+        tenant_id = UUID(data["role_tenant_id"])
+    except (ValueError, KeyError):
+        await callback.answer("زمینه مجموعه منقضی شده است؛ دوباره انتخاب کنید.", show_alert=True)
+        return
+
+    await _clear_flow(state)
+    await callback.answer("ساخت نقش لغو شد.")
+    if callback.message is not None:
+        await _show_role_directory(
+            callback.message,
+            db=db,
+            principal=principal,
+            tenant_id=tenant_id,
+            notice="ساخت نقش لغو شد؛ تغییری ثبت نشد.",
+        )
+
 
 async def _show_school_menu(
     message: Message,

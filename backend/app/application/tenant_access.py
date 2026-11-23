@@ -114,6 +114,55 @@ async def _build_role_directory(
     ]
 
 
+async def list_assignable_tenant_permissions(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 200,
+) -> tuple[str, ...]:
+    """Return tenant-scoped permissions the actor can safely delegate."""
+    if not 1 <= limit <= 200:
+        raise InvalidApplicationInput("Permission catalog limit must be between 1 and 200.")
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    permission_keys = (
+        await db.execute(
+            select(Permission.key)
+            .where(~Permission.key.startswith("platform:"))
+            .order_by(Permission.key)
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    assignable: list[str] = []
+    for permission_key in permission_keys:
+        if await has_permission(
+            db,
+            user_id=actor_id,
+            permission_key=permission_key,
+            tenant_id=tenant_id,
+            scope_type="tenant",
+            scope_id=tenant_id,
+        ):
+            assignable.append(permission_key)
+
+    await record_event(
+        db,
+        event_type="role.permission_catalog.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="role_permission_catalog",
+        event_data={"returned_count": len(assignable), "limit": limit},
+    )
+    await db.commit()
+    return tuple(assignable)
+
+
 async def list_tenant_roles(
     db: AsyncSession,
     *,
@@ -218,6 +267,8 @@ async def create_tenant_role(
         raise InvalidApplicationInput("Choose between 1 and 20 permissions.")
     if any(not item or len(item) > 128 for item in normalized_permissions):
         raise InvalidApplicationInput("One or more permission keys are invalid.")
+    if any(item.startswith("platform:") for item in normalized_permissions):
+        raise AccessDenied
 
     existing = (
         await db.execute(
