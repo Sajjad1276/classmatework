@@ -26,8 +26,19 @@ from app.application.errors import (
 )
 from app.application.tenant_access import (
     create_tenant_role,
+    list_admin_invitations,
     list_assignable_tenant_permissions,
+    list_assignable_tenant_roles,
+    list_suspended_tenant_members,
     list_tenant_roles,
+    preview_tenant_member_reactivation,
+    reactivate_tenant_member,
+)
+from app.modules.identity.pairing import (
+    PairingNotAllowed,
+    PairingRejected,
+    create_admin_pairing,
+    revoke_admin_pairing,
 )
 from app.application.tenants import (
     archive_academic_year,
@@ -66,6 +77,19 @@ class TenantRoleWizard(StatesGroup):
     key = State()
     name = State()
     permissions = State()
+    confirm = State()
+
+
+class TenantInviteWizard(StatesGroup):
+    telegram_id = State()
+    display_name = State()
+    role = State()
+    confirm = State()
+    revoke_confirm = State()
+
+
+class TenantMemberRestoreWizard(StatesGroup):
+    reason = State()
     confirm = State()
 
 
@@ -267,6 +291,8 @@ def _tenant_keyboard(
     can_archive: bool,
     can_read_members: bool,
     can_manage_roles: bool,
+    can_invite_members: bool,
+    can_reactivate_members: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_read_members:
@@ -286,6 +312,17 @@ def _tenant_keyboard(
                     callback_data="role:directory",
                 )
             ]
+        )
+    if can_invite_members:
+        rows.append(
+            [InlineKeyboardButton(text="✉️ دعوت عضو یا مدیر", callback_data="tenant:invite:create")]
+        )
+        rows.append(
+            [InlineKeyboardButton(text="📨 دعوت‌های در انتظار", callback_data="tenant:invite:list")]
+        )
+    if can_reactivate_members:
+        rows.append(
+            [InlineKeyboardButton(text="♻️ اعضای تعلیق‌شده", callback_data="tenant:member:restore:list")]
         )
     if can_list:
         rows.append([InlineKeyboardButton(text="🏫 مدارس مجموعه", callback_data="school:list")])
@@ -348,6 +385,22 @@ async def _show_tenant_menu(
         scope_type="tenant",
         scope_id=tenant_id,
     )
+    can_invite_members = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="membership:invite",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    ) and can_manage_roles
+    can_reactivate_members = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="membership:manage",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    ) and can_manage_roles
     body = (
         f"🏢 مدیریت مجموعه: {tenant.name}\n"
         f"شناسه: {tenant.slug}\n\n"
@@ -365,6 +418,8 @@ async def _show_tenant_menu(
             can_archive=can_archive,
             can_read_members=can_read_members,
             can_manage_roles=can_manage_roles,
+            can_invite_members=can_invite_members,
+            can_reactivate_members=can_reactivate_members,
         ),
     )
 
@@ -817,6 +872,868 @@ async def role_create_cancel_callback(
             tenant_id=tenant_id,
             notice="ساخت نقش لغو شد؛ تغییری ثبت نشد.",
         )
+
+
+def _tenant_invite_clear_data() -> dict:
+    return {
+        "tenant_invite_token": None,
+        "tenant_invite_tenant_id": None,
+        "tenant_invite_roles": None,
+        "tenant_invite_telegram_id": None,
+        "tenant_invite_display_name": None,
+        "tenant_invite_role_key": None,
+        "tenant_invite_list_token": None,
+        "tenant_invite_list_ids": None,
+        "tenant_invite_selected_id": None,
+    }
+
+
+async def _show_tenant_invitation_list(
+    message: Message,
+    *,
+    db: AsyncSession,
+    principal: TelegramPrincipal,
+    state: FSMContext,
+    tenant_id: UUID,
+    page: int = 0,
+    notice: str | None = None,
+) -> None:
+    invitations = await list_admin_invitations(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        limit=100,
+    )
+    token = secrets.token_urlsafe(6)
+    ids = [str(item.invitation_id) for item in invitations]
+    page_size = 8
+    page_count = max(1, (len(ids) + page_size - 1) // page_size)
+    page = min(max(page, 0), page_count - 1)
+    rows: list[list[InlineKeyboardButton]] = []
+    start = page * page_size
+    for index in range(start, min(start + page_size, len(invitations))):
+        item = invitations[index]
+        status = "منقضی" if item.status == "expired" else "در انتظار"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"لغو · {item.display_name[:18]} · {status}",
+                    callback_data=f"tenant:invite:revoke:prompt:{token}:{index}",
+                )
+            ]
+        )
+    navigation: list[InlineKeyboardButton] = []
+    if page > 0:
+        navigation.append(
+            InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"tenant:invite:page:{token}:{page - 1}")
+        )
+    if page < page_count - 1:
+        navigation.append(
+            InlineKeyboardButton(text="بعدی ➡️", callback_data=f"tenant:invite:page:{token}:{page + 1}")
+        )
+    if navigation:
+        rows.append(navigation)
+    rows.extend(
+        [
+            [InlineKeyboardButton(text="➕ دعوت جدید", callback_data="tenant:invite:create")],
+            [InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data="tenant:menu")],
+        ]
+    )
+    lines = [
+        "📨 دعوت‌های مجموعه",
+        f"تعداد دعوت‌های باز یا منقضی: {len(invitations)}",
+        f"صفحه {page + 1} از {page_count}",
+        "",
+    ]
+    if notice:
+        lines = [notice, "", *lines]
+    for item in invitations[start : start + page_size]:
+        label = "منقضی‌شده" if item.status == "expired" else "منتظر پذیرش"
+        lines.append(
+            f"• {item.display_name} · {item.role_key}\n"
+            f"  Telegram ID: {item.target_telegram_user_id} · {label}\n"
+            f"  انقضا: {item.expires_at.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+    if not invitations:
+        lines.append("دعوت باز یا منقضی‌شده‌ای برای این مجموعه وجود ندارد.")
+    await state.update_data(
+        **_tenant_invite_clear_data(),
+        tenant_invite_list_token=token,
+        tenant_invite_list_ids=ids,
+        context_tenant_id=str(tenant_id),
+    )
+    await state.set_state(None)
+    await _render_panel(message, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+def _tenant_invite_roles_keyboard(
+    roles: list[dict],
+    *,
+    token: str,
+    page: int = 0,
+) -> InlineKeyboardMarkup:
+    page_size = 8
+    page_count = max(1, (len(roles) + page_size - 1) // page_size)
+    page = min(max(page, 0), page_count - 1)
+    rows: list[list[InlineKeyboardButton]] = []
+    for index in range(page * page_size, min((page + 1) * page_size, len(roles))):
+        role = roles[index]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{role['name']} · {role['key']}",
+                    callback_data=f"tenant:invite:role:{token}:{index}",
+                )
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"tenant:invite:rolepage:{token}:{page - 1}")
+        )
+    if page < page_count - 1:
+        nav.append(
+            InlineKeyboardButton(text="بعدی ➡️", callback_data=f"tenant:invite:rolepage:{token}:{page + 1}")
+        )
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="لغو", callback_data=f"tenant:invite:cancel:{token}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "tenant:invite:create")
+async def tenant_invite_create_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        can_invite = await has_permission(
+            db,
+            user_id=principal.user.id,
+            permission_key="membership:invite",
+            tenant_id=tenant_id,
+            scope_type="tenant",
+            scope_id=tenant_id,
+        )
+        if not can_invite:
+            raise AccessDenied
+        roles = await list_assignable_tenant_roles(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            limit=100,
+        )
+    except (ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "مجوز دعوت اعضا را ندارید.", show_alert=True)
+        return
+    if not roles:
+        await callback.answer("هیچ نقش قابل واگذاری برای این مجموعه وجود ندارد.", show_alert=True)
+        return
+    token = secrets.token_urlsafe(6)
+    await state.update_data(
+        tenant_invite_token=token,
+        tenant_invite_tenant_id=str(tenant_id),
+        tenant_invite_roles=[{"key": role.key, "name": role.name} for role in roles],
+    )
+    await state.set_state(TenantInviteWizard.telegram_id)
+    await callback.answer()
+    if callback.message is not None:
+        await _render_panel(
+            callback.message,
+            "✉️ دعوت عضو یا مدیر\n\nTelegram ID شخص را وارد کنید. نام کاربری (@username) کافی نیست.",
+            InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="لغو", callback_data=f"tenant:invite:cancel:{token}")]]
+            ),
+        )
+
+
+@router.message(TenantInviteWizard.telegram_id, F.text)
+async def tenant_invite_telegram_id_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("tenant_invite_token"):
+        await state.set_state(None)
+        await message.answer("فرم دعوت منقضی شده است.")
+        return
+    raw = (message.text or "").strip()
+    if not raw.isdecimal():
+        await message.answer("Telegram ID باید فقط شامل رقم باشد.")
+        return
+    telegram_id = int(raw)
+    if not 0 < telegram_id <= 9_223_372_036_854_775_807:
+        await message.answer("Telegram ID خارج از محدوده معتبر است.")
+        return
+    await state.update_data(tenant_invite_telegram_id=telegram_id)
+    await state.set_state(TenantInviteWizard.display_name)
+    await message.answer(
+        "نام نمایشی شخص را وارد کنید (۱ تا ۱۶۰ نویسه):",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="لغو", callback_data=f"tenant:invite:cancel:{data['tenant_invite_token']}")]]
+        ),
+    )
+
+
+@router.message(TenantInviteWizard.display_name, F.text)
+async def tenant_invite_display_name_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    token = data.get("tenant_invite_token")
+    if not token:
+        await state.set_state(None)
+        await message.answer("فرم دعوت منقضی شده است.")
+        return
+    name = (message.text or "").strip()
+    if not 1 <= len(name) <= 160:
+        await message.answer("نام نمایشی باید بین ۱ تا ۱۶۰ نویسه باشد.")
+        return
+    await state.update_data(tenant_invite_display_name=name)
+    await state.set_state(TenantInviteWizard.role)
+    await message.answer(
+        "نقش را برای شخص انتخاب کنید:",
+        reply_markup=_tenant_invite_roles_keyboard(data.get("tenant_invite_roles", []), token=token),
+    )
+
+
+@router.callback_query(F.data.startswith("tenant:invite:rolepage:"))
+async def tenant_invite_role_page_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[3] if len(parts) == 5 else ""
+    if await state.get_state() != TenantInviteWizard.role.state or token != data.get("tenant_invite_token"):
+        await callback.answer("فرم دعوت منقضی شده است.", show_alert=True)
+        return
+    try:
+        page = int(parts[4])
+    except ValueError:
+        await callback.answer("شماره صفحه معتبر نیست.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_reply_markup(
+            reply_markup=_tenant_invite_roles_keyboard(data.get("tenant_invite_roles", []), token=token, page=page)
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:invite:role:"))
+async def tenant_invite_role_select_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[3] if len(parts) == 5 else ""
+    if await state.get_state() != TenantInviteWizard.role.state or token != data.get("tenant_invite_token"):
+        await callback.answer("فرم دعوت منقضی شده است.", show_alert=True)
+        return
+    try:
+        index = int(parts[4])
+        role = data.get("tenant_invite_roles", [])[index]
+    except (ValueError, IndexError):
+        await callback.answer("نقش انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+    await state.update_data(tenant_invite_role_key=role["key"])
+    await state.set_state(TenantInviteWizard.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش دعوت‌نامه\n\n"
+            f"نام: {data.get('tenant_invite_display_name')}\n"
+            f"Telegram ID: {data.get('tenant_invite_telegram_id')}\n"
+            f"نقش: {role['name']} ({role['key']})\n\n"
+            "دعوت یک‌بارمصرف و دارای اعتبار ۱۵ دقیقه‌ای است. دسترسی‌ها فقط پس از پذیرش لینک توسط همان حساب فعال می‌شوند.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ صدور دعوت", callback_data=f"tenant:invite:confirm:{token}")],
+                    [InlineKeyboardButton(text="⬅️ تغییر نقش", callback_data=f"tenant:invite:change:{token}")],
+                    [InlineKeyboardButton(text="لغو", callback_data=f"tenant:invite:cancel:{token}")],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:invite:change:"))
+async def tenant_invite_change_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    if await state.get_state() != TenantInviteWizard.confirm.state or token != data.get("tenant_invite_token"):
+        await callback.answer("فرم دعوت منقضی شده است.", show_alert=True)
+        return
+    await state.set_state(TenantInviteWizard.role)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "نقش دیگری انتخاب کنید:",
+            reply_markup=_tenant_invite_roles_keyboard(data.get("tenant_invite_roles", []), token=token),
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:invite:confirm:"))
+async def tenant_invite_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if await state.get_state() != TenantInviteWizard.confirm.state or token != data.get("tenant_invite_token"):
+        await callback.answer("این تأیید متعلق به فرم قبلی است.", show_alert=True)
+        return
+    try:
+        tenant_id = UUID(data["tenant_invite_tenant_id"])
+        bot_info = await callback.bot.get_me()
+        if not bot_info.username:
+            raise ValueError("نام کاربری ربات تنظیم نشده است؛ دعوت صادر نشد.")
+        invitation = await create_admin_pairing(
+            db,
+            actor_id=principal.user.id,
+            target_telegram_user_id=int(data["tenant_invite_telegram_id"]),
+            display_name=data["tenant_invite_display_name"],
+            role_key=data["tenant_invite_role_key"],
+            scope_type="tenant",
+            scope_id=tenant_id,
+        )
+    except PairingNotAllowed:
+        await callback.answer("مجوز واگذاری این نقش دیگر در اختیار شما نیست.", show_alert=True)
+        await state.set_state(None)
+        return
+    except (ValueError, KeyError, TypeError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "صدور دعوت انجام نشد.", show_alert=True)
+        return
+    link = f"https://t.me/{bot_info.username}?start={invitation.raw_token}"
+    await state.update_data(**_tenant_invite_clear_data())
+    await state.set_state(None)
+    await callback.answer("دعوت صادر شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "✅ دعوت‌نامه صادر شد.\n\n"
+            f"نام: {data.get('tenant_invite_display_name')}\n"
+            f"Telegram ID: {invitation.telegram_user_id}\n"
+            f"نقش: {invitation.role_key}\n"
+            f"انقضا: {invitation.expires_at.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            "لینک را فقط برای همان شخص بفرستید؛ این توکن یک‌بار نمایش داده می‌شود:\n"
+            f"{link}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="📨 فهرست دعوت‌ها", callback_data="tenant:invite:list")],
+                    [InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data="tenant:menu")],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:invite:cancel:"))
+async def tenant_invite_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    if not token or token != data.get("tenant_invite_token"):
+        await callback.answer("این فرم دیگر فعال نیست.", show_alert=True)
+        return
+    await state.update_data(**_tenant_invite_clear_data())
+    await state.set_state(None)
+    await callback.answer("دعوت لغو شد.")
+    if callback.message is not None:
+        await _render_panel(
+            callback.message,
+            "فرآیند دعوت لغو شد؛ تغییری ثبت نشد.",
+            InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data="tenant:menu")]]),
+        )
+
+
+@router.callback_query(F.data == "tenant:invite:list")
+async def tenant_invitation_list_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        if callback.message is not None:
+            await _show_tenant_invitation_list(
+                callback.message,
+                db=db,
+                principal=principal,
+                state=state,
+                tenant_id=tenant_id,
+            )
+        await callback.answer()
+    except (ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "مجوز مشاهده دعوت‌ها را ندارید.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("tenant:invite:page:"))
+async def tenant_invitation_page_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[3] if len(parts) == 5 else ""
+    if token != data.get("tenant_invite_list_token"):
+        await callback.answer("فهرست دعوت‌ها قدیمی است.", show_alert=True)
+        return
+    try:
+        page = int(parts[4])
+        tenant_id, _, _ = await _context_ids(state)
+        if callback.message is not None:
+            await _show_tenant_invitation_list(
+                callback.message,
+                db=db,
+                principal=principal,
+                state=state,
+                tenant_id=tenant_id,
+                page=page,
+            )
+        await callback.answer()
+    except (ValueError, ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "نمایش صفحه ممکن نیست.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("tenant:invite:revoke:prompt:"))
+async def tenant_invitation_revoke_prompt_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[4] if len(parts) == 6 else ""
+    try:
+        index = int(parts[5])
+        invitation_id = data.get("tenant_invite_list_ids", [])[index]
+    except (ValueError, IndexError):
+        await callback.answer("دعوت انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+    if token != data.get("tenant_invite_list_token"):
+        await callback.answer("فهرست دعوت‌ها قدیمی است.", show_alert=True)
+        return
+    await state.update_data(tenant_invite_selected_id=invitation_id)
+    await state.set_state(TenantInviteWizard.revoke_confirm)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "لغو دعوت‌نامه\n\n"
+            f"شناسه دعوت: {invitation_id}\n"
+            "پس از تأیید، لینک قبلی دیگر قابل استفاده نیست.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ لغو نهایی دعوت", callback_data=f"tenant:invite:revoke:confirm:{token}")],
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"tenant:invite:revoke:cancel:{token}")],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:invite:revoke:confirm:"))
+async def tenant_invitation_revoke_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != TenantInviteWizard.revoke_confirm.state
+        or token != data.get("tenant_invite_list_token")
+        or not data.get("tenant_invite_selected_id")
+    ):
+        await callback.answer("این تأیید متعلق به فهرست قبلی است.", show_alert=True)
+        return
+    try:
+        await revoke_admin_pairing(
+            db,
+            actor_id=principal.user.id,
+            pairing_id=UUID(data["tenant_invite_selected_id"]),
+        )
+        tenant_id, _, _ = await _context_ids(state)
+    except (PairingNotAllowed, PairingRejected, ValueError, ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "لغو دعوت انجام نشد.", show_alert=True)
+        return
+    await callback.answer("دعوت لغو شد.")
+    if callback.message is not None:
+        await _show_tenant_invitation_list(
+            callback.message,
+            db=db,
+            principal=principal,
+            state=state,
+            tenant_id=tenant_id,
+            notice="✅ دعوت‌نامه لغو شد.",
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:invite:revoke:cancel:"))
+async def tenant_invitation_revoke_cancel_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    if token != data.get("tenant_invite_list_token"):
+        await callback.answer("فهرست دعوت‌ها قدیمی است.", show_alert=True)
+        return
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+    except ResourceNotFound as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("دعوت فعال باقی ماند.")
+    if callback.message is not None:
+        await _show_tenant_invitation_list(
+            callback.message,
+            db=db,
+            principal=principal,
+            state=state,
+            tenant_id=tenant_id,
+        )
+
+
+async def _show_suspended_members(
+    message: Message,
+    *,
+    db: AsyncSession,
+    principal: TelegramPrincipal,
+    state: FSMContext,
+    tenant_id: UUID,
+    page: int = 0,
+    notice: str | None = None,
+) -> None:
+    members = await list_suspended_tenant_members(
+        db,
+        actor_id=principal.user.id,
+        tenant_id=tenant_id,
+        limit=100,
+    )
+    token = secrets.token_urlsafe(6)
+    ids = [str(member.user_id) for member in members]
+    page_size = 8
+    page_count = max(1, (len(members) + page_size - 1) // page_size)
+    page = min(max(page, 0), page_count - 1)
+    rows: list[list[InlineKeyboardButton]] = []
+    lines = ["♻️ اعضای تعلیق‌شده", f"تعداد: {len(members)}", f"صفحه {page + 1} از {page_count}", ""]
+    if notice:
+        lines = [notice, "", *lines]
+    start = page * page_size
+    for index in range(start, min(start + page_size, len(members))):
+        member = members[index]
+        if member.telegram_user_id is None:
+            lines.append(f"• {member.display_name} — حساب تلگرام فعال ندارد")
+            continue
+        lines.append(f"• {member.display_name} · Telegram ID: {member.telegram_user_id}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"فعال‌سازی · {member.display_name[:24]}",
+                    callback_data=f"tenant:member:restore:choose:{token}:{index}",
+                )
+            ]
+        )
+    if not members:
+        lines.append("عضو تعلیق‌شده‌ای برای این مجموعه وجود ندارد.")
+    navigation: list[InlineKeyboardButton] = []
+    if page > 0:
+        navigation.append(
+            InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"tenant:member:restore:page:{token}:{page - 1}")
+        )
+    if page < page_count - 1:
+        navigation.append(
+            InlineKeyboardButton(text="بعدی ➡️", callback_data=f"tenant:member:restore:page:{token}:{page + 1}")
+        )
+    if navigation:
+        rows.append(navigation)
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data="tenant:menu")])
+    await state.update_data(
+        member_restore_list_token=token,
+        member_restore_list_ids=ids,
+        context_tenant_id=str(tenant_id),
+    )
+    await state.set_state(None)
+    await _render_panel(message, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data == "tenant:member:restore:list")
+async def suspended_members_list_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        if callback.message is not None:
+            await _show_suspended_members(
+                callback.message,
+                db=db,
+                principal=principal,
+                state=state,
+                tenant_id=tenant_id,
+            )
+        await callback.answer()
+    except (ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "مجوز مدیریت اعضا را ندارید.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("tenant:member:restore:page:"))
+async def suspended_members_page_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[4] if len(parts) == 6 else ""
+    if token != data.get("member_restore_list_token"):
+        await callback.answer("فهرست اعضا قدیمی است.", show_alert=True)
+        return
+    try:
+        page = int(parts[5])
+        tenant_id, _, _ = await _context_ids(state)
+        if callback.message is not None:
+            await _show_suspended_members(
+                callback.message,
+                db=db,
+                principal=principal,
+                state=state,
+                tenant_id=tenant_id,
+                page=page,
+            )
+        await callback.answer()
+    except (ValueError, ResourceNotFound, AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "نمایش صفحه ممکن نیست.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("tenant:member:restore:choose:"))
+async def suspended_member_choose_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[4] if len(parts) == 6 else ""
+    try:
+        index = int(parts[5])
+        member_id = data.get("member_restore_list_ids", [])[index]
+        tenant_id, _, _ = await _context_ids(state)
+    except (ValueError, IndexError, ResourceNotFound) as exc:
+        await callback.answer(str(exc) or "عضو انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+    if token != data.get("member_restore_list_token"):
+        await callback.answer("فهرست اعضا قدیمی است.", show_alert=True)
+        return
+    try:
+        roles = await list_assignable_tenant_roles(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            limit=100,
+        )
+    except (AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "مجوز واگذاری نقش را ندارید.", show_alert=True)
+        return
+    if not roles:
+        await callback.answer("هیچ نقش قابل واگذاری برای این مجموعه وجود ندارد.", show_alert=True)
+        return
+    next_token = secrets.token_urlsafe(6)
+    role_items = [{"key": role.key, "name": role.name} for role in roles]
+    await state.update_data(
+        member_restore_token=next_token,
+        member_restore_member_id=member_id,
+        member_restore_roles=role_items,
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{role['name']} · {role['key']}",
+                callback_data=f"tenant:member:restore:role:{next_token}:{index}",
+            )
+        ]
+        for index, role in enumerate(role_items[:20])
+    ]
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ بازگشت به فهرست", callback_data=f"tenant:member:restore:cancel:{next_token}")]
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "انتخاب نقش جدید برای فعال‌سازی مجدد\n\n"
+            f"شناسه عضو: {member_id}\n"
+            "نقش قبلی خودکار بازنمی‌گردد؛ یک نقش از همین مجموعه انتخاب کنید.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:member:restore:role:"))
+async def suspended_member_role_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    data = await state.get_data()
+    token = parts[4] if len(parts) == 6 else ""
+    try:
+        index = int(parts[5])
+        role = data.get("member_restore_roles", [])[index]
+        tenant_id, _, _ = await _context_ids(state)
+        member_id = UUID(data["member_restore_member_id"])
+    except (ValueError, KeyError, IndexError, ResourceNotFound) as exc:
+        await callback.answer(str(exc) or "نقش انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+    if token != data.get("member_restore_token"):
+        await callback.answer("فهرست نقش‌ها قدیمی است.", show_alert=True)
+        return
+    try:
+        preview = await preview_tenant_member_reactivation(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=member_id,
+            role_key=role["key"],
+        )
+    except (AccessDenied, ApplicationError) as exc:
+        await callback.answer(str(exc) or "این نقش قابل واگذاری نیست.", show_alert=True)
+        return
+    await state.update_data(member_restore_role_key=preview.role_key)
+    await state.set_state(TenantMemberRestoreWizard.reason)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "دلیل فعال‌سازی مجدد را وارد کنید.\n\n"
+            f"عضو: {preview.display_name}\n"
+            f"نقش جدید: {preview.role_key}\n"
+            "دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="لغو", callback_data=f"tenant:member:restore:cancel:{token}")]
+                ]
+            ),
+        )
+
+
+@router.message(TenantMemberRestoreWizard.reason, F.text)
+async def suspended_member_reason_input(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = data.get("member_restore_token")
+    reason = (message.text or "").strip()
+    if not token or not data.get("member_restore_member_id"):
+        await state.set_state(None)
+        await message.answer("فرم فعال‌سازی منقضی شده است.")
+        return
+    if not 10 <= len(reason) <= 500:
+        await message.answer("دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد.")
+        return
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        preview = await preview_tenant_member_reactivation(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=UUID(data["member_restore_member_id"]),
+            role_key=data.get("member_restore_role_key", ""),
+        )
+    except (ResourceNotFound, AccessDenied, ApplicationError, ValueError) as exc:
+        await state.set_state(None)
+        await message.answer(str(exc) or "عضویت یا نقش دیگر قابل فعال‌سازی نیست.")
+        return
+    await state.update_data(member_restore_reason=reason)
+    await state.set_state(TenantMemberRestoreWizard.confirm)
+    permissions = "\n".join(f"• {key}" for key in preview.permission_keys)
+    await message.answer(
+        "پیش‌نمایش فعال‌سازی مجدد\n\n"
+        f"نام: {preview.display_name}\n"
+        f"نقش جدید: {preview.role_key}\n"
+        f"مجوزها:\n{permissions}\n"
+        f"دلیل: {reason}\n\n"
+        "تأیید، عضویت را فعال و RoleBinding جدید می‌سازد؛ نقش‌های قبلی احیا نمی‌شوند.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ تأیید فعال‌سازی", callback_data=f"tenant:member:restore:confirm:{token}")],
+                [InlineKeyboardButton(text="لغو", callback_data=f"tenant:member:restore:cancel:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("tenant:member:restore:confirm:"))
+async def suspended_member_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != TenantMemberRestoreWizard.confirm.state
+        or token != data.get("member_restore_token")
+    ):
+        await callback.answer("این تأیید متعلق به فرم قبلی است.", show_alert=True)
+        return
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+        result = await reactivate_tenant_member(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=UUID(data["member_restore_member_id"]),
+            role_key=data["member_restore_role_key"],
+            reason=data["member_restore_reason"],
+        )
+    except (ResourceNotFound, AccessDenied, ApplicationError, ValueError) as exc:
+        await state.set_state(None)
+        await callback.answer(str(exc) or "فعال‌سازی انجام نشد.", show_alert=True)
+        return
+    await callback.answer("عضویت دوباره فعال شد.")
+    if callback.message is not None:
+        await _show_suspended_members(
+            callback.message,
+            db=db,
+            principal=principal,
+            state=state,
+            tenant_id=tenant_id,
+            notice=f"✅ عضویت {result.display_name} با نقش {result.role_key} فعال شد.",
+        )
+
+
+@router.callback_query(F.data.startswith("tenant:member:restore:cancel:"))
+async def suspended_member_cancel_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    data = await state.get_data()
+    if token not in {
+        data.get("member_restore_token"),
+        data.get("member_restore_list_token"),
+    }:
+        await callback.answer("این فرم دیگر فعال نیست.", show_alert=True)
+        return
+    try:
+        tenant_id, _, _ = await _context_ids(state)
+    except ResourceNotFound as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("عملیات لغو شد.")
+    if callback.message is not None:
+        await _show_suspended_members(
+            callback.message,
+            db=db,
+            principal=principal,
+            state=state,
+            tenant_id=tenant_id,
+            notice="عملیات لغو شد؛ تغییری ثبت نشد.",
+        )
+
 
 
 async def _show_school_menu(
