@@ -8,9 +8,9 @@
 ## 1. معماری اجراشده در شاخه
 
 - رابط مدیریتی انسانی فقط Bot تلگرام است.
-- FastAPI فعلاً فقط Health و APIهای زیرساختی را ارائه می‌کند؛ مدیریت انسانی از HTTP فعال نیست.
+- سرویس HTTP/FastAPI در Runtime فعلی وجود ندارد؛ مدیریت و عملیات از Bot و Application Use Caseهای مشترک انجام می‌شوند.
 - Bot با aiogram 3 و Long Polling ساخته شده است.
-- Application Use Caseها منطق مستقل از Handler/Route را اجرا می‌کنند.
+- Application Use Caseها منطق دامنه را مستقل از Telegram Handler اجرا می‌کنند.
 - PostgreSQL منبع حقیقت و Redis محل FSM، TTL و قفل Poller است.
 - classmate2 مستقل است و در این شاخه تغییر نکرده است.
 
@@ -61,7 +61,7 @@
 - فهرست نقش‌ها (/roles) و دعوت نقش‌محور (/invite) آماده است؛ CRUD کامل Role، مدیریت مستقل Permission و فهرست/تعلیق و فعال‌سازی مجدد عضویت با دلیل اجباری، تأیید صریح، کنترل Role و حفاظت از آخرین مدیر فعال پیاده‌سازی شده‌اند؛ لغو کامل عضویت هنوز باقی است.
 - فرم‌های پایه فهرست/ایجاد School، Academic Year، Class و Subject در Bot پیاده‌سازی شده‌اند؛ Update/Archive، Search و Pagination کامل هنوز باقی است.
 - Audit explorer، گزارش، جست‌وجوی سراسری و داشبورد در فازهای بعدی تکمیل می‌شوند.
-- Machine-to-Machine authentication برای Integration API هنوز پیاده‌سازی نشده است.
+- API یا HTTP relay برای یکپارچه‌سازی داخلی در دامنه فعلی وجود ندارد؛ اتصال مستقیم ربات اصلی به Use Caseهای مشترک، پس از تأیید Telegram Bot API، هنوز خارج از این مخزن End-to-End نشده است.
 
 ## 4. محدوده تحویل فاز ۱
 
@@ -94,7 +94,7 @@
 - [ ] اجرای End-to-End فرم‌های ساختار آموزشی با Bot Token آزمایشی و بررسی دستی خطاها/Back/Cancel.
 - [ ] Unlink/recovery و حداقل Step-up برای عملیات حساس تعیین و تست شوند.
 - [ ] Audit و correlation برای عملیات حساس پوشش داده شوند.
-- [ ] API Integration به شکل امن از هویت Telegram جدا شود.
+- [ ] اتصال مستقیم ربات اصلی به Use Caseهای مشترک با بررسی واقعی مدیر گروه و بدون واسطه HTTP End-to-End آزمایش شود.
 - [x] CI و Runbook بدون Frontend است؛ CI فعلی Backend/PostgreSQL/Redis را اجرا می‌کند.
 - [ ] هیچ Deploy یا تغییری در classmate2 انجام نشده باشد.
 
