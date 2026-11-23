@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -31,19 +30,6 @@ from app.db.models import (
 )
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
-
-def build_usage_actor_hash(*, telegram_user_id: int, hash_key: str) -> str:
-    """Create a stable, non-reversible analytics identity inside the shared backend."""
-    if telegram_user_id <= 0:
-        raise InvalidApplicationInput("شناسه تلگرام برای ثبت آمار معتبر نیست.")
-    normalized_key = hash_key.strip()
-    if not normalized_key:
-        raise InvalidApplicationInput("کلید محرمانه Telemetry تنظیم نشده است.")
-    return hmac.new(
-        normalized_key.encode("utf-8"),
-        f"telegram:{telegram_user_id}".encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
 
 _SAFE_EVENT_ATTRIBUTE_KEYS = {
     "feature",

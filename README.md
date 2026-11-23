@@ -35,18 +35,30 @@
 - شمار کاربران شناخته‌شده و وضعیت حساب از جدول `usage_identities` محاسبه می‌شود.
 - تعداد کاربران فعال در بازه‌های یک، چهار و دوازده ساعت از اثرانگشت کاربران یکتای دیده‌شده در `usage_events` محاسبه می‌شود.
 - کاربران جدید از زمان اولین مشاهده در Telemetry در بازه‌های یک، هفت و سی روز محاسبه می‌شوند.
-- شناسه خام تلگرام برای آمار نگهداری نمی‌شود؛ Application Layer با `CLASSMATE_TELEMETRY_HASH_KEY` اثرانگشت HMAC می‌سازد و فقط Hash ذخیره می‌شود.
+- شناسه خام تلگرام برای آمار نگهداری نمی‌شود؛ API آن را با کلید محرمانه HMAC می‌کند و فقط Hash ذخیره می‌شود.
 - برای نمایش شمار تاریخی همه کاربران، ربات اصلی باید هنگام یکپارچه‌سازی برای کاربران موجود رویداد `user.registered` را Backfill کند. بدون این Backfill، آمار از زمان شروع اتصال به بعد کامل خواهد بود.
 - وضعیت حساب فقط با رویدادهای `user.registered`، `user.activated`، `user.reactivated`، `user.deactivated` و `user.blocked` تغییر می‌کند.
 - Ping، CPU و Load سرور فعلاً نمایش داده نمی‌شوند؛ تا زمانی که منبع اندازه‌گیری معتبر وجود نداشته باشد عدد ساختگی ارائه نمی‌شود.
 
-### اتصال به بک‌اند مشترک
+### قراردادهای Integration
 
-- ربات مدیریتی و اجزای مجاز ClassMate از Application Layer مشترک استفاده می‌کنند؛ برای این ارتباط، سرویس HTTP یا FastAPI جداگانه اجرا نمی‌شود.
-- پس از بررسی واقعی دسترسی مدیر و مدیر بودن ربات در Telegram Bot API، کد اتصال گروه با فراخوانی مستقیم Use Case `complete_class_group_handshake` مصرف می‌شود.
-- رویدادهای مصرف نیز از طریق Use Case داخلی `ingest_usage_event` ثبت می‌شوند؛ تابع `build_usage_actor_hash` شناسه عددی تلگرام را با کلید محرمانه پایدار HMAC می‌کند.
-- دسترسی مستقیم به جدول‌ها از Handlerهای تلگرام مجاز نیست؛ فراخوانی باید از Application Use Case عبور کند تا مجوز، اعتبارسنجی، تراکنش و Audit حفظ شود.
-- در این مخزن هیچ FastAPI Service، Endpoint HTTP یا Secret مشترک M2M نگهداری نمی‌شود. آداپتر غیرضروری HTTP حذف شده است؛ مدل‌ها و منطق دامنه حفظ شده‌اند.
+مسیرهای کدنویسی‌شده:
+- `POST /api/v1/integrations/telegram/group-links/complete`
+- `POST /api/v1/integrations/usage-events`
+
+هر دو مسیر به Header `X-ClassMate-Integration-Key` نیاز دارند. در صورت تنظیم‌نشدن `CLASSMATE_INTEGRATION_TOKEN` پاسخ 503 داده می‌شود و Integration بسته می‌ماند. کلید `CLASSMATE_TELEMETRY_HASH_KEY` برای HMAC پایدار آمار توصیه می‌شود؛ در نبود آن، کلید Integration به‌عنوان fallback استفاده می‌شود.
+
+این APIها در کد تعریف می‌شوند، اما تا زمان اجرای FastAPI در یک Railway Service و تنظیم Secretها، Endpoint عملیاتی محسوب نمی‌شوند. سرویس فعلی Railway فقط فرآیند Bot را اجرا می‌کند.
+
+قرارداد کامل و نمونه Payloadها در `docs/CONTROL_CENTER_V1_FA.md` آمده‌اند.
+
+## خارج از این برش
+
+- اتصال واقعی ربات اصلی و ارسال Telemetry از آن؛ این کار نیازمند تغییر جداگانه در مخزن ربات اصلی و قرارداد تأییدشده است.
+- CRUD کامل سازمان و مدیریت کاربران، جست‌وجوی پیشرفته و صفحه‌بندی همهٔ فهرست‌ها.
+- شخصی‌سازی معیارها، ترتیب و چیدمان گزارش، گزارش‌های ذخیره‌شده و هشدارهای قابل‌تنظیم.
+- مرورگر Audit، گزارش خطا و شاخص‌های سرور.
+- Snapshot و گزارش تاریخی بازتولیدپذیر.
 
 ## اجرای محلی
 
@@ -58,7 +70,7 @@
 4. مالک اولیه را با `PYTHONPATH=backend python -m app.cli create-platform-owner` بسازید.
 5. برای Bot مقدار `TELEGRAM_BOT_TOKEN` را فقط در Secret محلی قرار دهید.
 
-سرویس HTTP وجود ندارد. Bot با `PYTHONPATH=backend python -m app.bot.main` یا `docker compose --profile bot up admin-bot` اجرا می‌شود. Token واقعی نباید در Git، Audit یا Log قرار گیرد.
+API در اجرای FastAPI روی پورت 8000 ارائه می‌شود. Bot با `python -m app.bot.main` اجرا می‌شود. Token واقعی نباید در Git، Audit یا Log قرار گیرد.
 
 ## اسناد مرجع
 

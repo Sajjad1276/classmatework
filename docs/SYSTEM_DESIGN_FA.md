@@ -16,8 +16,8 @@ ClassMate Work سامانه مرکزی مدیریت و عملیات ClassMate ا
 
 1. رابط اصلی مدیریت، ربات تلگرام است؛ نه React، نه وب‌اپ تلگرام و نه داشبورد مرورگری.
 2. Backend مالک منطق، داده، سیاست دسترسی و اجرای عملیات است. ربات فقط رابط مکالمه‌ای و تبدیل‌کننده Update تلگرام به درخواست کاربردی است.
-3. FastAPI برای Health Check و APIهای داخلی/یکپارچه‌سازی باقی می‌ماند؛ API به معنی وجود پنل وب نیست.
-4. هیچ منطق دامنه‌ای نباید فقط داخل Telegram Handler یا FastAPI Route نوشته شود. هر دو باید Application Service/Use Case مشترک را صدا بزنند.
+3. سرویس HTTP/FastAPI مستقل در این معماری اجرا نمی‌شود؛ اجزای مجاز سامانه مستقیماً Application Use Case مشترک را فراخوانی می‌کنند.
+4. هیچ منطق دامنه‌ای نباید داخل Telegram Handler نوشته شود؛ تمام عملیات از Application Service/Use Case مشترک عبور می‌کنند.
 5. `classmate2` مالک رابط و منطق آموزشی/دانش‌آموزی خودش باقی می‌ماند. این مخزن فقط از طریق قرارداد API و Event با آن ارتباط می‌گیرد؛ کد، تنظیمات یا دیتابیس آن از این پروژه تغییر نمی‌کند.
 6. قابلیت منویی که Use Case، مجوز، اعتبارسنجی، Audit و تست ندارد نباید به مدیر نمایش داده شود.
 7. هیچ عدد، وضعیت، گزارش یا موفقیتی با داده ساختگی نمایش داده نمی‌شود.
@@ -63,14 +63,13 @@ ClassMate Work سامانه مرکزی مدیریت و عملیات ClassMate ا
    memberships, policies)       locks, rate limit)
              │
              ▼
-       Outbox / Integration Events
+       Shared Application Layer
              │
              ▼
-        Internal FastAPI API
+      Direct Use Case Calls
              │
              ▼
-          classmate2
-     (فقط از قرارداد رسمی)
+    Main Bot / Admin Bot adapters
 ```
 
 ### 2.1 لایه رابط تلگرام
@@ -104,18 +103,14 @@ Handler مجاز به اجرای Query یا Mutation مستقیم روی ORM ن�
 
 Use Case باید ورودی نوع‌دار، اعتبارسنجی، کنترل مجوز، محدوده تراکنش، ثبت Audit و خروجی مشخص داشته باشد. هیچ منطق کسب‌وکار نباید در Callback Handler یا Route Handler تکثیر شود.
 
-### 2.3 لایه API
+### 2.3 مرز یکپارچگی در بک‌اند مشترک
 
-FastAPI برای موارد زیر حفظ می‌شود:
-
-- Liveness و Readiness.
-- APIهای داخلی مورد نیاز یکپارچه‌سازی‌ها.
-- قرارداد versioned برای ارتباط کنترل‌شده با `classmate2`.
-- دریافت/انتشار Eventهای تعریف‌شده با احراز هویت ماشینی.
-
-این API رابط مدیریتی انسانی نیست. Endpointهای داخلی باید احراز هویت سرویس‌به‌سرویس، scope محدود، اعتبارسنجی payload، rate limit و Audit مناسب داشته باشند. هیچ Endpoint مدیریتی نباید به دلیل قابل حدس بودن URL یا Telegram ID قابل فراخوانی عمومی باشد.
-
----
+- در این برش، FastAPI، Uvicorn و Endpointهای HTTP داخلی وجود ندارند.
+- ربات اصلی و ربات مدیریتی، در صورت استقرار روی بک‌اند مشترک، Use Caseهای Application را مستقیماً فراخوانی می‌کنند.
+- بررسی دسترسی مدیر در گروه باید با Telegram Bot API و در آداپتر ربات اصلی انجام شود؛ سپس `complete_class_group_handshake` منطق دامنه و تراکنش را اجرا می‌کند.
+- ثبت آمار باید از `ingest_usage_event` و `build_usage_actor_hash` عبور کند؛ شناسه خام Telegram برای Telemetry ذخیره نمی‌شود.
+- هیچ Handler یا ماژول بیرونی نباید برای دور زدن Policy مستقیماً در جدول‌های مدیریتی بنویسد.
+- اگر در آینده Runtimeها واقعاً جدا شوند، نیاز به Transport جداگانه باید با نیاز عملیاتی مستند ثابت شود؛ سرویس HTTP بلااستفاده به‌عنوان پیش‌فرض ساخته نمی‌شود.
 
 ## 3. استقرار در Railway
 
@@ -123,23 +118,20 @@ FastAPI برای موارد زیر حفظ می‌شود:
 
 | سرویس | وظیفه | فرمان اجرا |
 |---|---|---|
-| `classmatework-api` | FastAPI، Health Check و API یکپارچه‌سازی | `uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT` |
-| `classmatework-admin-bot` | دریافت Update و اجرای رابط مدیریتی تلگرام | `python -m app.bot.main` |
+| `classmatework-admin-bot` | رابط مدیریتی تلگرام با Long Polling | `PYTHONPATH=backend python -m app.bot.main` |
 | PostgreSQL | منبع اصلی داده | سرویس دیتابیس موجود |
 | Redis | FSM، قفل کوتاه‌مدت و Rate Limit | سرویس Redis موجود |
-
 قواعد استقرار:
 
-- API و ربات از همان Repository و کد مشترک استفاده می‌کنند؛ اما Start Command و چرخه عمرشان جدا است.
-- هر دو سرویس به همان PostgreSQL و Redis متصل می‌شوند.
+- ربات مدیریتی از Application Layer همان Repository استفاده می‌کند و مستقیم به PostgreSQL و Redis متصل می‌شود.
 - توکن ربات فقط در متغیر محیطی سرویس ربات قرار می‌گیرد و وارد Git یا Log نمی‌شود.
 - در شروع از Long Polling استفاده می‌شود؛ تعداد Replica سرویس ربات باید **یک** باشد. اجرای هم‌زمان چند Poller با یک Bot Token مجاز نیست.
 - ربات هنگام Restart نباید Updateهای معلق را بی‌دلیل حذف کند.
-- در این فاز Worker عمومی سومی اضافه نمی‌شود. API و Bot دو سرویس با دو وظیفه متفاوت‌اند، نه دو Worker تکراری.
+- در این فاز Worker یا سرویس HTTP عمومی اضافه نمی‌شود؛ یک Bot Poller به PostgreSQL و Redis متصل است.
 - Worker مستقل فقط وقتی اضافه می‌شود که Jobهای سنگین و پایدار واقعاً ایجاد شده باشند و صف، Retry، Lease و Dead Letter آن طراحی شده باشد.
-- هیچ متغیر یا سرویس Railway در این بازنگری تغییر داده یا Deploy نمی‌شود؛ این سند قرارداد معماری است.
+- سرویس API مستقلی در Railway وجود ندارد و در این تصمیم نیز ساخته یا Deploy نمی‌شود.
 
-برای جلوگیری از استقرار اشتباه، سرویس API فقط فرمان API و سرویس Bot فقط فرمان Bot را اجرا می‌کند. هر دو باید Build یکسان و نسخه کد سازگار داشته باشند.
+فقط Bot Poller باید روی سرویس ربات اجرا شود؛ برای یک Bot Token بیش از یک Poller هم‌زمان فعال نمی‌شود.
 
 ---
 
@@ -485,46 +477,22 @@ Rollback به معنی حذف تاریخچه نیست. یک عملیات جبر�
 
 ---
 
-## 10. API و قرارداد Integration
+## 10. یکپارچگی داخلی و نسخه‌بندی
 
-API نسخه‌دار `/api/v1` حفظ می‌شود، اما کاربرد آن Integration و عملیات سیستمی کنترل‌شده است، نه رابط انسانی.
+در معماری فعلی قرارداد HTTP یا Route نسخه‌دار وجود ندارد. ماژول‌های مجاز در بک‌اند مشترک از این مرزها استفاده می‌کنند:
 
-قواعد قرارداد:
-
-- احراز هویت Machine-to-Machine مستقل از Telegram User Identity.
-- Scope و Audience مشخص برای هر سرویس مصرف‌کننده.
-- هر درخواست دارای Correlation ID و Idempotency Key متناسب با نوع عملیات.
-- امضای Webhook، Timestamp و جلوگیری از Replay.
-- Versioning در Schema و Event.
-- هیچ Endpoint عمومی نباید با ارسال Telegram ID دلخواه، خود را به‌جای مدیر جا بزند.
-
-Eventهای پایه:
-
-- `tenant.created`
-- `school.created`
-- `school.activated`
-- `class.created`
-- `membership.invited`
-- `membership.activated`
-- `content.submitted`
-- `workflow.task.assigned`
-- `approval.decided`
-- `content.published`
-- `notification.queued`
-- `notification.delivered`
-- `notification.failed`
-- `security.incident.opened`
-
-Event باید شامل `event_id`, `event_type`, `occurred_at`, `actor_id`, `tenant_id`, `aggregate_type`, `aggregate_id`, `correlation_id`, `schema_version` و payload کنترل‌شده باشد.
-
----
+- Application Use Case مرجع نهایی مجوز، اعتبارسنجی، تراکنش و Audit است.
+- ارتباط بین آداپترها از طریق توابع Application و Eventهای داخلی انجام می‌شود، نه فراخوانی localhost یا HTTP واسط.
+- برای رخدادهای تکرارپذیر، `event_id` و Idempotency در لایه Application حفظ می‌شود.
+- برای شناسه‌های آماری Telegram فقط HMAC مبتنی بر Secret پایدار ذخیره می‌شود.
+- اگر در آینده Runtime مستقلی نیاز به ارتباط پیدا کند، ابتدا قرارداد، احراز هویت و تهدیدهای آن طراحی می‌شود؛ API بلااستفاده به‌عنوان پیش‌فرض افزوده نمی‌شود.
 
 ## 11. مشاهده‌پذیری، پایداری و بازیابی
 
 - Log ساختاریافته با حذف Token، PII غیرضروری و Payloadهای حساس.
-- Correlation ID از Telegram Update تا Use Case، Audit، Outbox و API.
+- Correlation ID از Telegram Update تا Use Case، Audit و Outbox.
 - متریک تعداد Update، خطای Handler، زمان پاسخ، Rate Limit، خطای Telegram API و Lag صف.
-- Health Check جدا برای Process و وابستگی‌ها.
+- وضعیت Bot و وابستگی‌ها از فرمان مدیریتی `/status` و پایش Railway بررسی می‌شود؛ سرویس HTTP سلامت مستقلی وجود ندارد.
 - Timeout و Retry محدود با Backoff؛ Retry نامحدود ممنوع.
 - خطای موقت Telegram نباید باعث تکرار Mutation شود.
 - Backup رمزنگاری‌شده، سیاست Retention و تست Restore.

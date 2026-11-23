@@ -5,8 +5,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.v1.integrations import _require_integration_key
 from app.application.control_center import (
-    build_usage_actor_hash,
     complete_class_group_handshake,
     create_class_group_handshake,
     get_class_subject_catalog,
@@ -20,6 +20,7 @@ from app.bot.control_router import (
     _decode_subject_callback_id,
     _encode_subject_callback_id,
 )
+from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import (
     AcademicYear,
@@ -330,6 +331,30 @@ async def test_school_group_directory_reports_connected_and_missing_classes_by_p
     await engine.dispose()
 
 @pytest.mark.asyncio
+async def test_integration_authentication_is_closed_by_default_and_compares_secret() -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as missing:
+        await _require_integration_key(
+            x_classmate_integration_key=None,
+            settings=Settings(),
+        )
+    assert missing.value.status_code == 503
+
+    configured = Settings(classmate_integration_token="shared-secret")
+    with pytest.raises(HTTPException) as invalid:
+        await _require_integration_key(
+            x_classmate_integration_key="wrong-secret",
+            settings=configured,
+        )
+    assert invalid.value.status_code == 401
+
+    await _require_integration_key(
+        x_classmate_integration_key="shared-secret",
+        settings=configured,
+    )
+
+@pytest.mark.asyncio
 async def test_class_subject_assignment_is_scoped_to_the_same_school() -> None:
     from app.application.errors import ResourceNotFound
 
@@ -425,16 +450,3 @@ def test_subject_callback_id_is_compact_and_round_trips_without_fsm_state() -> N
     assert len(f"cs:a:{class_id.hex}:{subject_ref}".encode("utf-8")) <= 64
     assert len(f"cs:r:{class_id.hex}:{subject_ref}".encode("utf-8")) <= 64
 
-
-
-def test_usage_actor_hash_is_stable_and_does_not_expose_telegram_id() -> None:
-    first = build_usage_actor_hash(telegram_user_id=123456789, hash_key="stable-test-key")
-    repeated = build_usage_actor_hash(telegram_user_id=123456789, hash_key="stable-test-key")
-    different_actor = build_usage_actor_hash(telegram_user_id=123456780, hash_key="stable-test-key")
-    rotated_key = build_usage_actor_hash(telegram_user_id=123456789, hash_key="rotated-test-key")
-
-    assert first == repeated
-    assert first != different_actor
-    assert first != rotated_key
-    assert len(first) == 64
-    assert "123456789" not in first
