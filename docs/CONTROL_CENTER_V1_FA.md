@@ -22,31 +22,28 @@
 4. مدیر ربات اصلی را به گروه اضافه می‌کند و دسترسی لازم را می‌دهد.
 5. همان مدیر که کد را صادر کرده، دستور `/classmate_connect CODE` را در گروه ارسال می‌کند.
 6. ربات اصلی باید با Telegram Bot API بررسی کند فرستنده مدیر گروه است و خود ربات نیز مدیر گروه است.
-7. فقط پس از این بررسی، ربات اصلی از مسیر M2M برای تکمیل اتصال استفاده می‌کند.
+7. فقط پس از این بررسی، ربات اصلی Use Case مشترک `complete_class_group_handshake` را مستقیماً با Session بک‌اند اجرا می‌کند.
 8. Use Case زمان اعتبار، Hash کد، شناسه مدیر صادرکننده، نوع گروه و یکتایی گروه/کلاس را بررسی و اتصال را در یک تراکنش ثبت می‌کند.
 
-### تکمیل اتصال M2M
+### فراخوانی مستقیم در بک‌اند مشترک
 
-`POST /api/v1/integrations/telegram/group-links/complete`
+پس از بررسی واقعی Telegram Bot API، ربات اصلی تابع Application زیر را مستقیماً فراخوانی می‌کند؛ هیچ Route یا HTTP Service واسطی لازم نیست:
 
-Header:
-- `X-ClassMate-Integration-Key: <shared secret>`
-
-Payload:
-```json
-{
-  "code": "one-time-code",
-  "telegram_chat_id": -1001234567890,
-  "chat_title": "دهم الف",
-  "chat_username": "grade10a",
-  "chat_type": "supergroup",
-  "actor_telegram_user_id": 123456789,
-  "integration_bot_id": 900000000,
-  "bot_is_admin": true
-}
+```python
+connection = await complete_class_group_handshake(
+    db,
+    token=code,
+    telegram_chat_id=chat.id,
+    chat_title=chat.title or "گروه کلاس",
+    chat_username=chat.username,
+    chat_type=chat.type,
+    actor_telegram_user_id=message.from_user.id,
+    integration_bot_id=bot.id,
+    bot_is_admin=True,  # فقط بعد از بررسی get_chat_member و تأیید مدیر
+)
 ```
 
-مقدار `bot_is_admin` صرفاً پس از بررسی واقعی Telegram Bot API باید توسط ربات اصلی ارسال شود. این مسیر به علت Secret مشترک، فقط برای سرویس مورداعتماد قابل فراخوانی است. در نبود `CLASSMATE_INTEGRATION_TOKEN` Endpoint با پاسخ 503 غیرفعال می‌ماند.
+مقدار `bot_is_admin` فقط بعد از تأیید واقعی Telegram Bot API ارسال می‌شود. Use Case اعتبار، مصرف یک‌باره، تطبیق مدیر صادرکننده و یکتایی گروه/کلاس را در یک تراکنش کنترل می‌کند.
 
 ## گزارش‌های واقعی
 
@@ -58,9 +55,9 @@ Payload:
 
 ### حریم خصوصی
 
-- ربات اصلی می‌تواند Telegram User ID را در درخواست M2M ارسال کند؛ API آن را با HMAC-SHA256 و Secret سمت سرور به `actor_key_hash` تبدیل می‌کند.
+- ربات مجاز در همان بک‌اند، پیش از ثبت رویداد تابع `build_usage_actor_hash(telegram_user_id, hash_key)` را اجرا می‌کند؛ فقط `actor_key_hash` وارد جدول‌های Telemetry می‌شود.
 - شناسه خام در جدول UsageEvent یا UsageIdentity ذخیره نمی‌شود.
-- `CLASSMATE_TELEMETRY_HASH_KEY` باید یک Secret پایدار و جدا از Integration Token باشد تا Rotation کلید دسترسی، هویت‌های آماری قبلی را عوض نکند. در نبود آن، Integration Token fallback است و Rotation آن شمارش تاریخی کاربران را دوپاره می‌کند.
+- `CLASSMATE_TELEMETRY_HASH_KEY` باید یک Secret پایدار باشد؛ تغییر آن هویت‌های آماری قبلی را دوپاره می‌کند. دیگر Integration Token یا fallback مبتنی بر آن وجود ندارد.
 - فقط کلیدهای غیرمحتوایی مجاز در Attributes ذخیره می‌شوند: `feature`، `action`، `result`، `duration_ms`، `class_code`، `subject_code` و `source_screen`.
 - متن پیام، فایل، محتوای درسی، رمز، Token و اطلاعات شخصی نباید وارد Telemetry شوند.
 
@@ -82,27 +79,17 @@ Payload:
 
 آمار تاریخی قبل از اتصال Telemetry خودبه‌خود قابل بازیابی نیست. برای شمار کامل کاربران موجود، ربات اصلی باید یک Backfill کنترل‌شده از رویداد `user.registered` برای حساب‌های قبلی انجام دهد. بدون آن، گزارش «کل کاربران» فقط کاربرانی را می‌شمارد که از شروع Telemetry مشاهده شده‌اند.
 
-## دریافت رویدادهای مصرف
+## ثبت داخلی رویدادهای مصرف
 
-`POST /api/v1/integrations/usage-events`
+ربات اصلی بعد از رخداد معتبر، تابع Application `ingest_usage_event` را مستقیماً فراخوانی می‌کند. شناسه ناشناس با `build_usage_actor_hash` و Secret سمت سرور ساخته می‌شود. Event ID برای Idempotency حفظ می‌شود و Attributes همچنان فقط از Allowlist می‌گذرند. هیچ Payload HTTP، Header مشترک یا سرویس واسطی وجود ندارد.
 
-Payload نمونه:
-```json
-{
-  "event_id": "b7f6fcd4-97ef-4d6a-917b-bf9752ca9f32",
-  "source_service": "main-bot",
-  "event_name": "lesson.viewed",
-  "actor_telegram_user_id": 123456789,
-  "tenant_id": null,
-  "aggregate_type": "lesson",
-  "aggregate_id": null,
-  "attributes": {
-    "feature": "lessons",
-    "action": "open",
-    "result": "success"
-  },
-  "occurred_at": "2026-11-22T18:00:00+03:30"
-}
+نمونه محاسبه شناسه:
+
+```python
+actor_key_hash = build_usage_actor_hash(
+    telegram_user_id=message.from_user.id,
+    hash_key=settings.classmate_telemetry_hash_key.get_secret_value(),
+)
 ```
 
 ## مدیریت درس‌های هر کلاس
@@ -127,4 +114,4 @@ Payload نمونه:
 
 ## مرز استقرار
 
-کد API در این برش اضافه می‌شود، ولی Railway Service فعلی `classmatework` فقط Bot را اجرا می‌کند. این Endpointها تا زمان Deploy جداگانهٔ FastAPI و تنظیم Secretهای مشترک در دسترس شبکه نیستند. در این برش هیچ تغییر یا Deploy روی `classmate2`، `classmate-worker` یا ربات اصلی انجام نمی‌شود.
+تنها سرویس اجرایی این مخزن ربات تلگرام است؛ PostgreSQL و Redis منابع مشترک Bot باقی می‌مانند. مسیر FastAPI، Endpointهای HTTP، وابستگی‌های Uvicorn/FastAPI و Secret اختصاصی M2M از این مخزن حذف شده‌اند. منطق Application برای فراخوانی مستقیم از بک‌اند مشترک حفظ شده است. هیچ تغییر یا Deploy روی `classmate2`، `classmate-worker` یا ربات اصلی انجام نشده است.
