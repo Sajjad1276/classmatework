@@ -981,7 +981,7 @@ def _tenant_invite_roles_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{role['name']} · {role['key']}",
+                    text=f"{role['name'][:18]} · {role['key'][:18]}",
                     callback_data=f"tenant:invite:role:{token}:{index}",
                 )
             ]
@@ -1545,7 +1545,7 @@ async def suspended_member_choose_callback(
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{role['name']} · {role['key']}",
+                text=f"{role['name'][:18]} · {role['key'][:18]}",
                 callback_data=f"tenant:member:restore:role:{next_token}:{index}",
             )
         ]
