@@ -716,6 +716,50 @@ async def _member_directory_content(
     return body, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+@router.callback_query(F.data.startswith("member:directory:"))
+async def member_directory_open_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    raw_tenant_id = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    try:
+        tenant_id = UUID(raw_tenant_id)
+        flow_token = secrets.token_urlsafe(6)
+        body, keyboard = await _member_directory_content(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            page_number=1,
+            search_query=None,
+            flow_token=flow_token,
+        )
+    except AccessDenied:
+        await callback.answer(
+            "مجوز مشاهده اعضای این مجموعه را ندارید.",
+            show_alert=True,
+        )
+        return
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(
+            str(exc) or "شناسه مجموعه معتبر نیست.",
+            show_alert=True,
+        )
+        return
+
+    await state.update_data(
+        flow_name="member_directory",
+        flow_token=flow_token,
+        member_directory_tenant_id=str(tenant_id),
+        member_directory_query=None,
+    )
+    await state.set_state(None)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(body, reply_markup=keyboard)
+
+
 @router.message(Command("members"))
 async def members_command(
     message: Message,
