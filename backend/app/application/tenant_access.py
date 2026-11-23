@@ -200,6 +200,64 @@ async def list_tenant_roles(
     return entries
 
 
+async def list_assignable_tenant_roles(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 50,
+) -> list[RoleDirectoryEntry]:
+    """List only tenant roles whose allow-permissions the actor can delegate."""
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Assignable role limit must be between 1 and 100.")
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    rows = (
+        await db.execute(
+            select(Role, Tenant.name)
+            .outerjoin(Tenant, Tenant.id == Role.tenant_id)
+            .where(Role.tenant_id == tenant_id)
+            .order_by(Role.key)
+            .limit(limit)
+        )
+    ).all()
+    entries = await _build_role_directory(db, rows=list(rows))
+    assignable: list[RoleDirectoryEntry] = []
+    for role in entries:
+        allow_keys = [key for key, effect in role.permissions if effect == "allow"]
+        if not allow_keys or any(key.startswith("platform:") for key, _ in role.permissions):
+            continue
+        can_delegate_every_permission = True
+        for permission_key in allow_keys:
+            if not await has_permission(
+                db,
+                user_id=actor_id,
+                permission_key=permission_key,
+                tenant_id=tenant_id,
+                scope_type="tenant",
+                scope_id=tenant_id,
+            ):
+                can_delegate_every_permission = False
+                break
+        if can_delegate_every_permission:
+            assignable.append(role)
+    await record_event(
+        db,
+        event_type="role.tenant_assignable_directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="role_directory",
+        event_data={"returned_count": len(assignable), "limit": limit},
+    )
+    await db.commit()
+    return assignable
+
+
+
 async def list_platform_roles(
     db: AsyncSession,
     *,
@@ -623,6 +681,77 @@ async def list_tenant_members(
         page_size=limit,
     )
     return list(result.items)
+
+
+
+@dataclass(frozen=True, slots=True)
+class SuspendedTenantMemberView:
+    user_id: UUID
+    display_name: str
+    telegram_user_id: int | None
+    suspended_at: datetime | None
+
+
+async def list_suspended_tenant_members(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 50,
+) -> list[SuspendedTenantMemberView]:
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Suspended member limit must be between 1 and 100.")
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="membership:manage",
+    )
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    rows = (
+        await db.execute(
+            select(TenantMembership, User, TelegramAccount.telegram_user_id)
+            .join(User, User.id == TenantMembership.user_id)
+            .outerjoin(
+                TelegramAccount,
+                and_(
+                    TelegramAccount.user_id == User.id,
+                    TelegramAccount.status == "active",
+                ),
+            )
+            .where(
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == "suspended",
+                User.status == "active",
+            )
+            .order_by(TenantMembership.ends_at.desc(), User.display_name, User.id)
+            .limit(limit)
+        )
+    ).all()
+    members = [
+        SuspendedTenantMemberView(
+            user_id=user.id,
+            display_name=user.display_name,
+            telegram_user_id=telegram_user_id,
+            suspended_at=membership.ends_at,
+        )
+        for membership, user, telegram_user_id in rows
+    ]
+    await record_event(
+        db,
+        event_type="membership.tenant_suspended_directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="membership_directory",
+        event_data={"returned_count": len(members), "limit": limit},
+    )
+    await db.commit()
+    return members
 
 
 

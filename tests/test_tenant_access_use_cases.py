@@ -10,6 +10,8 @@ from app.application.tenant_access import (
     create_tenant_role,
     list_admin_invitations,
     list_assignable_tenant_permissions,
+    list_assignable_tenant_roles,
+    list_suspended_tenant_members,
     list_tenant_members,
     list_tenant_members_page,
     list_tenant_roles,
@@ -232,6 +234,71 @@ async def test_assignable_permission_catalog_is_scoped_to_actor_and_tenant() -> 
             "class:create",
         }
         assert not any(key.startswith("platform:") for key in permissions)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_assignable_tenant_roles_exclude_permissions_outside_actor_ceiling() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, _ = await _seed_manager_and_member(db)
+        platform_permission = (
+            await db.execute(
+                select(Permission).where(Permission.key == "platform:tenants:create")
+            )
+        ).scalar_one()
+        overpowered_role = Role(
+            tenant_id=tenant.id,
+            key=f"overpowered_{uuid4().hex[:8]}",
+            name="Overpowered",
+            is_system=False,
+        )
+        db.add(overpowered_role)
+        await db.flush()
+        db.add(
+            RolePermission(
+                role_id=overpowered_role.id,
+                permission_id=platform_permission.id,
+                effect="allow",
+            )
+        )
+        await db.commit()
+        assignable = await list_assignable_tenant_roles(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+        )
+        assert all(role.key != overpowered_role.key for role in assignable)
+        assert any(
+            permission_key == "school:read"
+            for role in assignable
+            for permission_key, effect in role.permissions
+            if effect == "allow"
+        )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_suspended_member_directory_returns_only_suspended_tenant_members() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, member = await _seed_manager_and_member(db)
+        await suspend_tenant_member(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            member_user_id=member.id,
+            reason="Temporary member suspension for directory test",
+        )
+        suspended = await list_suspended_tenant_members(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+        )
+        assert len(suspended) == 1
+        assert suspended[0].user_id == member.id
+        assert suspended[0].telegram_user_id is not None
+        assert suspended[0].suspended_at is not None
     await engine.dispose()
 
 
