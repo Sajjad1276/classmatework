@@ -29,7 +29,7 @@ from app.application.tenant_access import (
     create_tenant_role,
     list_admin_invitations,
     list_platform_roles,
-    list_tenant_members,
+    list_tenant_members_page,
     list_tenant_roles,
     preview_tenant_member_reactivation,
     preview_tenant_member_suspension,
@@ -66,6 +66,10 @@ class MemberSuspension(StatesGroup):
 
 class MemberReactivation(StatesGroup):
     confirm = State()
+
+
+class MemberDirectory(StatesGroup):
+    search = State()
 
 
 
@@ -619,23 +623,124 @@ async def role_create_command(
     )
 
 
+async def _member_directory_content(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    page_number: int,
+    search_query: str | None,
+    flow_token: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    result = await list_tenant_members_page(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        page=page_number,
+        page_size=8,
+        search_query=search_query,
+    )
+    if result.items:
+        first_index = (result.page - 1) * result.page_size + 1
+        last_index = first_index + len(result.items) - 1
+        lines = [
+            f"👥 اعضای فعال مجموعه",
+            f"نمایش {first_index} تا {last_index} از {result.total_items}",
+            f"صفحه {result.page} از {max(result.total_pages, 1)}",
+        ]
+        if result.search_query:
+            lines.append(f"جست‌وجو: {result.search_query}")
+        lines.append("")
+        for index, member in enumerate(result.items, start=first_index):
+            roles = ", ".join(member.role_keys) or "بدون نقش فعال"
+            telegram_label = (
+                str(member.telegram_user_id)
+                if member.telegram_user_id is not None
+                else "اتصال تلگرام فعال ندارد"
+            )
+            lines.append(
+                f"{index}. {member.display_name}\n"
+                f"شناسه سامانه: {member.user_id}\n"
+                f"Telegram ID: {telegram_label}\n"
+                f"نقش‌ها: {roles}"
+            )
+        body = "\n\n".join(lines)
+    else:
+        body = "هیچ عضو فعالی با این مشخصات پیدا نشد."
+        if result.search_query:
+            body += f"\nعبارت جست‌وجو: {result.search_query}"
+        else:
+            body += "\nاین مجموعه عضو فعال ندارد."
+        body += f"\n\nتعداد نتایج: {result.total_items}"
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if result.total_pages > 1:
+        navigation = []
+        if result.page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ قبلی",
+                    callback_data=f"member:list:page:{flow_token}:{result.page - 1}",
+                )
+            )
+        if result.page < result.total_pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="بعدی ➡️",
+                    callback_data=f"member:list:page:{flow_token}:{result.page + 1}",
+                )
+            )
+        if navigation:
+            rows.append(navigation)
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔎 جست‌وجو" if not result.search_query else "🔎 تغییر جست‌وجو",
+                callback_data=f"member:list:search:{flow_token}",
+            )
+        ]
+    )
+    if result.search_query:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🧹 حذف جست‌وجو",
+                    callback_data=f"member:list:clear:{flow_token}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ بازگشت به خانه", callback_data="root:menu")]
+    )
+    return body, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.message(Command("members"))
 async def members_command(
     message: Message,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
 ) -> None:
-    parts = (message.text or "").strip().split(maxsplit=1)
-    if len(parts) != 2:
-        await message.answer("قالب فرمان: /members TENANT_UUID")
+    parts = (message.text or "").strip().split(maxsplit=2)
+    if len(parts) < 2:
+        await message.answer(
+            "قالب فرمان: /members TENANT_UUID [نام یا Telegram ID]\n"
+            "برای مشاهده همه اعضا فقط شناسه مجموعه را وارد کنید."
+        )
         return
     try:
         tenant_id = UUID(parts[1])
-        members = await list_tenant_members(
+        search_query = parts[2] if len(parts) == 3 else None
+        flow_token = secrets.token_urlsafe(6)
+        body, keyboard = await _member_directory_content(
             db,
             actor_id=principal.user.id,
             tenant_id=tenant_id,
-            limit=50,
+            page_number=1,
+            search_query=search_query,
+            flow_token=flow_token,
         )
     except ValueError:
         await message.answer("شناسه Tenant معتبر نیست.")
@@ -647,25 +752,169 @@ async def members_command(
         await message.answer(str(exc))
         return
 
-    if not members:
-        await message.answer("عضو فعالی در این مجموعه وجود ندارد.")
+    await state.clear()
+    await state.update_data(
+        flow_name="member_directory",
+        flow_token=flow_token,
+        member_directory_tenant_id=str(tenant_id),
+        member_directory_query=search_query,
+    )
+    await state.set_state(None)
+    await message.answer(body, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("member:list:page:"))
+async def member_directory_page_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    parts = (callback.data or "").split(":")
+    supplied_token = parts[3] if len(parts) == 5 else ""
+    if (
+        data.get("flow_name") != "member_directory"
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+    ):
+        await callback.answer(
+            "این صفحه متعلق به فهرست قبلی است یا منقضی شده است.",
+            show_alert=True,
+        )
+        return
+    try:
+        tenant_id = UUID(data["member_directory_tenant_id"])
+        page_number = int(parts[4])
+        body, keyboard = await _member_directory_content(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            page_number=page_number,
+            search_query=data.get("member_directory_query"),
+            flow_token=supplied_token,
+        )
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "درخواست صفحه معتبر نیست.", show_alert=True)
+        return
+    except AccessDenied:
+        await state.clear()
+        await callback.answer("دسترسی مشاهده اعضای این مجموعه را ندارید.", show_alert=True)
         return
 
-    lines = [f"اعضای فعال مجموعه {tenant_id}\n"]
-    for index, member in enumerate(members, start=1):
-        roles = ", ".join(member.role_keys) or "بدون نقش فعال"
-        telegram_label = (
-            str(member.telegram_user_id)
-            if member.telegram_user_id is not None
-            else "اتصال تلگرام ندارد"
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(body, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("member:list:search:"))
+async def member_directory_search_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        data.get("flow_name") != "member_directory"
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+    ):
+        await callback.answer("این فهرست دیگر فعال نیست.", show_alert=True)
+        return
+    await state.set_state(MemberDirectory.search)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "نام عضو یا Telegram ID دقیق را وارد کنید.\n"
+            "برای لغو جست‌وجو /cancel را بزنید."
         )
-        lines.append(
-            f"{index}. {member.display_name}\n"
-            f"   User ID: {member.user_id}\n"
-            f"   Telegram ID: {telegram_label}\n"
-            f"   نقش‌ها: {roles}"
+
+
+@router.message(MemberDirectory.search, F.text)
+async def member_directory_search_input(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    search_query = (message.text or "").strip()
+    if not search_query:
+        await message.answer("عبارت جست‌وجو خالی است؛ نام یا Telegram ID را وارد کنید.")
+        return
+    if search_query.startswith("/"):
+        await message.answer("عبارت جست‌وجو معتبر نیست؛ برای خروج از /cancel استفاده کنید.")
+        return
+
+    data = await state.get_data()
+    if (
+        data.get("flow_name") != "member_directory"
+        or not data.get("flow_token")
+        or not data.get("member_directory_tenant_id")
+    ):
+        await state.clear()
+        await message.answer("فهرست اعضا منقضی شده است. دوباره /members را اجرا کنید.")
+        return
+    try:
+        tenant_id = UUID(data["member_directory_tenant_id"])
+        body, keyboard = await _member_directory_content(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            page_number=1,
+            search_query=search_query,
+            flow_token=data["flow_token"],
         )
-    await message.answer("\n\n".join(lines))
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await message.answer(str(exc) or "عبارت جست‌وجو معتبر نیست.")
+        return
+    except AccessDenied:
+        await state.clear()
+        await message.answer("مجوز مشاهده اعضای این مجموعه را ندارید.")
+        return
+
+    await state.update_data(member_directory_query=search_query)
+    await state.set_state(None)
+    await message.answer(body, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("member:list:clear:"))
+async def member_directory_clear_search_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        data.get("flow_name") != "member_directory"
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+    ):
+        await callback.answer("این فهرست دیگر فعال نیست.", show_alert=True)
+        return
+    try:
+        tenant_id = UUID(data["member_directory_tenant_id"])
+        body, keyboard = await _member_directory_content(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            page_number=1,
+            search_query=None,
+            flow_token=supplied_token,
+        )
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "درخواست معتبر نیست.", show_alert=True)
+        return
+    except AccessDenied:
+        await state.clear()
+        await callback.answer("مجوز مشاهده اعضای این مجموعه را ندارید.", show_alert=True)
+        return
+
+    await state.update_data(member_directory_query=None)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(body, reply_markup=keyboard)
 
 
 @router.message(Command("invites"))
@@ -1362,7 +1611,7 @@ async def help_command(
         "/cancel — لغو فرم جاری\n"
         "/roles [TENANT_UUID] — فهرست نقش‌های قابل واگذاری\n"
         "/role_create TENANT_UUID KEY PERMISSIONS | NAME — ساخت نقش محدود به اختیارات شما\n"
-        "/members TENANT_UUID — فهرست اعضای فعال مجموعه\n"
+        "/members TENANT_UUID [SEARCH] — فهرست صفحه‌بندی‌شده و جست‌وجوی اعضای مجموعه\n"
         "/member_suspend TENANT_UUID USER_UUID | REASON — تعلیق عضو پس از تأیید\n"
         "/member_reactivate TENANT_UUID USER_UUID ROLE_KEY | REASON — فعال‌سازی مجدد با نقش مشخص\n"
         "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
