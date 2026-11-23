@@ -1,13 +1,13 @@
-.PHONY: install dev test lint format api
+.PHONY: install dev migrate test lint format
 
 install:
 	python -m pip install -r requirements-dev.txt
 
 dev:
-	uvicorn app.main:app --app-dir backend --reload --host 0.0.0.0 --port 8000
+	PYTHONPATH=backend python -m app.bot.main
 
-api:
-	uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
+migrate:
+	PYTHONPATH=backend alembic -c backend/alembic.ini upgrade head
 
 test:
 	pytest
