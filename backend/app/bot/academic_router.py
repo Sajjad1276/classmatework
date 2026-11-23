@@ -249,11 +249,22 @@ async def _has_school_permission(
 
 def _tenant_keyboard(
     *,
+    tenant_id: UUID,
     can_list: bool,
     can_create: bool,
     can_archive: bool,
+    can_read_members: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    if can_read_members:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="👥 مدیریت اعضای مجموعه",
+                    callback_data=f"member:directory:{tenant_id}",
+                )
+            ]
+        )
     if can_list:
         rows.append([InlineKeyboardButton(text="🏫 مدارس مجموعه", callback_data="school:list")])
     if can_create:
@@ -299,6 +310,14 @@ async def _show_tenant_menu(
         scope_type="tenant",
         scope_id=tenant_id,
     )
+    can_read_members = await has_permission(
+        db,
+        user_id=principal.user.id,
+        permission_key="membership:read",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    )
     body = (
         f"🏢 مدیریت مجموعه: {tenant.name}\n"
         f"شناسه: {tenant.slug}\n\n"
@@ -310,9 +329,11 @@ async def _show_tenant_menu(
         message,
         body,
         _tenant_keyboard(
+            tenant_id=tenant_id,
             can_list=can_list,
             can_create=can_create,
             can_archive=can_archive,
+            can_read_members=can_read_members,
         ),
     )
 
