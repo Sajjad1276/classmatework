@@ -711,7 +711,7 @@ async def _member_directory_content(
             ]
         )
     rows.append(
-        [InlineKeyboardButton(text="⬅️ بازگشت به خانه", callback_data="root:menu")]
+        [InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data=f"tenant:open:{tenant_id}")]
     )
     return body, InlineKeyboardMarkup(inline_keyboard=rows)
 
