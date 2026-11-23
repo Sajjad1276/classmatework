@@ -644,7 +644,8 @@ async def _member_directory_content(
         first_index = (result.page - 1) * result.page_size + 1
         last_index = first_index + len(result.items) - 1
         lines = [
-            f"👥 اعضای فعال مجموعه",
+            "👥 اعضای فعال مجموعه",
+            f"شناسه مجموعه: {tenant_id}",
             f"نمایش {first_index} تا {last_index} از {result.total_items}",
             f"صفحه {result.page} از {max(result.total_pages, 1)}",
         ]
@@ -794,12 +795,12 @@ async def member_directory_page_callback(
             search_query=data.get("member_directory_query"),
             flow_token=supplied_token,
         )
-    except (ValueError, KeyError, ApplicationError) as exc:
-        await callback.answer(str(exc) or "درخواست صفحه معتبر نیست.", show_alert=True)
-        return
     except AccessDenied:
         await state.clear()
         await callback.answer("دسترسی مشاهده اعضای این مجموعه را ندارید.", show_alert=True)
+        return
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "درخواست صفحه معتبر نیست.", show_alert=True)
         return
 
     await callback.answer()
@@ -864,12 +865,12 @@ async def member_directory_search_input(
             search_query=search_query,
             flow_token=data["flow_token"],
         )
-    except (ValueError, KeyError, ApplicationError) as exc:
-        await message.answer(str(exc) or "عبارت جست‌وجو معتبر نیست.")
-        return
     except AccessDenied:
         await state.clear()
         await message.answer("مجوز مشاهده اعضای این مجموعه را ندارید.")
+        return
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await message.answer(str(exc) or "عبارت جست‌وجو معتبر نیست.")
         return
 
     await state.update_data(member_directory_query=search_query)
@@ -903,12 +904,12 @@ async def member_directory_clear_search_callback(
             search_query=None,
             flow_token=supplied_token,
         )
-    except (ValueError, KeyError, ApplicationError) as exc:
-        await callback.answer(str(exc) or "درخواست معتبر نیست.", show_alert=True)
-        return
     except AccessDenied:
         await state.clear()
         await callback.answer("مجوز مشاهده اعضای این مجموعه را ندارید.", show_alert=True)
+        return
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "درخواست معتبر نیست.", show_alert=True)
         return
 
     await state.update_data(member_directory_query=None)
