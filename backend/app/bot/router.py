@@ -61,6 +61,7 @@ class TenantCreation(StatesGroup):
     confirm = State()
 
 class MemberSuspension(StatesGroup):
+    reason = State()
     confirm = State()
 
 
@@ -640,11 +641,20 @@ async def _member_directory_content(
         page_size=8,
         search_query=search_query,
     )
+    can_manage_members = await has_permission(
+        db,
+        user_id=actor_id,
+        permission_key="membership:manage",
+        tenant_id=tenant_id,
+        scope_type="tenant",
+        scope_id=tenant_id,
+    )
+    member_action_rows: list[list[InlineKeyboardButton]] = []
     if result.items:
         first_index = (result.page - 1) * result.page_size + 1
         last_index = first_index + len(result.items) - 1
         lines = [
-            f"👥 اعضای فعال مجموعه",
+            "👥 اعضای فعال مجموعه",
             f"نمایش {first_index} تا {last_index} از {result.total_items}",
             f"صفحه {result.page} از {max(result.total_pages, 1)}",
         ]
@@ -664,6 +674,18 @@ async def _member_directory_content(
                 f"Telegram ID: {telegram_label}\n"
                 f"نقش‌ها: {roles}"
             )
+            if can_manage_members:
+                member_action_rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"⛔ تعلیق {member.display_name[:24]}",
+                            callback_data=_member_suspend_callback_data(
+                                flow_token,
+                                member.user_id,
+                            ),
+                        )
+                    ]
+                )
         body = "\n\n".join(lines)
     else:
         body = "هیچ عضو فعالی با این مشخصات پیدا نشد."
@@ -673,7 +695,7 @@ async def _member_directory_content(
             body += "\nاین مجموعه عضو فعال ندارد."
         body += f"\n\nتعداد نتایج: {result.total_items}"
 
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[InlineKeyboardButton]] = member_action_rows
     if result.total_pages > 1:
         navigation = []
         if result.page > 1:
@@ -714,6 +736,203 @@ async def _member_directory_content(
         [InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data=f"tenant:open:{tenant_id}")]
     )
     return body, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+
+def _member_suspend_callback_data(flow_token: str, member_user_id: UUID) -> str:
+    callback_data = f"member:suspend:start:{flow_token}:{member_user_id.hex}"
+    if len(callback_data.encode("utf-8")) > 64:
+        raise ValueError("Member action callback exceeds Telegram's 64-byte limit.")
+    return callback_data
+
+
+async def _restore_member_directory_after_suspend(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    data: dict,
+    *,
+    notice: str,
+) -> bool:
+    if not data.get("return_member_directory") or callback.message is None:
+        return False
+
+    try:
+        tenant_id = UUID(data["return_member_directory_tenant_id"])
+        search_query = data.get("return_member_directory_query")
+        flow_token = secrets.token_urlsafe(6)
+        body, keyboard = await _member_directory_content(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            page_number=1,
+            search_query=search_query,
+            flow_token=flow_token,
+        )
+    except (ValueError, KeyError, ApplicationError, AccessDenied):
+        return False
+
+    await state.clear()
+    await state.update_data(
+        flow_name="member_directory",
+        flow_token=flow_token,
+        member_directory_tenant_id=str(tenant_id),
+        member_directory_query=search_query,
+    )
+    await state.set_state(None)
+    await callback.message.edit_text(
+        f"{notice}\n\n{body}",
+        reply_markup=keyboard,
+    )
+    return True
+
+
+@router.callback_query(F.data.startswith("member:suspend:start:"))
+async def member_suspend_start_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    parts = (callback.data or "").split(":")
+    supplied_token = parts[3] if len(parts) == 5 else ""
+    if len(parts) != 5 or parts[0:3] != ["member", "suspend", "start"]:
+        await callback.answer("درخواست تعلیق معتبر نیست.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    if (
+        data.get("flow_name") != "member_directory"
+        or not supplied_token
+        or supplied_token != data.get("flow_token")
+    ):
+        await callback.answer("این فهرست دیگر فعال نیست.", show_alert=True)
+        return
+
+    try:
+        tenant_id = UUID(data["member_directory_tenant_id"])
+        member_user_id = UUID(hex=parts[4])
+        preview = await preview_tenant_member_suspension(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=member_user_id,
+        )
+    except AccessDenied:
+        await callback.answer("مجوز مدیریت عضویت‌های این مجموعه را ندارید.", show_alert=True)
+        return
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "عضو انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+
+    suspend_token = secrets.token_urlsafe(9)
+    await state.update_data(
+        flow_name="member_suspend",
+        flow_token=suspend_token,
+        suspend_tenant_id=str(tenant_id),
+        suspend_member_user_id=str(member_user_id),
+        return_member_directory=True,
+        return_member_directory_tenant_id=str(tenant_id),
+        return_member_directory_query=data.get("member_directory_query"),
+    )
+    await state.set_state(MemberSuspension.reason)
+    await callback.answer()
+    role_warning = (
+        "\nاین کاربر مدیر مجموعه است؛ آخرین مدیر فعال قابل تعلیق نیست."
+        if preview.is_tenant_admin
+        else ""
+    )
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "⛔ تعلیق عضویت\n\n"
+            f"عضو: {preview.display_name}\n"
+            f"شناسه سامانه: {preview.user_id}"
+            f"{role_warning}\n\n"
+            "دلیل تعلیق را در پیام بعدی وارد کنید. دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت بدون تغییر",
+                            callback_data=f"member:suspend:cancel:{suspend_token}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+@router.message(MemberSuspension.reason, F.text)
+async def member_suspend_reason_input(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    if data.get("flow_name") != "member_suspend":
+        await state.clear()
+        await message.answer("درخواست تعلیق منقضی شده است؛ دوباره فهرست اعضا را باز کنید.")
+        return
+
+    reason = (message.text or "").strip()
+    if not 10 <= len(reason) <= 500:
+        await message.answer("دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد. دوباره وارد کنید.")
+        return
+
+    try:
+        tenant_id = UUID(data["suspend_tenant_id"])
+        member_user_id = UUID(data["suspend_member_user_id"])
+        preview = await preview_tenant_member_suspension(
+            db,
+            actor_id=principal.user.id,
+            tenant_id=tenant_id,
+            member_user_id=member_user_id,
+        )
+    except AccessDenied:
+        await state.clear()
+        await message.answer("مجوز تعلیق عضویت را ندارید.")
+        return
+    except (ValueError, KeyError, ApplicationError) as exc:
+        await state.clear()
+        await message.answer(str(exc) or "عضو انتخاب‌شده دیگر قابل تعلیق نیست.")
+        return
+
+    await state.update_data(suspend_reason=reason)
+    await state.set_state(MemberSuspension.confirm)
+    role_warning = (
+        "\nاین کاربر مدیر مجموعه است؛ امکان تعلیق آخرین مدیر فعال وجود ندارد."
+        if preview.is_tenant_admin
+        else ""
+    )
+    flow_token = data["flow_token"]
+    await message.answer(
+        "پیش‌نمایش تعلیق عضویت\n\n"
+        f"نام عضو: {preview.display_name}\n"
+        f"شناسه سامانه: {preview.user_id}\n"
+        f"مجموعه: {tenant_id}\n"
+        f"دلیل: {reason}"
+        f"{role_warning}\n\n"
+        "فقط با تأیید دکمه زیر عضویت این کاربر در همین مجموعه پایان می‌یابد.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="تأیید تعلیق",
+                        callback_data=f"member:suspend:confirm:{flow_token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="لغو",
+                        callback_data=f"member:suspend:cancel:{flow_token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
 
 
 @router.callback_query(F.data.startswith("member:directory:"))
@@ -1156,7 +1375,15 @@ async def member_suspend_confirm_callback(
 
     await state.clear()
     await callback.answer("عضویت تعلیق شد.")
-    if callback.message is not None:
+    restored = await _restore_member_directory_after_suspend(
+        callback,
+        principal,
+        db,
+        state,
+        data,
+        notice=f"عضویت {result.display_name} تعلیق شد.",
+    )
+    if not restored and callback.message is not None:
         await callback.message.answer(
             "عضویت با موفقیت تعلیق شد.\n\n"
             f"عضو: {result.display_name}\n"
@@ -1170,12 +1397,17 @@ async def member_suspend_confirm_callback(
 @router.callback_query(F.data.startswith("member:suspend:cancel:"))
 async def member_suspend_cancel_callback(
     callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
     supplied_token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
     if (
-        await state.get_state() != MemberSuspension.confirm.state
+        await state.get_state() not in {
+            MemberSuspension.reason.state,
+            MemberSuspension.confirm.state,
+        }
         or not supplied_token
         or supplied_token != data.get("flow_token")
         or data.get("flow_name") != "member_suspend"
@@ -1187,7 +1419,15 @@ async def member_suspend_cancel_callback(
         return
     await state.clear()
     await callback.answer("تعلیق لغو شد.")
-    if callback.message is not None:
+    restored = await _restore_member_directory_after_suspend(
+        callback,
+        principal,
+        db,
+        state,
+        data,
+        notice="درخواست تعلیق لغو شد؛ تغییری اعمال نشد.",
+    )
+    if not restored and callback.message is not None:
         await callback.message.answer("درخواست تعلیق لغو شد؛ تغییری در عضویت انجام نشد.")
 
 

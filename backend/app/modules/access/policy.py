@@ -217,25 +217,3 @@ async def has_permission(
     ).scalar_one_or_none() is not None
     return has_membership and any(effect == "allow" for effect, _ in grants)
 
-
-async def require_permission(
-    db: AsyncSession,
-    *,
-    user_id: UUID,
-    permission_key: str,
-    tenant_id: UUID | None,
-    scope_type: str = "tenant",
-    scope_id: UUID | None = None,
-) -> None:
-    from fastapi import HTTPException, status
-
-    allowed = await has_permission(
-        db,
-        user_id=user_id,
-        permission_key=permission_key,
-        tenant_id=tenant_id,
-        scope_type=scope_type,
-        scope_id=scope_id,
-    )
-    if not allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
