@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,16 @@ class TenantMemberView:
     telegram_user_id: int | None
     role_keys: tuple[str, ...]
     joined_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TenantMemberPage:
+    items: tuple[TenantMemberView, ...]
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+    search_query: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,15 +408,27 @@ async def list_admin_invitations(
     return invitations
 
 
-async def list_tenant_members(
+async def list_tenant_members_page(
     db: AsyncSession,
     *,
     actor_id: UUID,
     tenant_id: UUID,
-    limit: int = 50,
-) -> list[TenantMemberView]:
-    if not 1 <= limit <= 100:
+    page: int = 1,
+    page_size: int = 8,
+    search_query: str | None = None,
+) -> TenantMemberPage:
+    """Return one authorized page of active tenant members, optionally filtered by name or Telegram ID."""
+    if page < 1:
+        raise InvalidApplicationInput("Membership page number must be positive.")
+    if not 1 <= page_size <= 100:
         raise InvalidApplicationInput("Membership page size must be between 1 and 100.")
+
+    normalized_query = (search_query or "").strip()
+    if len(normalized_query) > 80:
+        raise InvalidApplicationInput("عبارت جست‌وجو نباید بیشتر از ۸۰ نویسه باشد.")
+    if not normalized_query:
+        normalized_query = None
+
     await _require_tenant_permission(
         db,
         actor_id=actor_id,
@@ -415,6 +437,52 @@ async def list_tenant_members(
     )
 
     now = datetime.now(UTC)
+    filters = [
+        TenantMembership.tenant_id == tenant_id,
+        TenantMembership.status == "active",
+        User.status == "active",
+        or_(
+            TenantMembership.starts_at.is_(None),
+            TenantMembership.starts_at <= now,
+        ),
+        or_(
+            TenantMembership.ends_at.is_(None),
+            TenantMembership.ends_at > now,
+        ),
+    ]
+    if normalized_query is not None:
+        escaped_query = (
+            normalized_query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        name_filter = User.display_name.ilike(f"%{escaped_query}%", escape="\\")
+        search_filter = name_filter
+        if normalized_query.isdecimal():
+            telegram_id = int(normalized_query)
+            if 0 < telegram_id <= 9_223_372_036_854_775_807:
+                matching_user_ids = select(TelegramAccount.user_id).where(
+                    TelegramAccount.telegram_user_id == telegram_id,
+                    TelegramAccount.status == "active",
+                )
+                search_filter = or_(
+                    name_filter,
+                    User.id.in_(matching_user_ids),
+                )
+        filters.append(search_filter)
+
+    total_items = int(
+        (
+            await db.execute(
+                select(func.count(TenantMembership.id))
+                .join(User, User.id == TenantMembership.user_id)
+                .where(*filters)
+            )
+        ).scalar_one()
+    )
+    total_pages = (total_items + page_size - 1) // page_size
+    effective_page = min(page, total_pages) if total_pages else 1
+
     rows = (
         await db.execute(
             select(TenantMembership, User, TelegramAccount.telegram_user_id)
@@ -426,21 +494,10 @@ async def list_tenant_members(
                     TelegramAccount.status == "active",
                 ),
             )
-            .where(
-                TenantMembership.tenant_id == tenant_id,
-                TenantMembership.status == "active",
-                User.status == "active",
-                or_(
-                    TenantMembership.starts_at.is_(None),
-                    TenantMembership.starts_at <= now,
-                ),
-                or_(
-                    TenantMembership.ends_at.is_(None),
-                    TenantMembership.ends_at > now,
-                ),
-            )
+            .where(*filters)
             .order_by(User.display_name, User.id)
-            .limit(limit)
+            .offset((effective_page - 1) * page_size)
+            .limit(page_size)
         )
     ).all()
 
@@ -464,7 +521,7 @@ async def list_tenant_members(
         for user_id, role_key in binding_rows:
             role_map[user_id].append(role_key)
 
-    members = [
+    members = tuple(
         TenantMemberView(
             user_id=user.id,
             display_name=user.display_name,
@@ -473,17 +530,48 @@ async def list_tenant_members(
             joined_at=membership.starts_at or membership.created_at,
         )
         for membership, user, telegram_user_id in rows
-    ]
+    )
     await record_event(
         db,
         event_type="membership.tenant_directory.read",
         actor_id=actor_id,
         tenant_id=tenant_id,
         aggregate_type="membership_directory",
-        event_data={"returned_count": len(members), "limit": limit},
+        event_data={
+            "returned_count": len(members),
+            "total_items": total_items,
+            "page": effective_page,
+            "page_size": page_size,
+            "search_used": normalized_query is not None,
+        },
     )
     await db.commit()
-    return members
+    return TenantMemberPage(
+        items=members,
+        page=effective_page,
+        page_size=page_size,
+        total_items=total_items,
+        total_pages=total_pages,
+        search_query=normalized_query,
+    )
+
+
+async def list_tenant_members(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 50,
+) -> list[TenantMemberView]:
+    """Backward-compatible first-page view for callers that only need a bounded list."""
+    result = await list_tenant_members_page(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        page=1,
+        page_size=limit,
+    )
+    return list(result.items)
 
 
 

@@ -10,6 +10,7 @@ from app.application.tenant_access import (
     create_tenant_role,
     list_admin_invitations,
     list_tenant_members,
+    list_tenant_members_page,
     list_tenant_roles,
     preview_tenant_member_reactivation,
     preview_tenant_member_suspension,
@@ -664,5 +665,117 @@ async def test_reactivation_requires_active_telegram_link_and_role_permissions()
                 member_user_id=member.id,
                 role_key="does_not_matter",
                 reason="Attempt reactivation with a blocked Telegram link",
+            )
+    await engine.dispose()
+
+
+
+@pytest.mark.asyncio
+async def test_membership_directory_paginates_and_searches_by_name_or_telegram_id() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, _ = await _seed_manager_and_member(db)
+        for index in range(11):
+            user = User(display_name=f"Teacher {index:02d}", status="active")
+            db.add(user)
+            await db.flush()
+            db.add(
+                TenantMembership(
+                    user_id=user.id,
+                    tenant_id=tenant.id,
+                    status="active",
+                )
+            )
+        searched_user = User(display_name="Searchable Physics Teacher", status="active")
+        db.add(searched_user)
+        await db.flush()
+        db.add_all(
+            [
+                TenantMembership(
+                    user_id=searched_user.id,
+                    tenant_id=tenant.id,
+                    status="active",
+                ),
+                TelegramAccount(
+                    user_id=searched_user.id,
+                    telegram_user_id=555_001_222,
+                    status="active",
+                ),
+            ]
+        )
+        await db.commit()
+
+        first_page = await list_tenant_members_page(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            page=1,
+            page_size=8,
+        )
+        second_page = await list_tenant_members_page(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            page=2,
+            page_size=8,
+        )
+        assert first_page.total_items == 14
+        assert first_page.total_pages == 2
+        assert first_page.page == 1
+        assert len(first_page.items) == 8
+        assert second_page.page == 2
+        assert len(second_page.items) == 6
+        assert {item.user_id for item in first_page.items}.isdisjoint(
+            {item.user_id for item in second_page.items}
+        )
+
+        by_name = await list_tenant_members_page(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            search_query="Physics",
+        )
+        assert by_name.total_items == 1
+        assert by_name.items[0].user_id == searched_user.id
+
+        by_telegram_id = await list_tenant_members_page(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            search_query="555001222",
+        )
+        assert by_telegram_id.total_items == 1
+        assert by_telegram_id.items[0].user_id == searched_user.id
+
+        clamped_page = await list_tenant_members_page(
+            db,
+            actor_id=manager.id,
+            tenant_id=tenant.id,
+            page=99,
+            page_size=8,
+        )
+        assert clamped_page.page == 2
+        assert len(clamped_page.items) == 6
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_membership_directory_rejects_invalid_page_and_search_length() -> None:
+    engine, factory = await _database()
+    async with factory() as db:
+        tenant, manager, _ = await _seed_manager_and_member(db)
+        with pytest.raises(InvalidApplicationInput):
+            await list_tenant_members_page(
+                db,
+                actor_id=manager.id,
+                tenant_id=tenant.id,
+                page=0,
+            )
+        with pytest.raises(InvalidApplicationInput):
+            await list_tenant_members_page(
+                db,
+                actor_id=manager.id,
+                tenant_id=tenant.id,
+                search_query="x" * 81,
             )
     await engine.dispose()
