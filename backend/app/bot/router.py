@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import secrets
-from datetime import UTC, datetime
 from uuid import UUID
 
 from aiogram import F, Router
@@ -18,7 +17,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
-from sqlalchemy import or_, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors import (
@@ -124,13 +123,13 @@ async def main_menu(
     )
 
     first_row = [KeyboardButton(text=MAIN_MENU_ACCOUNT)]
-    if can_list_tenants:
+    if can_read_schools:
         first_row.append(KeyboardButton(text=MAIN_MENU_SCHOOLS))
 
     second_row = []
     if can_read_reports:
         second_row.append(KeyboardButton(text=MAIN_MENU_REPORTS))
-    if can_create_tenants:
+    if can_create_schools:
         second_row.append(KeyboardButton(text=MAIN_MENU_CREATE_SCHOOL))
     second_row.append(KeyboardButton(text=MAIN_MENU_HELP))
 

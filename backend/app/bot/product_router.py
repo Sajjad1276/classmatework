@@ -17,14 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.errors import ApplicationError, ResourceConflict
 from app.application.product_management import (
-    create_product_school,
-    get_product_school,
     add_product_class_member,
     create_and_assign_product_subject,
     create_product_announcement,
     create_product_class,
+    create_product_school,
     create_product_timetable_entry,
     get_product_class,
+    get_product_school,
     list_class_subjects,
     list_class_timetable,
     list_product_class_announcements,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import unicodedata
 from datetime import time
+import unicodedata
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
