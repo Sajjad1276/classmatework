@@ -1573,7 +1573,7 @@ async def product_class_detail_callback(
                         else []
                     ),
                     *(
-                        [
+                        [[
                             InlineKeyboardButton(
                                 text="✏️ ویرایش کلاس",
                                 callback_data=f"product:class:edit:{class_id}",
@@ -1582,7 +1582,7 @@ async def product_class_detail_callback(
                                 text=("⛔ غیرفعال‌سازی کلاس" if class_info["is_active"] else "♻️ فعال‌سازی کلاس"),
                                 callback_data=f"product:class:status:{class_id}:{0 if class_info['is_active'] else 1}",
                             ),
-                        ]
+                        ]]
                         if await _has_permission(db, principal, "platform:classes:manage")
                         else []
                     ),
@@ -2285,19 +2285,19 @@ async def product_class_member_role_prompt_callback(
                     [
                         InlineKeyboardButton(
                             text="👨‍🎓 دانش‌آموز",
-                            callback_data=f"product:member:role:confirm:{class_id}:{user_id}:student",
+                            callback_data=f"pmr:{class_id}:{user_id}:student",
                         )
                     ],
                     [
                         InlineKeyboardButton(
                             text="👨‍🏫 مدیر کلاس",
-                            callback_data=f"product:member:role:confirm:{class_id}:{user_id}:class_manager",
+                            callback_data=f"pmr:{class_id}:{user_id}:class_manager",
                         )
                     ],
                     [
                         InlineKeyboardButton(
                             text="🛡 تأییدکننده",
-                            callback_data=f"product:member:role:confirm:{class_id}:{user_id}:trusted_approver",
+                            callback_data=f"pmr:{class_id}:{user_id}:trusted_approver",
                         )
                     ],
                     [
@@ -2311,7 +2311,7 @@ async def product_class_member_role_prompt_callback(
         )
 
 
-@router.callback_query(F.data.regexp(r"^product:member:role:confirm:[0-9]+:[0-9]+:(student|class_manager|trusted_approver)$"))
+@router.callback_query(F.data.regexp(r"^pmr:[0-9]+:[0-9]+:(student|class_manager|trusted_approver)$"))
 async def product_class_member_role_confirm_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2327,7 +2327,7 @@ async def product_class_member_role_confirm_callback(
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
     parts = (callback.data or "").split(":")
-    class_id, user_id, role = int(parts[4]), int(parts[5]), parts[6]
+    class_id, user_id, role = int(parts[1]), int(parts[2]), parts[3]
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -2572,8 +2572,7 @@ async def product_record_review_prompt_callback(
                         InlineKeyboardButton(
                             text=f"✅ تأیید {action}",
                             callback_data=(
-                                f"product:record:review:confirm:{class_id}:"
-                                f"{entity_type}:{record_id}:{decision}"
+                                f"prc:{class_id}:{entity_type}:{record_id}:{decision}"
                             ),
                         )
                     ],
@@ -2589,7 +2588,7 @@ async def product_record_review_prompt_callback(
 
 
 @router.callback_query(
-    F.data.regexp(r"^product:record:review:confirm:[0-9]+:(homework|exam|report):[0-9]+:(approve|reject)$")
+    F.data.regexp(r"^prc:[0-9]+:(homework|exam|report):[0-9]+:(approve|reject)$")
 )
 async def product_record_review_confirm_callback(
     callback: CallbackQuery,
@@ -2605,10 +2604,10 @@ async def product_record_review_confirm_callback(
         return
     parts = (callback.data or "").split(":")
     class_id, entity_type, record_id, decision = (
-        int(parts[4]),
-        parts[5],
-        int(parts[6]),
-        parts[7],
+        int(parts[1]),
+        parts[2],
+        int(parts[3]),
+        parts[4],
     )
     try:
         async with product_session_factory() as product_db:
