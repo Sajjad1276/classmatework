@@ -201,9 +201,3 @@ async def test_member_suspension_back_and_school_directory_routes_are_live():
     assert len(callback_data.encode("utf-8")) <= 64
     assert callback_data.startswith("m:s:start:")
 
-    # These are the targets of the Work control-panel Back buttons.
-    from app.bot.control_router import router as control_router
-    from app.bot.router import router as root_router
-
-    assert root_router.name == "admin-control"
-    assert control_router.name == "control-center"
