@@ -201,3 +201,91 @@ async def test_member_suspension_back_and_school_directory_routes_are_live():
     assert len(callback_data.encode("utf-8")) <= 64
     assert callback_data.startswith("m:s:start:")
 
+
+
+
+@pytest.mark.asyncio
+async def test_schools_directory_offers_bulk_code_issuance_to_class_managers():
+    from app.bot.product_router import _school_directory_keyboard
+
+    keyboard = _school_directory_keyboard(
+        [],
+        can_create=False,
+        can_manage_classes=True,
+    )
+    callback_data = {
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+    }
+    assert "product:classes:join-codes:missing" in callback_data
+
+
+@pytest.mark.asyncio
+async def test_bulk_class_code_action_displays_only_new_codes_in_private_chat(monkeypatch):
+    from app.bot import product_router
+
+    async def require_private(_callback, _operation):
+        return True
+
+    async def has_permission(_db, _principal, permission_key):
+        return permission_key == "platform:classes:manage"
+
+    issued = [
+        {
+            "class_id": 31,
+            "class_name": "دهم الف",
+            "school_id": 7,
+            "school_name": "دبیرستان نمونه",
+            "join_code": "ABCD2345XY",
+        }
+    ]
+    issue_service = AsyncMock(return_value=issued)
+    audit = AsyncMock()
+    monkeypatch.setattr(product_router, "_require_private_callback", require_private)
+    monkeypatch.setattr(product_router, "_has_permission", has_permission)
+    monkeypatch.setattr(product_router, "issue_missing_product_class_join_codes", issue_service)
+    monkeypatch.setattr(product_router, "record_event", audit)
+
+    callback = _callback("product:classes:join-codes:missing")
+    principal = SimpleNamespace(user=SimpleNamespace(id=42))
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+
+    await product_router.product_missing_class_join_codes_callback(
+        callback,
+        principal=principal,
+        db=db,
+        product_session_factory=lambda: ProductSessionContext(),
+    )
+
+    issue_service.assert_awaited_once()
+    db.commit.assert_awaited_once()
+    audit.assert_awaited_once()
+    body = callback.message.edit_text.await_args.args[0]
+    assert "دهم الف" in body
+    assert "/join ABCD2345XY" in body
+    assert "کدهای قبلی دست‌نخورده باقی ماندند" in body
+
+
+@pytest.mark.asyncio
+async def test_bulk_class_code_action_is_not_available_in_group_chats(monkeypatch):
+    from app.bot import product_router
+
+    issue_service = AsyncMock()
+
+    async def require_private(callback, _operation):
+        await callback.answer("خصوصی", show_alert=True)
+        return False
+
+    monkeypatch.setattr(product_router, "_require_private_callback", require_private)
+    monkeypatch.setattr(product_router, "issue_missing_product_class_join_codes", issue_service)
+
+    callback = _callback("product:classes:join-codes:missing", chat_type="supergroup")
+    await product_router.product_missing_class_join_codes_callback(
+        callback,
+        principal=SimpleNamespace(user=SimpleNamespace(id=42)),
+        db=object(),
+        product_session_factory=lambda: ProductSessionContext(),
+    )
+
+    issue_service.assert_not_awaited()

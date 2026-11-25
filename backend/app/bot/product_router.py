@@ -27,6 +27,7 @@ from app.application.product_management import (
     get_product_class,
     get_product_class_record,
     get_product_school,
+    issue_missing_product_class_join_codes,
     issue_product_class_join_code,
     issue_product_group_link_code,
     list_class_subjects,
@@ -160,6 +161,7 @@ def _school_directory_keyboard(
     schools: list[dict],
     *,
     can_create: bool,
+    can_manage_classes: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -173,6 +175,15 @@ def _school_directory_keyboard(
     if can_create:
         rows.append(
             [InlineKeyboardButton(text="➕ ایجاد مدرسه", callback_data="product:school:create")]
+        )
+    if can_manage_classes:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔑 صدور کد برای کلاس‌های بدون کد",
+                    callback_data="product:classes:join-codes:missing",
+                )
+            ]
         )
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -195,6 +206,7 @@ async def _show_school_directory(
         return
 
     can_create = await _has_permission(db, principal, "platform:schools:create")
+    can_manage_classes = await _has_permission(db, principal, "platform:classes:manage")
     try:
         async with product_session_factory() as product_db:
             schools = await list_product_schools(product_db)
@@ -211,7 +223,11 @@ async def _show_school_directory(
     )
     await message.answer(
         body,
-        reply_markup=_school_directory_keyboard(schools, can_create=can_create),
+        reply_markup=_school_directory_keyboard(
+            schools,
+            can_create=can_create,
+            can_manage_classes=can_manage_classes,
+        ),
     )
 
 
@@ -468,6 +484,102 @@ async def school_create_cancel_callback(
     await callback.answer("عملیات لغو شد.")
     if callback.message is not None:
         await callback.message.edit_text("ایجاد مدرسه لغو شد؛ تغییری ثبت نشد.")
+
+
+
+
+
+@router.callback_query(F.data == "product:classes:join-codes:missing")
+async def product_missing_class_join_codes_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _require_private_callback(callback, "صدور کد ورود کلاس‌ها"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await callback.answer("مجوز صدور کد ورود کلاس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                issued = await issue_missing_product_class_join_codes(
+                    product_db,
+                    limit=2000,
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not issue missing ClassMate class join codes.")
+        await callback.answer("صدور گروهی کدهای ورود ناموفق بود.", show_alert=True)
+        return
+
+    if issued:
+        try:
+            await record_event(
+                db,
+                event_type="product.class.member_join_codes_backfilled",
+                actor_id=principal.user.id,
+                aggregate_type="platform",
+                event_data={
+                    "issued_count": len(issued),
+                    "class_ids": [item["class_id"] for item in issued],
+                },
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception("Bulk class join-code audit recording failed.")
+
+    await callback.answer(f"برای {len(issued)} کلاس کد صادر شد." if issued else "کدی کم نبود.")
+    if callback.message is None:
+        return
+
+    if not issued:
+        await callback.message.edit_text(
+            "✅ همهٔ کلاس‌های فعال از قبل کد ورود دارند؛ کدی تغییر نکرد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
+                ]
+            ),
+        )
+        return
+
+    chunks = [issued[index : index + 20] for index in range(0, len(issued), 20)]
+    first_lines = [
+        "🔑 <b>کدهای ورود کلاس‌های فاقد کد صادر شدند</b>",
+        f"تعداد کدهای جدید: {len(issued)}",
+        "هر کد فقط برای همان کلاس است و تا زمان تغییر کد معتبر می‌ماند.",
+        "کدهای قبلی دست‌نخورده باقی ماندند.",
+        "",
+    ]
+    first_lines.extend(
+        f"🏫 {item['school_name']} · {item['class_name']}\n"
+        f"<code>/join {item['join_code']}</code>"
+        for item in chunks[0]
+    )
+    await callback.message.edit_text(
+        "\n\n".join(first_lines),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
+            ]
+        ),
+    )
+    for chunk in chunks[1:]:
+        body = "\n\n".join(
+            f"🏫 {item['school_name']} · {item['class_name']}\n"
+            f"<code>/join {item['join_code']}</code>"
+            for item in chunk
+        )
+        await callback.message.answer(body)
 
 
 @router.callback_query(F.data.regexp(r"^product:school:[0-9]+$"))
