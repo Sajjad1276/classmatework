@@ -1583,6 +1583,44 @@ async def product_member_status_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+) -> None:
+    if not await _has_permission(db, principal, "platform:members:manage"):
+        await callback.answer("مجوز مدیریت اعضای کلاس را ندارید.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, user_id, desired = int(parts[3]), int(parts[4]), parts[5] == "1"
+    action = "فعال‌سازی مجدد" if desired else "تعلیق"
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"آیا می‌خواهید این عضویت را {action} کنید؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"✅ تأیید {action}",
+                            callback_data=(
+                                f"product:member:status:confirm:{class_id}:{user_id}:"
+                                f"{1 if desired else 0}"
+                            ),
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو",
+                            callback_data=f"product:members:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:member:status:confirm:[0-9]+:[0-9]+:[01]$"))
+async def product_member_status_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     if not await _has_permission(db, principal, "platform:members:manage"):
@@ -1592,7 +1630,7 @@ async def product_member_status_callback(
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
     parts = (callback.data or "").split(":")
-    class_id, user_id, desired = int(parts[3]), int(parts[4]), parts[5] == "1"
+    class_id, user_id, desired = int(parts[4]), int(parts[5]), parts[6] == "1"
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -1626,8 +1664,7 @@ async def product_member_status_callback(
         logger.exception("Class member status audit recording failed.")
     await callback.answer("وضعیت عضویت تغییر کرد.")
     if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.message.answer(
+        await callback.message.edit_text(
             "وضعیت عضویت تغییر کرد.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1866,6 +1903,44 @@ async def product_announcement_status_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+) -> None:
+    if not await _has_permission(db, principal, "platform:announcements:manage"):
+        await callback.answer("مجوز مدیریت اطلاعیه‌ها را ندارید.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, announcement_id, desired = int(parts[3]), int(parts[4]), parts[5] == "1"
+    action = "فعال‌سازی" if desired else "غیرفعال‌سازی"
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"آیا می‌خواهید این اطلاعیه را {action} کنید؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"✅ تأیید {action}",
+                            callback_data=(
+                                f"product:announcement:status:confirm:{class_id}:"
+                                f"{announcement_id}:{1 if desired else 0}"
+                            ),
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو",
+                            callback_data=f"product:announcements:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:announcement:status:confirm:[0-9]+:[0-9]+:[01]$"))
+async def product_announcement_status_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     if not await _has_permission(db, principal, "platform:announcements:manage"):
@@ -1875,7 +1950,7 @@ async def product_announcement_status_callback(
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
     parts = (callback.data or "").split(":")
-    class_id, announcement_id, desired = int(parts[3]), int(parts[4]), parts[5] == "1"
+    class_id, announcement_id, desired = int(parts[4]), int(parts[5]), parts[6] == "1"
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -1913,8 +1988,7 @@ async def product_announcement_status_callback(
         logger.exception("Announcement status audit recording failed.")
     await callback.answer("وضعیت اطلاعیه تغییر کرد.")
     if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.message.answer(
+        await callback.message.edit_text(
             "وضعیت اطلاعیه تغییر کرد.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
