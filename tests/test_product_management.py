@@ -16,6 +16,9 @@ class FakeMappings:
     def one(self):
         return self.rows[0]
 
+    def one_or_none(self):
+        return self.rows[0] if self.rows else None
+
 
 class FakeResult:
     def __init__(self, rows):

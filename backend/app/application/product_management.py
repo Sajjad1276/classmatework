@@ -60,7 +60,7 @@ async def get_product_school(
             LEFT JOIN public.academic_years AS ay ON ay.school_id = s.id
             LEFT JOIN public.classes AS c ON c.academic_year_id = ay.id
             WHERE s.id = :school_id
-            GROUP BY s.id, s.name, s.is_active
+            GROUP BY s.id, s.name, s.timezone, s.is_active
             """
         ),
         {"school_id": school_id},
