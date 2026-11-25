@@ -14,7 +14,6 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.bot.product_router import router as product_router
 from app.bot.control_router import router as control_router
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
 from app.bot.middleware import (
@@ -22,6 +21,7 @@ from app.bot.middleware import (
     PrivateChatOnlyMiddleware,
     TelegramIdentityMiddleware,
 )
+from app.bot.product_router import router as product_router
 from app.bot.rate_limit import TelegramRateLimitMiddleware
 from app.bot.router import router
 from app.core.config import get_settings
