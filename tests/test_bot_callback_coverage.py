@@ -4,7 +4,6 @@ import ast
 import re
 from pathlib import Path
 
-
 ROUTER_PATH = Path(__file__).parents[1] / "backend" / "app" / "bot" / "product_router.py"
 INTEGER_ID_PLACEHOLDER = "2147483647"
 

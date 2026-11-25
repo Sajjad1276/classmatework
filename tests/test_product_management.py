@@ -410,7 +410,6 @@ async def test_create_product_class_creates_a_hashed_reusable_class_join_code() 
 @pytest.mark.asyncio
 async def test_issue_product_class_join_code_hashes_and_replaces_current_code() -> None:
     import hashlib
-    from datetime import datetime, timezone
 
     from app.application.product_management import issue_product_class_join_code
 
