@@ -101,22 +101,20 @@ def test_every_inline_button_callback_has_a_registered_handler_and_fits_telegram
     ]
     callbacks: list[tuple[str, str, int]] = []
 
-    for path, tree in (
-        (path, ast.parse(path.read_text(encoding="utf-8")))
-        for path in BOT_ROUTER_DIRECTORY.rglob("*.py")
-    ):
-      for node in ast.walk(tree):
-          if not isinstance(node, ast.Call):
-              continue
-          function = node.func
-          if not (
-              isinstance(function, ast.Name)
-              and function.id == "InlineKeyboardButton"
-          ):
-              continue
-          for keyword in node.keywords:
-              if keyword.arg == "callback_data":
-                  callbacks.append((str(path), _sample_callback(keyword.value), node.lineno))
+    for path in BOT_ROUTER_DIRECTORY.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            if not (
+                isinstance(function, ast.Name)
+                and function.id == "InlineKeyboardButton"
+            ):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == "callback_data":
+                    callbacks.append((str(path), _sample_callback(keyword.value), node.lineno))
 
     assert callbacks, "No inline keyboard callback buttons were found."
     unmatched = [
