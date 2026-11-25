@@ -12,6 +12,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    ReplyKeyboardRemove,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,10 +28,12 @@ from app.application.product_management import (
     get_product_class_record,
     get_product_school,
     issue_product_group_link_code,
+    issue_product_member_invite_code,
     list_class_subjects,
     list_class_timetable,
     list_product_class_announcements,
     list_product_class_members,
+    list_product_class_records,
     list_product_classes,
     list_product_schools,
     review_product_class_record,
@@ -101,6 +104,26 @@ class AnnouncementCreation(StatesGroup):
     body = State()
     confirm = State()
 
+
+
+
+async def _hide_reply_keyboard(message: Message) -> None:
+    """Remove the persistent root keyboard before showing any inline panel."""
+    removal = await message.answer("\u2063", reply_markup=ReplyKeyboardRemove())
+    try:
+        await removal.delete()
+    except Exception:
+        logger.debug("Could not delete reply-keyboard cleanup message.", exc_info=True)
+
+
+async def _close_inline_panel(message: Message | None) -> None:
+    """Remove inline controls while a text-input wizard is active."""
+    if message is None:
+        return
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("Could not close inline panel before input.", exc_info=True)
 
 async def _has_permission(
     db: AsyncSession,
@@ -184,6 +207,7 @@ async def schools_button_handler(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    await _hide_reply_keyboard(message)
     await _show_school_directory(
         message,
         principal=principal,
@@ -237,6 +261,7 @@ async def school_create_button_handler(
     db: AsyncSession,
     state: FSMContext,
 ) -> None:
+    await _hide_reply_keyboard(message)
     await _begin_school_creation(
         message,
         principal=principal,
@@ -254,6 +279,7 @@ async def school_create_callback(
 ) -> None:
     await callback.answer()
     if callback.message is not None:
+        await _close_inline_panel(callback.message)
         await _begin_school_creation(
             callback.message,
             principal=principal,
@@ -403,7 +429,6 @@ async def school_create_confirm_callback(
                             callback_data="product:schools",
                         )
                     ],
-                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
                 ]
             ),
         )
@@ -1405,6 +1430,11 @@ async def product_class_detail_callback(
         f"بخش: {class_info['section'] or '—'}",
         f"وضعیت: {'فعال' if class_info['is_active'] else 'غیرفعال'}",
         f"گروه تلگرام: {class_info['group_chat_title'] or 'متصل نیست'}",
+        *(
+            [f"شناسه گروه: {class_info['group_chat_id']}"]
+            if class_info["group_chat_id"] is not None
+            else []
+        ),
         "",
         f"درس‌های تخصیص‌یافته: {len(subjects)}",
     ]
@@ -1435,12 +1465,15 @@ async def product_class_detail_callback(
                     *(
                         [
                             InlineKeyboardButton(
-                                text="🔗 اتصال گروه تلگرام",
+                                text=(
+                                    "➕ افزودن گروه"
+                                    if class_info["group_chat_id"] is None
+                                    else "✏️ ویرایش گروه"
+                                ),
                                 callback_data=f"product:group:link:{class_id}",
                             )
                         ]
                         if class_info["is_active"]
-                        and class_info["group_chat_id"] is None
                         and await _has_permission(db, principal, "platform:groups:manage")
                         else []
                     ),
@@ -1520,6 +1553,7 @@ async def product_subject_add_callback(
         await callback.answer("کلاس فعال پیدا نشد.", show_alert=True)
         return
     await state.clear()
+    await _close_inline_panel(callback.message)
     await state.update_data(product_subject_class_id=class_id)
     await state.set_state(SubjectCreation.name)
     await callback.answer()
@@ -2053,7 +2087,13 @@ async def product_group_link_issue_callback(
         await callback.message.edit_text(
             "🔗 <b>کد اتصال گروه تلگرام</b>\n\n"
             f"کلاس: {link['name']}\n"
-            "اعتبار: ۱۵ دقیقه\n"
+            + (
+                f"گروه فعلی: {link['group_chat_title']}\n"
+                "با استفاده از این کد در گروه جدید، اتصال قبلی جایگزین می‌شود.\n"
+                if link.get("group_chat_id") is not None
+                else ""
+            )
+            + "اعتبار: ۱۵ دقیقه\n"
             "کد یک‌بارمصرف:\n"
             f"<code>{raw_code}</code>\n\n"
             "ربات ClassMate را در گروه مقصد مدیر کنید؛ سپس مدیر همان گروه "
@@ -2442,7 +2482,11 @@ async def product_record_review_confirm_callback(
     try:
         await record_event(
             db,
-            event_type=f"product.{entity_type}.{decision}d",
+            event_type=(
+                f"product.{entity_type}.approved"
+                if decision == "approve"
+                else f"product.{entity_type}.rejected"
+            ),
             actor_id=principal.user.id,
             aggregate_type="class",
             event_data={
@@ -2545,6 +2589,25 @@ async def product_class_members_callback(
                     ),
                 ]
             )
+            if member["membership_role"] == "student" and active:
+                if member.get("invite_used_at") is not None:
+                    invite_label = "♻️ بازصدور کد عضویت"
+                    invite_state = "مصرف‌شده"
+                elif member.get("invite_expires_at") is not None:
+                    invite_label = "♻️ بازصدور کد عضویت"
+                    invite_state = "کد صادرشده"
+                else:
+                    invite_label = "🔑 صدور کد اختصاصی"
+                    invite_state = "بدون کد"
+                lines.append(f"  کد عضویت: {invite_state}")
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=invite_label,
+                            callback_data=f"product:member:invite:{class_id}:{member['user_id']}",
+                        )
+                    ]
+                )
     else:
         lines.append("هنوز عضوی به این کلاس اضافه نشده است.")
     rows.extend(
@@ -2592,6 +2655,7 @@ async def product_class_member_add_callback(
         await callback.answer("کلاس فعال پیدا نشد.", show_alert=True)
         return
     await state.clear()
+    await _close_inline_panel(callback.message)
     await state.update_data(product_member_class_id=class_id)
     await state.set_state(MemberCreation.telegram_id)
     await callback.answer()
@@ -2670,6 +2734,7 @@ async def product_member_add_confirm_callback(
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
     class_id = int(data.get("product_member_class_id") or 0)
+    raw_invite_code = secrets.token_hex(12).upper()
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -2678,6 +2743,13 @@ async def product_member_add_confirm_callback(
                     class_id=class_id,
                     telegram_id=int(data["product_member_telegram_id"]),
                     full_name=data["product_member_full_name"],
+                )
+                invitation = await issue_product_member_invite_code(
+                    product_db,
+                    class_id=class_id,
+                    user_id=member["user_id"],
+                    code=raw_invite_code,
+                    ttl_hours=24,
                 )
     except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -2709,7 +2781,90 @@ async def product_member_add_confirm_callback(
     await callback.answer("عضویت ثبت شد.")
     if callback.message is not None:
         await callback.message.edit_text(
-            f"✅ عضو به کلاس اضافه شد.\nنام: {member['full_name']}\nTelegram ID: {member['telegram_id']}",
+            "✅ عضو به کلاس اضافه شد و کد اختصاصی عضویت صادر شد.\n"
+            f"نام: {member['full_name']}\n"
+            f"Telegram ID: {member['telegram_id']}\n"
+            "اعتبار کد: ۲۴ ساعت\n"
+            "این کد فقط برای حساب تلگرام همین دانش‌آموز معتبر است:\n"
+            f"<code>/join {raw_invite_code}</code>",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="👥 بازگشت به اعضای کلاس",
+                            callback_data=f"product:members:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+
+
+@router.callback_query(F.data.regexp(r"^product:member:invite:[0-9]+:[0-9]+$"))
+async def product_member_invite_issue_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:members:manage"):
+        await callback.answer("مجوز صدور کد عضویت را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    parts = (callback.data or "").split(":")
+    class_id, user_id = int(parts[3]), int(parts[4])
+    raw_code = secrets.token_hex(12).upper()
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                invitation = await issue_product_member_invite_code(
+                    product_db,
+                    class_id=class_id,
+                    user_id=user_id,
+                    code=raw_code,
+                    ttl_hours=24,
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not issue personal ClassMate class invite.")
+        await callback.answer("صدور کد اختصاصی ناموفق بود.", show_alert=True)
+        return
+
+    try:
+        await record_event(
+            db,
+            event_type="product.class_member.invite_issued",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={
+                "class_id": class_id,
+                "user_id": user_id,
+                "expires_at": invitation["expires_at"].isoformat(),
+            },
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Member invite audit recording failed for user %s.", user_id)
+
+    await callback.answer("کد اختصاصی صادر شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "🔑 <b>کد اختصاصی عضویت دانش‌آموز</b>\n\n"
+            f"کلاس: {invitation['class_name']}\n"
+            f"دانش‌آموز: {invitation['full_name']}\n"
+            f"Telegram ID مقصد: <code>{invitation['telegram_id']}</code>\n"
+            "اعتبار: ۲۴ ساعت\n"
+            "این کد فقط برای همین حساب تلگرام معتبر است و یک‌بار مصرف است.\n\n"
+            f"<code>/join {raw_code}</code>\n\n"
+            "کد را فقط برای دانش‌آموز مربوطه ارسال کنید.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -2909,6 +3064,7 @@ async def product_announcement_add_callback(
         return
     class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
     await state.clear()
+    await _close_inline_panel(callback.message)
     await state.update_data(product_announcement_class_id=class_id)
     await state.set_state(AnnouncementCreation.title)
     await callback.answer()

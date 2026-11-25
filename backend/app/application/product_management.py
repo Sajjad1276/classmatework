@@ -481,9 +481,13 @@ async def list_product_class_members(
                 u.username,
                 u.is_active AS user_is_active,
                 cm.is_active AS membership_is_active,
-                cm.role AS membership_role
+                cm.role AS membership_role,
+                ic.expires_at AS invite_expires_at,
+                ic.used_at AS invite_used_at
             FROM public.class_memberships AS cm
             JOIN public.users AS u ON u.id = cm.user_id
+            LEFT JOIN public.class_member_invite_codes AS ic
+              ON ic.class_id = cm.class_id AND ic.user_id = cm.user_id
             WHERE cm.class_id = :class_id
             ORDER BY cm.is_active DESC, u.full_name ASC, u.id ASC
             LIMIT :limit
@@ -546,17 +550,24 @@ async def add_product_class_member(
             INSERT INTO public.class_memberships (class_id, user_id, role, is_active)
             VALUES (:class_id, :user_id, 'student', TRUE)
             ON CONFLICT (class_id, user_id)
-            DO UPDATE SET is_active = TRUE, role = 'student'
-            RETURNING id
+            DO UPDATE SET is_active = TRUE
+            RETURNING id, role
             """
         ),
         {"class_id": class_id, "user_id": user["id"]},
     )
+    membership_row = membership.mappings().one()
+    membership_role = str(membership_row["role"])
+    if membership_role != "student":
+        raise ResourceConflict(
+            "این حساب در کلاس نقش مدیریتی دارد؛ کد دانش‌آموز برای آن صادر نمی‌شود."
+        )
     return {
         "user_id": user["id"],
         "telegram_id": telegram_id,
         "full_name": user["full_name"],
-        "membership_id": membership.scalar_one(),
+        "membership_id": membership_row["id"],
+        "membership_role": membership_role,
         "school_id": class_info["school_id"],
     }
 
@@ -581,7 +592,19 @@ async def set_product_class_member_active(
         ),
         {"class_id": class_id, "user_id": user_id, "is_active": is_active},
     )
-    return result.scalar_one_or_none() is not None
+    changed = result.scalar_one_or_none() is not None
+    if changed and not is_active:
+        await db.execute(
+            text(
+                """
+                UPDATE public.class_member_invite_codes
+                SET used_at = COALESCE(used_at, NOW())
+                WHERE class_id = :class_id AND user_id = :user_id
+                """
+            ),
+            {"class_id": class_id, "user_id": user_id},
+        )
+    return changed
 
 
 async def list_product_class_announcements(
@@ -856,7 +879,19 @@ async def set_product_class_member_role(
         ),
         {"class_id": class_id, "user_id": user_id, "role": role},
     )
-    return result.scalar_one_or_none() is not None
+    changed = result.scalar_one_or_none() is not None
+    if changed:
+        await db.execute(
+            text(
+                """
+                UPDATE public.class_member_invite_codes
+                SET used_at = COALESCE(used_at, NOW())
+                WHERE class_id = :class_id AND user_id = :user_id
+                """
+            ),
+            {"class_id": class_id, "user_id": user_id},
+        )
+    return changed
 
 
 async def issue_product_group_link_code(
@@ -892,7 +927,6 @@ async def issue_product_group_link_code(
               AND c.academic_year_id = ay.id
               AND c.is_active IS TRUE
               AND s.is_active IS TRUE
-              AND c.group_chat_id IS NULL
             RETURNING c.id, c.name, c.group_chat_id, c.group_chat_title,
                       c.group_link_code_expires_at
             """
@@ -905,9 +939,7 @@ async def issue_product_group_link_code(
     )
     row = result.mappings().one_or_none()
     if row is None:
-        raise ResourceConflict(
-            "این کلاس از قبل گروه تلگرام دارد یا مدرسه/کلاس غیرفعال شده است."
-        )
+        raise ResourceConflict("مدرسه یا کلاس غیرفعال است؛ اتصال گروه انجام نشد.")
     return dict(row)
 
 
@@ -1225,4 +1257,86 @@ async def review_product_class_record(
         "status": next_status,
         "approval_event_id": approval_event_id,
         "published_to_group": published_to_group,
+    }
+
+
+
+async def issue_product_member_invite_code(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    user_id: int,
+    code: str,
+    ttl_hours: int = 24,
+) -> dict:
+    normalized_code = code.strip().upper()
+    if class_id <= 0 or user_id <= 0:
+        raise InvalidApplicationInput("شناسه دانش‌آموز یا کلاس معتبر نیست.")
+    if not 16 <= len(normalized_code) <= 64 or any(ch.isspace() for ch in normalized_code):
+        raise InvalidApplicationInput("کد اختصاصی باید بین ۱۶ تا ۶۴ نویسه و بدون فاصله باشد.")
+    if not 1 <= ttl_hours <= 168:
+        raise InvalidApplicationInput("اعتبار کد عضویت باید بین ۱ تا ۱۶۸ ساعت باشد.")
+
+    member_result = await db.execute(
+        text(
+            """
+            SELECT
+                cm.id,
+                cm.role,
+                cm.is_active AS membership_is_active,
+                u.telegram_id,
+                u.full_name,
+                u.is_active AS user_is_active,
+                c.name AS class_name
+            FROM public.class_memberships AS cm
+            JOIN public.users AS u ON u.id = cm.user_id
+            JOIN public.classes AS c ON c.id = cm.class_id
+            JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE cm.class_id = :class_id
+              AND cm.user_id = :user_id
+              AND c.is_active IS TRUE
+              AND s.is_active IS TRUE
+            """
+        ),
+        {"class_id": class_id, "user_id": user_id},
+    )
+    member = member_result.mappings().one_or_none()
+    if member is None:
+        raise ResourceNotFound("عضو این کلاس پیدا نشد.")
+    if member["role"] != "student":
+        raise ResourceConflict("کد اختصاصی فقط برای نقش دانش‌آموز صادر می‌شود.")
+    if not member["membership_is_active"] or not member["user_is_active"]:
+        raise ResourceConflict("عضویت یا حساب دانش‌آموز غیرفعال است.")
+
+    code_hash = hashlib.sha256(normalized_code.encode("utf-8")).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+    invite_result = await db.execute(
+        text(
+            """
+            INSERT INTO public.class_member_invite_codes
+                (class_id, user_id, code_hash, expires_at, used_at)
+            VALUES
+                (:class_id, :user_id, :code_hash, :expires_at, NULL)
+            ON CONFLICT (class_id, user_id)
+            DO UPDATE SET
+                code_hash = EXCLUDED.code_hash,
+                expires_at = EXCLUDED.expires_at,
+                used_at = NULL,
+                created_at = NOW()
+            RETURNING id, expires_at
+            """
+        ),
+        {
+            "class_id": class_id,
+            "user_id": user_id,
+            "code_hash": code_hash,
+            "expires_at": expires_at,
+        },
+    )
+    invite = invite_result.mappings().one()
+    return {
+        **dict(member),
+        "invitation_id": invite["id"],
+        "expires_at": invite["expires_at"],
     }

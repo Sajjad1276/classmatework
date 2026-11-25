@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.application.errors import InvalidApplicationInput
+from app.application.errors import InvalidApplicationInput, ResourceConflict
 from app.application.product_management import create_product_school, list_product_schools
 
 
@@ -311,5 +311,44 @@ async def test_review_product_record_rejects_unknown_entity_before_database_read
             decision="approve",
             reviewer_telegram_id=10,
             reviewer_name="مدیر",
+        )
+    db.execute.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_issue_product_member_invite_code_rejects_invalid_input_before_database_read() -> None:
+    from app.application.product_management import issue_product_member_invite_code
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await issue_product_member_invite_code(
+            db,
+            class_id=0,
+            user_id=1,
+            code="A1B2C3D4E5F60718",
+        )
+    with pytest.raises(InvalidApplicationInput):
+        await issue_product_member_invite_code(
+            db,
+            class_id=1,
+            user_id=2,
+            code="short",
+        )
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_issue_product_member_invite_code_rejects_invalid_ttl_before_database_read() -> None:
+    from app.application.product_management import issue_product_member_invite_code
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await issue_product_member_invite_code(
+            db,
+            class_id=1,
+            user_id=2,
+            code="A1B2C3D4E5F60718",
+            ttl_hours=0,
         )
     db.execute.assert_not_awaited()
