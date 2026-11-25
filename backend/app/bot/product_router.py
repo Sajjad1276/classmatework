@@ -125,6 +125,22 @@ async def _close_inline_panel(message: Message | None) -> None:
     except Exception:
         logger.debug("Could not close inline panel before input.", exc_info=True)
 
+
+
+
+async def _require_private_callback(
+    callback: CallbackQuery,
+    operation: str,
+) -> bool:
+    """Keep personal invitation codes and membership controls out of group chats."""
+    if callback.message is None or callback.message.chat.type != "private":
+        await callback.answer(
+            f"{operation} فقط در گفت‌وگوی خصوصی ربات مجاز است.",
+            show_alert=True,
+        )
+        return False
+    return True
+
 async def _has_permission(
     db: AsyncSession,
     principal: TelegramPrincipal,
@@ -1521,7 +1537,6 @@ async def product_class_detail_callback(
                             callback_data=f"product:school:{class_info['school_id']}",
                         )
                     ],
-                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
                 ]
             ),
         )
@@ -2045,6 +2060,8 @@ async def product_group_link_issue_callback(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not await _require_private_callback(callback, "اتصال گروه"):
+        return
     if not await _has_permission(db, principal, "platform:groups:manage"):
         await callback.answer("مجوز اتصال گروه تلگرام را ندارید.", show_alert=True)
         return
@@ -2113,7 +2130,6 @@ async def product_group_link_issue_callback(
                             callback_data=f"product:class:{class_id}",
                         )
                     ],
-                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
                 ]
             ),
         )
@@ -2125,6 +2141,8 @@ async def product_class_member_role_prompt_callback(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
+    if not await _require_private_callback(callback, "تغییر نقش عضو"):
+        return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
         return
@@ -2172,6 +2190,8 @@ async def product_class_member_role_confirm_callback(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not await _require_private_callback(callback, "تغییر نقش عضو"):
+        return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
         return
@@ -2307,7 +2327,6 @@ async def product_class_records_callback(
                     callback_data=f"product:class:{class_id}",
                 )
             ],
-            [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
         ]
     )
     await callback.answer()
@@ -2391,7 +2410,6 @@ async def product_class_record_detail_callback(
                     callback_data=f"product:records:{class_id}",
                 )
             ],
-            [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
         ]
     )
     await callback.answer()
@@ -2535,6 +2553,8 @@ async def product_class_members_callback(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not await _require_private_callback(callback, "مدیریت اعضای کلاس"):
+        return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مدیریت اعضای کلاس را ندارید.", show_alert=True)
         return
@@ -2647,6 +2667,8 @@ async def product_class_member_add_callback(
     state: FSMContext,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not await _require_private_callback(callback, "افزودن عضو"):
+        return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز افزودن عضو را ندارید.", show_alert=True)
         return
@@ -2721,6 +2743,8 @@ async def product_member_add_confirm_callback(
     state: FSMContext,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not await _require_private_callback(callback, "افزودن عضو"):
+        return
     data = await state.get_data()
     token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
     if (
@@ -2814,6 +2838,8 @@ async def product_member_invite_issue_callback(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not await _require_private_callback(callback, "صدور کد عضویت"):
+        return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز صدور کد عضویت را ندارید.", show_alert=True)
         return
@@ -2889,6 +2915,8 @@ async def product_member_status_callback(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
+    if not await _require_private_callback(callback, "تغییر وضعیت عضو"):
+        return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مدیریت اعضای کلاس را ندارید.", show_alert=True)
         return
@@ -2928,6 +2956,8 @@ async def product_member_status_confirm_callback(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not await _require_private_callback(callback, "تغییر وضعیت عضو"):
+        return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مدیریت اعضای کلاس را ندارید.", show_alert=True)
         return
