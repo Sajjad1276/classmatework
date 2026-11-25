@@ -15,11 +15,16 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.application.errors import AccessDenied, ApplicationError
+from app.application.errors import AccessDenied, ApplicationError, ResourceConflict
 from app.application.product_management import (
     create_product_school,
     get_product_school,
+    create_and_assign_product_subject,
     create_product_class,
+    create_product_timetable_entry,
+    get_product_class,
+    list_class_subjects,
+    list_class_timetable,
     list_product_classes,
     list_product_schools,
 )
@@ -43,6 +48,19 @@ class ClassCreation(StatesGroup):
     name = State()
     grade = State()
     section = State()
+    confirm = State()
+
+
+class SubjectCreation(StatesGroup):
+    name = State()
+
+
+class TimetableCreation(StatesGroup):
+    weekday = State()
+    subject = State()
+    period = State()
+    time_range = State()
+    room = State()
     confirm = State()
 
 
@@ -407,22 +425,23 @@ async def product_school_detail_callback(
         "کلاس‌ها:",
     ]
     if classes:
-        for item in classes[:30]:
-            section = f" · {item['section']}" if item.get("section") else ""
-            state_label = "فعال" if item["is_active"] else "غیرفعال"
-            lines.append(
-                f"• {item['name']} · پایه {item['grade']}{section} · {state_label}"
-            )
-        if len(classes) > 30:
-            lines.append(f"… و {len(classes) - 30} کلاس دیگر")
+        lines.append("برای ورود به مدیریت هر کلاس، دکمهٔ آن را انتخاب کنید.")
     else:
         lines.append("هنوز کلاسی برای این مدرسه ثبت نشده است.")
 
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"👥 {item['name'][:24]} · {item['grade'][:12]}",
+                callback_data=f"product:class:{item['id']}",
+            )
+        ]
+        for item in classes[:30]
+    ]
     can_create_class = (
         school["is_active"]
         and await _has_permission(db, principal, "platform:classes:create")
     )
-    rows = []
     if can_create_class:
         rows.append(
             [
@@ -506,6 +525,21 @@ async def product_class_create_callback(
             state=state,
             school_id=school_id,
         )
+
+
+@router.message(Command("cancel"), SubjectCreation.name)
+@router.message(Command("cancel"), TimetableCreation.weekday)
+@router.message(Command("cancel"), TimetableCreation.subject)
+@router.message(Command("cancel"), TimetableCreation.period)
+@router.message(Command("cancel"), TimetableCreation.time_range)
+@router.message(Command("cancel"), TimetableCreation.room)
+@router.message(Command("cancel"), TimetableCreation.confirm)
+async def class_configuration_cancel_command(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await message.answer("عملیات مدیریت کلاس لغو شد؛ تغییری ثبت نشد.")
 
 
 @router.message(ClassCreation.name, F.text)
@@ -684,3 +718,584 @@ async def product_class_create_cancel_callback(
     await callback.answer("عملیات لغو شد.")
     if callback.message is not None:
         await callback.message.edit_text("ایجاد کلاس لغو شد؛ تغییری ثبت نشد.")
+
+
+@router.callback_query(F.data.regexp(r"^product:class:[0-9]+$"))
+async def product_class_detail_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:classes:read"):
+        await callback.answer("مجوز مشاهدهٔ کلاس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    try:
+        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+            if class_info is None:
+                await callback.answer("کلاس پیدا نشد.", show_alert=True)
+                return
+            subjects = await list_class_subjects(product_db, class_id=class_id)
+            timetable = await list_class_timetable(product_db, class_id=class_id)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not load ClassMate class %s.", callback.data)
+        await callback.answer("دریافت جزئیات کلاس ناموفق بود.", show_alert=True)
+        return
+
+    lines = [
+        f"👥 کلاس: {class_info['name']}",
+        f"مدرسه: {class_info['school_name']}",
+        f"پایه: {class_info['grade']}",
+        f"بخش: {class_info['section'] or '—'}",
+        f"وضعیت: {'فعال' if class_info['is_active'] else 'غیرفعال'}",
+        "",
+        f"درس‌های تخصیص‌یافته: {len(subjects)}",
+    ]
+    lines.extend(f"• {item['name']}" for item in subjects[:20])
+    lines.extend(["", f"زنگ‌های برنامه هفتگی: {len(timetable)}"])
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="➕ افزودن درس",
+                            callback_data=f"product:subject:add:{class_id}",
+                        ),
+                        InlineKeyboardButton(
+                            text="📅 مشاهده برنامه هفتگی",
+                            callback_data=f"product:timetable:view:{class_id}",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="➕ افزودن زنگ",
+                            callback_data=f"product:timetable:add:{class_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به مدرسه",
+                            callback_data=f"product:school:{class_info['school_id']}",
+                        )
+                    ],
+                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:subject:add:[0-9]+$"))
+async def product_subject_add_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:subjects:manage"):
+        await callback.answer("مجوز مدیریت درس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    try:
+        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not validate class for subject creation.")
+        await callback.answer("بررسی کلاس ناموفق بود.", show_alert=True)
+        return
+    if class_info is None or not class_info["is_active"]:
+        await callback.answer("کلاس فعال پیدا نشد.", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(product_subject_class_id=class_id)
+    await state.set_state(SubjectCreation.name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer("نام درس را وارد کنید (۲ تا ۱۰۰ نویسه):")
+
+
+@router.message(SubjectCreation.name, F.text)
+async def product_subject_name_input(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    name = " ".join((message.text or "").split())
+    if not 2 <= len(name) <= 100:
+        await message.answer("نام درس باید بین ۲ تا ۱۰۰ نویسه باشد.")
+        return
+    if not await _has_permission(db, principal, "platform:subjects:manage"):
+        await state.clear()
+        await message.answer("مجوز مدیریت درس‌ها را ندارید.")
+        return
+    if product_session_factory is None:
+        await state.clear()
+        await message.answer("اتصال دیتابیس ClassMate فعال نیست.")
+        return
+
+    data = await state.get_data()
+    class_id = int(data.get("product_subject_class_id") or 0)
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                subject = await create_and_assign_product_subject(
+                    product_db,
+                    class_id=class_id,
+                    name=name,
+                )
+    except ApplicationError as exc:
+        await message.answer(str(exc))
+        return
+    except Exception:
+        logger.exception("Could not create or assign ClassMate subject.")
+        await state.clear()
+        await message.answer("ثبت درس ناموفق بود.")
+        return
+
+    try:
+        await record_event(
+            db,
+            event_type="product.class_subject.assigned",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={
+                "class_id": class_id,
+                "school_id": subject["school_id"],
+                "subject_id": subject["id"],
+                "subject_name": subject["name"],
+                "created": subject["created"],
+                "assigned": subject["assigned"],
+            },
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Subject assignment audit failed for class %s.", class_id)
+
+    await state.clear()
+    result_label = "درس ایجاد و به کلاس تخصیص داده شد." if subject["created"] else "درس موجود به کلاس تخصیص داده شد."
+    if not subject["assigned"]:
+        result_label = "این درس از قبل به کلاس تخصیص داشت."
+    await message.answer(
+        f"✅ {result_label}\nدرس: {subject['name']}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="بازگشت به مدیریت کلاس",
+                        callback_data=f"product:class:{class_id}",
+                    )
+                ]
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.regexp(r"^product:timetable:view:[0-9]+$"))
+async def product_timetable_view_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:timetable:manage"):
+        await callback.answer("مجوز مشاهده برنامه هفتگی را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    try:
+        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+            if class_info is None:
+                await callback.answer("کلاس پیدا نشد.", show_alert=True)
+                return
+            entries = await list_class_timetable(product_db, class_id=class_id)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not load timetable for class %s.", callback.data)
+        await callback.answer("دریافت برنامه هفتگی ناموفق بود.", show_alert=True)
+        return
+
+    day_names = ("شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه")
+    lines = [f"📅 برنامه هفتگی کلاس {class_info['name']}", ""]
+    if not entries:
+        lines.append("هنوز زنگی برای این کلاس ثبت نشده است.")
+    else:
+        for weekday in range(7):
+            day_entries = [item for item in entries if item["weekday"] == weekday]
+            if not day_entries:
+                continue
+            lines.append(f"**{day_names[weekday]}**")
+            for item in day_entries:
+                start = item["starts_at"].strftime("%H:%M") if item["starts_at"] else "—"
+                end = item["ends_at"].strftime("%H:%M") if item["ends_at"] else "—"
+                room = f" · {item['room']}" if item["room"] else ""
+                lines.append(
+                    f"زنگ {item['period']}: {item['subject_name']} · {start} تا {end}{room}"
+                )
+            lines.append("")
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="➕ افزودن زنگ",
+                            callback_data=f"product:timetable:add:{class_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:timetable:add:[0-9]+$"))
+async def product_timetable_add_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:timetable:manage"):
+        await callback.answer("مجوز مدیریت برنامه هفتگی را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    try:
+        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+            subjects = await list_class_subjects(product_db, class_id=class_id)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not prepare timetable creation.")
+        await callback.answer("آماده‌سازی برنامه هفتگی ناموفق بود.", show_alert=True)
+        return
+    if class_info is None or not class_info["is_active"]:
+        await callback.answer("کلاس فعال پیدا نشد.", show_alert=True)
+        return
+    if not subjects:
+        await callback.answer(
+            "ابتدا حداقل یک درس به کلاس تخصیص دهید.",
+            show_alert=True,
+        )
+        return
+
+    await state.clear()
+    token = secrets.token_urlsafe(8)
+    await state.update_data(
+        product_timetable_token=token,
+        product_timetable_class_id=class_id,
+        product_timetable_subjects=subjects,
+    )
+    await state.set_state(TimetableCreation.weekday)
+    day_names = ("شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه")
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=day_names[index],
+                callback_data=f"product:timetable:weekday:{class_id}:{index}",
+            )
+        ]
+        for index in range(7)
+    ]
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            f"روز هفته برای کلاس {class_info['name']} را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:timetable:weekday:[0-9]+:[0-6]$"))
+async def timetable_weekday_select_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    parts = (callback.data or "").split(":")
+    if (
+        await state.get_state() != TimetableCreation.weekday.state
+        or len(parts) != 5
+        or int(parts[3]) != int(data.get("product_timetable_class_id") or 0)
+    ):
+        await callback.answer("این انتخاب منقضی شده است.", show_alert=True)
+        return
+    weekday = int(parts[4])
+    await state.update_data(product_timetable_weekday=weekday)
+    await state.set_state(TimetableCreation.subject)
+    subjects = data.get("product_timetable_subjects", [])
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=subject["name"][:45],
+                callback_data=f"product:timetable:subject:{subject['id']}",
+            )
+        ]
+        for subject in subjects[:50]
+    ]
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "درس این زنگ را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:timetable:subject:[0-9]+$"))
+async def timetable_subject_select_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    if await state.get_state() != TimetableCreation.subject:
+        await callback.answer("این انتخاب منقضی شده است.", show_alert=True)
+        return
+    subject_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+    subjects = data.get("product_timetable_subjects", [])
+    subject = next((item for item in subjects if int(item["id"]) == subject_id), None)
+    if subject is None:
+        await callback.answer("درس انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+    await state.update_data(
+        product_timetable_subject_id=subject_id,
+        product_timetable_subject_name=subject["name"],
+    )
+    await state.set_state(TimetableCreation.period)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer("شماره زنگ را از ۱ تا ۱۶ وارد کنید:")
+
+
+@router.message(TimetableCreation.period, F.text)
+async def timetable_period_input(message: Message, state: FSMContext) -> None:
+    value = (message.text or "").strip()
+    if not value.isdigit() or not 1 <= int(value) <= 16:
+        await message.answer("شماره زنگ باید عددی بین ۱ تا ۱۶ باشد.")
+        return
+    await state.update_data(product_timetable_period=int(value))
+    await state.set_state(TimetableCreation.time_range)
+    await message.answer("بازه زمانی را با قالب 08:00-08:45 وارد کنید؛ اگر زمان مشخص نیست، «-» بفرستید:")
+
+
+@router.message(TimetableCreation.time_range, F.text)
+async def timetable_time_range_input(message: Message, state: FSMContext) -> None:
+    value = (message.text or "").strip()
+    if value == "-":
+        start_time = end_time = None
+    else:
+        parts = value.split("-")
+        if len(parts) != 2:
+            await message.answer("قالب زمان نامعتبر است؛ نمونه صحیح: 08:00-08:45")
+            return
+        try:
+            from datetime import time as time_type
+
+            start = time_type.fromisoformat(parts[0].strip())
+            end = time_type.fromisoformat(parts[1].strip())
+        except ValueError:
+            await message.answer("زمان باید با قالب HH:MM باشد.")
+            return
+        if end <= start:
+            await message.answer("زمان پایان باید بعد از زمان شروع باشد.")
+            return
+        start_time, end_time = start.strftime("%H:%M"), end.strftime("%H:%M")
+    await state.update_data(
+        product_timetable_start=start_time,
+        product_timetable_end=end_time,
+    )
+    await state.set_state(TimetableCreation.room)
+    await message.answer("نام کلاس/اتاق را وارد کنید؛ اگر ندارد، «-» بفرستید:")
+
+
+@router.message(TimetableCreation.room, F.text)
+async def timetable_room_input(message: Message, state: FSMContext) -> None:
+    room = " ".join((message.text or "").split())
+    if room == "-":
+        room = None
+    if room is not None and len(room) > 80:
+        await message.answer("نام کلاس/اتاق حداکثر ۸۰ نویسه است.")
+        return
+    await state.update_data(product_timetable_room=room)
+    data = await state.get_data()
+    await state.set_state(TimetableCreation.confirm)
+    day_names = ("شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه")
+    time_label = (
+        f"{data.get('product_timetable_start')} تا {data.get('product_timetable_end')}"
+        if data.get("product_timetable_start")
+        else "زمان مشخص نشده"
+    )
+    await message.answer(
+        "پیش‌نمایش ثبت زنگ\n\n"
+        f"روز: {day_names[data['product_timetable_weekday']]}\n"
+        f"درس: {data['product_timetable_subject_name']}\n"
+        f"زنگ: {data['product_timetable_period']}\n"
+        f"زمان: {time_label}\n"
+        f"کلاس/اتاق: {room or '—'}\n\n"
+        "ثبت نهایی شود؟",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ ثبت زنگ",
+                        callback_data=f"product:timetable:confirm:{data['product_timetable_token']}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو",
+                        callback_data=f"product:timetable:cancel:{data['product_timetable_token']}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("product:timetable:confirm:"))
+async def timetable_create_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != TimetableCreation.confirm.state
+        or not token
+        or token != data.get("product_timetable_token")
+    ):
+        await callback.answer("این تأیید منقضی شده است.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:timetable:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت برنامه هفتگی را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await state.clear()
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int(data.get("product_timetable_class_id") or 0)
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                entry = await create_product_timetable_entry(
+                    product_db,
+                    class_id=class_id,
+                    subject_id=int(data.get("product_timetable_subject_id") or 0),
+                    weekday=int(data.get("product_timetable_weekday") or 0),
+                    period=int(data.get("product_timetable_period") or 0),
+                    starts_at=data.get("product_timetable_start"),
+                    ends_at=data.get("product_timetable_end"),
+                    room=data.get("product_timetable_room"),
+                )
+    except ResourceConflict as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not create ClassMate timetable entry.")
+        await state.clear()
+        await callback.answer("ثبت زنگ در دیتابیس ClassMate ناموفق بود.", show_alert=True)
+        return
+
+    try:
+        await record_event(
+            db,
+            event_type="product.timetable_entry.created",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={
+                "class_id": class_id,
+                "entry_id": entry["id"],
+                "weekday": entry["weekday"],
+                "period": entry["period"],
+            },
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Timetable audit recording failed for class %s.", class_id)
+
+    await state.clear()
+    await callback.answer("زنگ ثبت شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "✅ زنگ برنامه هفتگی ثبت شد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="📅 مشاهده برنامه هفتگی",
+                            callback_data=f"product:timetable:view:{class_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:timetable:cancel:"))
+async def timetable_create_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != TimetableCreation.confirm.state
+        or not token
+        or token != data.get("product_timetable_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("عملیات لغو شد.")
+    if callback.message is not None:
+        await callback.message.edit_text("ثبت زنگ لغو شد؛ تغییری ثبت نشد.")
