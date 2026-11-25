@@ -29,6 +29,7 @@ from app.core.logging import configure_logging
 from app.db.runtime import (
     DATABASE_SCHEMA,
     create_database_engine,
+    create_product_database_engine,
     create_redis_client,
     create_session_factory,
 )
@@ -123,6 +124,14 @@ async def main() -> None:
     configure_logging(settings.log_level)
     engine = create_database_engine(settings.database_url)
     session_factory: async_sessionmaker[AsyncSession] = create_session_factory(engine)
+    product_engine = None
+    product_session_factory = None
+    if settings.c2_db_url is not None and settings.c2_db_url.get_secret_value().strip():
+        product_engine = create_product_database_engine(
+            settings.c2_db_url.get_secret_value().strip()
+        )
+        product_session_factory = create_session_factory(product_engine)
+
     redis = create_redis_client(settings.redis_url)
     token = secrets.token_urlsafe(32)
     bot = Bot(token=settings.telegram_bot_token.get_secret_value())
@@ -137,11 +146,15 @@ async def main() -> None:
     )
     dispatcher = Dispatcher(storage=storage)
     dispatcher["redis"] = redis
+    if product_session_factory is not None:
+        # Used only by product-management use cases. Admin identities,
+        # permissions, FSM and audit remain in the isolated Work database.
+        dispatcher["product_session_factory"] = product_session_factory
     dispatcher.update.outer_middleware(
         TelegramUpdateDedupMiddleware(
-                session_factory,
-                lease_ttl=timedelta(seconds=settings.bot_update_lease_seconds),
-            )
+            session_factory,
+            lease_ttl=timedelta(seconds=settings.bot_update_lease_seconds),
+        )
     )
 
     try:
@@ -194,12 +207,14 @@ async def main() -> None:
 
         for observer in (dispatcher.message, dispatcher.callback_query):
             observer.outer_middleware(PrivateChatOnlyMiddleware())
-            observer.outer_middleware(TelegramRateLimitMiddleware(
-                redis,
-                message_limit=settings.bot_message_rate_limit,
-                callback_limit=settings.bot_callback_rate_limit,
-                window_seconds=settings.bot_rate_limit_window_seconds,
-            ))
+            observer.outer_middleware(
+                TelegramRateLimitMiddleware(
+                    redis,
+                    message_limit=settings.bot_message_rate_limit,
+                    callback_limit=settings.bot_callback_rate_limit,
+                    window_seconds=settings.bot_rate_limit_window_seconds,
+                )
+            )
             observer.outer_middleware(DatabaseSessionMiddleware(session_factory))
             observer.outer_middleware(TelegramIdentityMiddleware())
 
@@ -256,6 +271,8 @@ async def main() -> None:
         await storage.close()
         await redis.aclose()
         await engine.dispose()
+        if product_engine is not None:
+            await product_engine.dispose()
         await bot.session.close()
 
 

@@ -29,10 +29,24 @@ def normalize_async_database_url(database_url: str) -> str:
 
 
 def create_database_engine(database_url: str) -> AsyncEngine:
+    """Create the isolated ClassMate Work engine and pin it to its own schema."""
     return create_async_engine(
         normalize_async_database_url(database_url),
         pool_pre_ping=True,
         connect_args={"server_settings": {"search_path": DATABASE_SEARCH_PATH}},
+    )
+
+
+def create_product_database_engine(database_url: str) -> AsyncEngine:
+    """Create an engine for ClassMate's product DB without Work's schema pinning.
+
+    The product service owns its schema and currently uses PostgreSQL's public
+    schema. Keeping this factory separate prevents accidental cross-schema
+    reads/writes when both services share a PostgreSQL server.
+    """
+    return create_async_engine(
+        normalize_async_database_url(database_url),
+        pool_pre_ping=True,
     )
 
 
