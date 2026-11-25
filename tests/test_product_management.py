@@ -28,6 +28,19 @@ class FakeResult:
         return FakeMappings(self.rows)
 
 
+class FakeScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+    def scalar_one(self):
+        if self.value is None:
+            raise AssertionError("No scalar row returned")
+        return self.value
+
+
 @pytest.mark.asyncio
 async def test_list_product_schools_returns_product_records() -> None:
     db = AsyncMock()
@@ -352,3 +365,116 @@ async def test_issue_product_member_invite_code_rejects_invalid_ttl_before_datab
             ttl_hours=0,
         )
     db.execute.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_create_product_class_creates_a_hashed_reusable_class_join_code() -> None:
+    import hashlib
+
+    from app.application.product_management import create_product_class
+
+    db = AsyncMock()
+    db.execute.side_effect = [
+        FakeScalarResult(7),
+        FakeScalarResult(11),
+        FakeResult(
+            [{
+                "id": 41,
+                "name": "دهم الف",
+                "grade": "دهم",
+                "section": "الف",
+                "is_active": True,
+            }]
+        ),
+    ]
+
+    created = await create_product_class(
+        db,
+        school_id=7,
+        name="دهم الف",
+        grade="دهم",
+        section="الف",
+    )
+
+    params = db.execute.await_args_list[2].args[1]
+    code = created["member_join_code"]
+    assert created["id"] == 41
+    assert created["has_member_join_code"] is True
+    assert len(code) == 10
+    assert set(code) <= set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    assert params["member_join_code_hash"] == hashlib.sha256(code.encode("utf-8")).hexdigest()
+    assert "member_join_code_hash" in str(db.execute.await_args_list[2].args[0])
+    assert params.get("member_join_code") is None
+
+
+@pytest.mark.asyncio
+async def test_issue_product_class_join_code_hashes_and_replaces_current_code() -> None:
+    import hashlib
+
+    from app.application.product_management import issue_product_class_join_code
+
+    db = AsyncMock()
+    db.execute.return_value = FakeResult(
+        [{
+            "id": 21,
+            "name": "دهم ریاضی",
+            "member_join_code_expires_at": None,
+        }]
+    )
+
+    code = "ABCD2345XY"
+    result = await issue_product_class_join_code(db, class_id=21, code=code)
+
+    params = db.execute.await_args.args[1]
+    sql = str(db.execute.await_args.args[0])
+    assert result["member_join_code"] == code
+    assert result["has_member_join_code"] is True
+    assert params["code_hash"] == hashlib.sha256(code.encode("utf-8")).hexdigest()
+    assert params["class_id"] == 21
+    assert "member_join_code_hash" in sql
+    assert "member_join_code_expires_at = NULL" in sql
+
+
+@pytest.mark.asyncio
+async def test_issue_product_class_join_code_rejects_invalid_input_without_database_access() -> None:
+    from app.application.product_management import issue_product_class_join_code
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await issue_product_class_join_code(db, class_id=0, code="ABCD2345")
+    with pytest.raises(InvalidApplicationInput):
+        await issue_product_class_join_code(db, class_id=1, code="short")
+    with pytest.raises(InvalidApplicationInput):
+        await issue_product_class_join_code(db, class_id=1, code="ABCD 2345")
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_product_class_returns_school_and_class_join_code_status() -> None:
+    from app.application.product_management import get_product_class
+
+    db = AsyncMock()
+    expected = {
+        "id": 31,
+        "name": "دهم الف",
+        "grade": "دهم",
+        "section": "الف",
+        "is_active": True,
+        "school_id": 9,
+        "school_name": "مدرسه نمونه",
+        "group_chat_id": None,
+        "group_chat_title": None,
+        "has_member_join_code": True,
+        "member_join_code_expires_at": None,
+    }
+    db.execute.return_value = FakeResult([expected])
+
+    result = await get_product_class(db, class_id=31)
+
+    assert result == expected
+    sql = str(db.execute.await_args.args[0])
+    assert "ay.school_id" in sql
+    assert "member_join_code_hash IS NOT NULL" in sql
+
+

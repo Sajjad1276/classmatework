@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import secrets
 import unicodedata
 import uuid
 from datetime import datetime, time, timedelta, timezone
@@ -93,7 +94,8 @@ async def list_product_classes(
                 c.section,
                 c.is_active,
                 c.group_chat_id,
-                c.group_chat_title
+                c.group_chat_title,
+                (c.member_join_code_hash IS NOT NULL) AS has_member_join_code
             FROM public.classes AS c
             JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
             WHERE ay.school_id = :school_id
@@ -202,13 +204,31 @@ async def create_product_class(
         )
         academic_year_id = internal_year.scalar_one()
 
+    join_code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(10))
+    join_code_hash = hashlib.sha256(join_code.encode("utf-8")).hexdigest()
     result = await db.execute(
         text(
             """
             INSERT INTO public.classes
-                (academic_year_id, name, grade, section, is_active)
+                (
+                    academic_year_id,
+                    name,
+                    grade,
+                    section,
+                    is_active,
+                    member_join_code_hash,
+                    member_join_code_expires_at
+                )
             VALUES
-                (:academic_year_id, :name, :grade, :section, TRUE)
+                (
+                    :academic_year_id,
+                    :name,
+                    :grade,
+                    :section,
+                    TRUE,
+                    :member_join_code_hash,
+                    NULL
+                )
             RETURNING id, name, grade, section, is_active
             """
         ),
@@ -217,9 +237,14 @@ async def create_product_class(
             "name": normalized_name,
             "grade": normalized_grade,
             "section": normalized_section,
+            "member_join_code_hash": join_code_hash,
         },
     )
-    return dict(result.mappings().one())
+    school_class = dict(result.mappings().one())
+    school_class["member_join_code"] = join_code
+    school_class["has_member_join_code"] = True
+    school_class["member_join_code_expires_at"] = None
+    return school_class
 
 
 
@@ -242,7 +267,9 @@ async def get_product_class(
                 ay.school_id,
                 s.name AS school_name,
                 c.group_chat_id,
-                c.group_chat_title
+                c.group_chat_title,
+                (c.member_join_code_hash IS NOT NULL) AS has_member_join_code,
+                c.member_join_code_expires_at
             FROM public.classes AS c
             JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
             JOIN public.schools AS s ON s.id = ay.school_id
@@ -481,13 +508,9 @@ async def list_product_class_members(
                 u.username,
                 u.is_active AS user_is_active,
                 cm.is_active AS membership_is_active,
-                cm.role AS membership_role,
-                ic.expires_at AS invite_expires_at,
-                ic.used_at AS invite_used_at
+                cm.role AS membership_role
             FROM public.class_memberships AS cm
             JOIN public.users AS u ON u.id = cm.user_id
-            LEFT JOIN public.class_member_invite_codes AS ic
-              ON ic.class_id = cm.class_id AND ic.user_id = cm.user_id
             WHERE cm.class_id = :class_id
             ORDER BY cm.is_active DESC, u.full_name ASC, u.id ASC
             LIMIT :limit
@@ -1339,4 +1362,45 @@ async def issue_product_member_invite_code(
         **dict(member),
         "invitation_id": invite["id"],
         "expires_at": invite["expires_at"],
+    }
+
+
+
+async def issue_product_class_join_code(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    code: str,
+) -> dict:
+    normalized_code = code.strip().upper()
+    if class_id <= 0:
+        raise InvalidApplicationInput("شناسه کلاس معتبر نیست.")
+    if not 8 <= len(normalized_code) <= 64 or any(ch.isspace() for ch in normalized_code):
+        raise InvalidApplicationInput("کد ورود کلاس باید بین ۸ تا ۶۴ نویسه و بدون فاصله باشد.")
+
+    code_hash = hashlib.sha256(normalized_code.encode("utf-8")).hexdigest()
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.classes AS c
+            SET member_join_code_hash = :code_hash,
+                member_join_code_expires_at = NULL
+            FROM public.academic_years AS ay
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE c.id = :class_id
+              AND c.academic_year_id = ay.id
+              AND c.is_active IS TRUE
+              AND s.is_active IS TRUE
+            RETURNING c.id, c.name, c.member_join_code_expires_at
+            """
+        ),
+        {"class_id": class_id, "code_hash": code_hash},
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ResourceNotFound("کلاس یا مدرسهٔ فعال پیدا نشد.")
+    return {
+        **dict(row),
+        "member_join_code": normalized_code,
+        "has_member_join_code": True,
     }

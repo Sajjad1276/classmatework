@@ -35,11 +35,7 @@ from app.application.tenant_access import (
     reactivate_tenant_member,
     suspend_tenant_member,
 )
-from app.application.tenants import (
-    create_tenant,
-    list_accessible_tenants,
-    list_tenants,
-)
+from app.application.tenants import create_tenant
 from app.db.models import User
 from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import (
@@ -162,41 +158,23 @@ async def _show_tenant_list(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
-    try:
-        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
-    except AccessDenied:
-        tenants = await list_accessible_tenants(
-            db,
-            actor_id=principal.user.id,
-            limit=50,
-        )
-
-    can_create = await has_permission(
-        db,
-        user_id=principal.user.id,
-        permission_key="platform:tenants:create",
-        tenant_id=None,
-        scope_type="platform",
-        scope_id=None,
+    """Compatibility fallback for stale keyboards; tenant/year navigation is retired."""
+    await message.answer(
+        "مدیریت مجموعه و سال تحصیلی از پنل حذف شده است. "
+        "مدرسه و کلاس را مستقیماً از بخش مدیریت مدارس انتخاب کنید.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🏫 ورود به مدیریت مدارس",
+                        callback_data="product:schools",
+                    )
+                ],
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+            ]
+        ),
     )
-    rows = [
-        [InlineKeyboardButton(
-            text=f"{tenant.name} · {tenant.slug}",
-            callback_data=f"tenant:open:{tenant.id}",
-        )]
-        for tenant in tenants
-    ]
-    if can_create:
-        rows.append([InlineKeyboardButton(text="➕ ایجاد مجموعه", callback_data="tenant:create")])
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")])
 
-    body = (
-        f"🏫 مدیریت مدارس و کلاس‌ها\n\nمجموعه‌ها: {len(tenants)}\n"
-        "برای مدیریت مدارس و کلاس‌های هر مجموعه، آن را انتخاب کنید."
-        if tenants
-        else "هنوز مجموعه‌ای ثبت نشده است. ابتدا یک مجموعه ایجاد کنید."
-    )
-    await message.answer(body, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 async def _begin_tenant_creation(
     message: Message,
@@ -719,14 +697,15 @@ async def _member_directory_content(
             ]
         )
     rows.append(
-        [InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data=f"tenant:open:{tenant_id}")]
+        [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
     )
     return body, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 
 def _member_suspend_callback_data(flow_token: str, member_user_id: UUID) -> str:
-    callback_data = f"member:suspend:start:{flow_token}:{member_user_id.hex}"
+    # Keep this callback under Telegram's 64-byte limit (UUID hex = 32 bytes).
+    callback_data = f"m:s:start:{flow_token}:{member_user_id.hex}"
     if len(callback_data.encode("utf-8")) > 64:
         raise ValueError("Member action callback exceeds Telegram's 64-byte limit.")
     return callback_data
@@ -774,7 +753,7 @@ async def _restore_member_directory_after_suspend(
     return True
 
 
-@router.callback_query(F.data.startswith("member:suspend:start:"))
+@router.callback_query(F.data.startswith("m:s:start:"))
 async def member_suspend_start_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -783,7 +762,7 @@ async def member_suspend_start_callback(
 ) -> None:
     parts = (callback.data or "").split(":")
     supplied_token = parts[3] if len(parts) == 5 else ""
-    if len(parts) != 5 or parts[0:3] != ["member", "suspend", "start"]:
+    if len(parts) != 5 or parts[0:3] != ["m", "s", "start"]:
         await callback.answer("درخواست تعلیق معتبر نیست.", show_alert=True)
         return
 
@@ -1783,7 +1762,7 @@ async def tenant_confirm_callback(
         return
 
     try:
-        tenant = await create_tenant(
+        await create_tenant(
             db,
             actor_id=principal.user.id,
             name=data.get("tenant_name", ""),
@@ -1804,16 +1783,14 @@ async def tenant_confirm_callback(
     if callback.message is not None:
         await callback.message.edit_text(
             (
-                "✅ مجموعه ایجاد شد.\n\n"
-                f"نام: {tenant.name}\n"
-                f"شناسه: {tenant.slug}\n\n"
-                "برای مدیریت مدارس و کلاس‌های این مجموعه وارد آن شوید."
+                "عملیات قبلی ثبت شد.\n\n"
+                "برای مدیریت مدرسه و کلاس‌ها از بخش مدیریت مدارس استفاده کنید."
             ),
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(
-                        text="🏫 مدیریت مدارس این مجموعه",
-                        callback_data=f"tenant:open:{tenant.id}",
+                        text="🏫 مدیریت مدارس",
+                        callback_data="product:schools",
                     )],
                     [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
                 ]
