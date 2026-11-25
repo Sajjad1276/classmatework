@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.application.errors import InvalidApplicationInput, ResourceConflict
+from app.application.errors import InvalidApplicationInput
 from app.application.product_management import create_product_school, list_product_schools
 
 

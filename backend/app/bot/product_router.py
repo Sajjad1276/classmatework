@@ -2744,7 +2744,7 @@ async def product_member_add_confirm_callback(
                     telegram_id=int(data["product_member_telegram_id"]),
                     full_name=data["product_member_full_name"],
                 )
-                invitation = await issue_product_member_invite_code(
+                await issue_product_member_invite_code(
                     product_db,
                     class_id=class_id,
                     user_id=member["user_id"],
