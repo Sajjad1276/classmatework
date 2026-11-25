@@ -631,9 +631,9 @@ async def create_product_announcement(
         text(
             """
             INSERT INTO public.users
-                (telegram_id, full_name, private_chat_started, is_active)
+                (telegram_id, full_name, is_platform_admin, private_chat_started, is_active)
             VALUES
-                (:telegram_id, :full_name, FALSE, TRUE)
+                (:telegram_id, :full_name, FALSE, FALSE, TRUE)
             ON CONFLICT (telegram_id) DO NOTHING
             RETURNING id, is_active
             """
