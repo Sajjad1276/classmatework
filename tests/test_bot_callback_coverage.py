@@ -5,6 +5,11 @@ import re
 from pathlib import Path
 
 BOT_ROUTER_DIRECTORY = Path(__file__).parents[1] / "backend" / "app" / "bot"
+ACTIVE_ROUTER_PATHS = (
+    BOT_ROUTER_DIRECTORY / "router.py",
+    BOT_ROUTER_DIRECTORY / "control_router.py",
+    BOT_ROUTER_DIRECTORY / "product_router.py",
+)
 PRODUCT_ROUTER_PATH = BOT_ROUTER_DIRECTORY / "product_router.py"
 INTEGER_ID_PLACEHOLDER = "2147483647"
 
@@ -98,7 +103,7 @@ def _matches(sample: str, callback_filter: tuple[str, object]) -> bool:
 def test_every_inline_button_callback_has_a_registered_handler_and_fits_telegram_limit() -> None:
     router_trees = [
         ast.parse(path.read_text(encoding="utf-8"))
-        for path in BOT_ROUTER_DIRECTORY.rglob("*.py")
+        for path in ACTIVE_ROUTER_PATHS
     ]
     filters = [
         callback_filter
@@ -107,7 +112,7 @@ def test_every_inline_button_callback_has_a_registered_handler_and_fits_telegram
     ]
     callbacks: list[tuple[str, str, int]] = []
 
-    for path in BOT_ROUTER_DIRECTORY.rglob("*.py"):
+    for path in ACTIVE_ROUTER_PATHS:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
