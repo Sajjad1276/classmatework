@@ -510,23 +510,30 @@ async def product_school_detail_callback(
         "",
         "کلاس‌ها:",
     ]
-    if classes:
+    can_read_classes = await _has_permission(db, principal, "platform:classes:read")
+    if classes and can_read_classes:
         lines.append("برای ورود به مدیریت هر کلاس، دکمهٔ آن را انتخاب کنید.")
+    elif classes:
+        lines.append("کلاس ثبت شده است؛ برای مشاهدهٔ جزئیات کلاس مجوز لازم را ندارید.")
     else:
         lines.append("هنوز کلاسی برای این مدرسه ثبت نشده است.")
 
-    rows = [
+    rows = (
         [
-            InlineKeyboardButton(
-                text=(
-                    f"👥 {item['name'][:21]} · {item['grade'][:10]} "
-                    f"{'🔑' if item['has_member_join_code'] else '⚠️'}"
-                ),
-                callback_data=f"product:class:{item['id']}",
-            )
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"👥 {item['name'][:21]} · {item['grade'][:10]} "
+                        f"{'🔑' if item['has_member_join_code'] else '⚠️'}"
+                    ),
+                    callback_data=f"product:class:{item['id']}",
+                )
+            ]
+            for item in classes[:30]
         ]
-        for item in classes[:30]
-    ]
+        if can_read_classes
+        else []
+    )
     can_create_class = (
         school["is_active"]
         and await _has_permission(db, principal, "platform:classes:create")
@@ -1476,24 +1483,36 @@ async def product_class_detail_callback(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="➕ افزودن درس",
-                            callback_data=f"product:subject:add:{class_id}",
-                        ),
-                        InlineKeyboardButton(
-                            text="📅 مشاهده برنامه هفتگی",
-                            callback_data=f"product:timetable:view:{class_id}",
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="➕ افزودن زنگ",
-                            callback_data=f"product:timetable:add:{class_id}",
-                        )
-                    ],
+                    *(
+                        [[
+                            InlineKeyboardButton(
+                                text="➕ افزودن درس",
+                                callback_data=f"product:subject:add:{class_id}",
+                            )
+                        ]]
+                        if await _has_permission(db, principal, "platform:subjects:manage")
+                        else []
+                    ),
                     *(
                         [
+                            [
+                                InlineKeyboardButton(
+                                    text="📅 مشاهده برنامه هفتگی",
+                                    callback_data=f"product:timetable:view:{class_id}",
+                                )
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text="➕ افزودن زنگ",
+                                    callback_data=f"product:timetable:add:{class_id}",
+                                )
+                            ],
+                        ]
+                        if await _has_permission(db, principal, "platform:timetable:manage")
+                        else []
+                    ),
+                    *(
+                        [[
                             InlineKeyboardButton(
                                 text=(
                                     "♻️ تغییر کد ورود کلاس"
@@ -1502,13 +1521,13 @@ async def product_class_detail_callback(
                                 ),
                                 callback_data=f"product:class:join-code:{class_id}",
                             )
-                        ]
+                        ]]
                         if class_info["is_active"]
                         and await _has_permission(db, principal, "platform:classes:manage")
                         else []
                     ),
                     *(
-                        [
+                        [[
                             InlineKeyboardButton(
                                 text=(
                                     "➕ افزودن گروه"
@@ -1517,28 +1536,38 @@ async def product_class_detail_callback(
                                 ),
                                 callback_data=f"product:group:link:{class_id}",
                             )
-                        ]
+                        ]]
                         if class_info["is_active"]
                         and await _has_permission(db, principal, "platform:groups:manage")
                         else []
                     ),
-                    [
-                        InlineKeyboardButton(
-                            text="👥 اعضای کلاس",
-                            callback_data=f"product:members:{class_id}",
-                        ),
-                        InlineKeyboardButton(
-                            text="📢 اطلاعیه‌ها",
-                            callback_data=f"product:announcements:{class_id}",
-                        ),
-                    ],
                     *(
-                        [
+                        [[
+                            InlineKeyboardButton(
+                                text="👥 اعضای کلاس",
+                                callback_data=f"product:members:{class_id}",
+                            )
+                        ]]
+                        if await _has_permission(db, principal, "platform:members:manage")
+                        else []
+                    ),
+                    *(
+                        [[
+                            InlineKeyboardButton(
+                                text="📢 اطلاعیه‌ها",
+                                callback_data=f"product:announcements:{class_id}",
+                            )
+                        ]]
+                        if await _has_permission(db, principal, "platform:announcements:manage")
+                        else []
+                    ),
+                    *(
+                        [[
                             InlineKeyboardButton(
                                 text="📚 محتوا و صف بررسی",
                                 callback_data=f"product:records:{class_id}",
                             )
-                        ]
+                        ]]
                         if await _has_permission(db, principal, "platform:records:read")
                         or await _has_permission(db, principal, "platform:records:review")
                         else []

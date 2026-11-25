@@ -162,41 +162,23 @@ async def _show_tenant_list(
     principal: TelegramPrincipal,
     db: AsyncSession,
 ) -> None:
-    try:
-        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
-    except AccessDenied:
-        tenants = await list_accessible_tenants(
-            db,
-            actor_id=principal.user.id,
-            limit=50,
-        )
-
-    can_create = await has_permission(
-        db,
-        user_id=principal.user.id,
-        permission_key="platform:tenants:create",
-        tenant_id=None,
-        scope_type="platform",
-        scope_id=None,
+    """Compatibility fallback for stale keyboards; tenant/year navigation is retired."""
+    await message.answer(
+        "مدیریت مجموعه و سال تحصیلی از پنل حذف شده است. "
+        "مدرسه و کلاس را مستقیماً از بخش مدیریت مدارس انتخاب کنید.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🏫 ورود به مدیریت مدارس",
+                        callback_data="product:schools",
+                    )
+                ],
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+            ]
+        ),
     )
-    rows = [
-        [InlineKeyboardButton(
-            text=f"{tenant.name} · {tenant.slug}",
-            callback_data=f"tenant:open:{tenant.id}",
-        )]
-        for tenant in tenants
-    ]
-    if can_create:
-        rows.append([InlineKeyboardButton(text="➕ ایجاد مجموعه", callback_data="tenant:create")])
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")])
 
-    body = (
-        f"🏫 مدیریت مدارس و کلاس‌ها\n\nمجموعه‌ها: {len(tenants)}\n"
-        "برای مدیریت مدارس و کلاس‌های هر مجموعه، آن را انتخاب کنید."
-        if tenants
-        else "هنوز مجموعه‌ای ثبت نشده است. ابتدا یک مجموعه ایجاد کنید."
-    )
-    await message.answer(body, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 async def _begin_tenant_creation(
     message: Message,
@@ -719,7 +701,7 @@ async def _member_directory_content(
             ]
         )
     rows.append(
-        [InlineKeyboardButton(text="⬅️ بازگشت به مجموعه", callback_data=f"tenant:open:{tenant_id}")]
+        [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
     )
     return body, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1805,16 +1787,14 @@ async def tenant_confirm_callback(
     if callback.message is not None:
         await callback.message.edit_text(
             (
-                "✅ مجموعه ایجاد شد.\n\n"
-                f"نام: {tenant.name}\n"
-                f"شناسه: {tenant.slug}\n\n"
-                "برای مدیریت مدارس و کلاس‌های این مجموعه وارد آن شوید."
+                "عملیات قبلی ثبت شد.\n\n"
+                "برای مدیریت مدرسه و کلاس‌ها از بخش مدیریت مدارس استفاده کنید."
             ),
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(
-                        text="🏫 مدیریت مدارس این مجموعه",
-                        callback_data=f"tenant:open:{tenant.id}",
+                        text="🏫 مدیریت مدارس",
+                        callback_data="product:schools",
                     )],
                     [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
                 ]

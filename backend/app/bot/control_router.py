@@ -186,7 +186,7 @@ async def _render_group_panel(
         [
             InlineKeyboardButton(
                 text="⬅️ بازگشت به کلاس",
-                callback_data=f"class:open:{class_group.id}",
+                callback_data="school:groups",
             )
         ]
     )
@@ -439,7 +439,7 @@ async def school_group_directory_callback(
     if navigation:
         rows.append(navigation)
     rows.append(
-        [InlineKeyboardButton(text="⬅️ بازگشت به مدرسه", callback_data="school:menu")]
+        [InlineKeyboardButton(text="⬅️ بازگشت به مدرسه", callback_data="product:schools")]
     )
     if callback.message is not None:
         await callback.message.edit_text(
@@ -553,7 +553,7 @@ async def _render_class_subject_panel(
         [
             InlineKeyboardButton(
                 text="⬅️ بازگشت به کلاس",
-                callback_data=f"class:open:{class_group.id}",
+                callback_data="school:groups",
             )
         ]
     )
