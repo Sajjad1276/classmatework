@@ -4,7 +4,8 @@ import ast
 import re
 from pathlib import Path
 
-ROUTER_PATH = Path(__file__).parents[1] / "backend" / "app" / "bot" / "product_router.py"
+BOT_ROUTER_DIRECTORY = Path(__file__).parents[1] / "backend" / "app" / "bot"
+PRODUCT_ROUTER_PATH = BOT_ROUTER_DIRECTORY / "product_router.py"
 INTEGER_ID_PLACEHOLDER = "2147483647"
 
 
@@ -89,32 +90,43 @@ def _matches(sample: str, callback_filter: tuple[str, object]) -> bool:
 
 
 def test_every_inline_button_callback_has_a_registered_handler_and_fits_telegram_limit() -> None:
-    tree = ast.parse(ROUTER_PATH.read_text(encoding="utf-8"))
-    filters = _callback_filters(tree)
-    callbacks: list[tuple[str, int]] = []
+    router_trees = [
+        ast.parse(path.read_text(encoding="utf-8"))
+        for path in BOT_ROUTER_DIRECTORY.rglob("*.py")
+    ]
+    filters = [
+        callback_filter
+        for tree in router_trees
+        for callback_filter in _callback_filters(tree)
+    ]
+    callbacks: list[tuple[str, str, int]] = []
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        function = node.func
-        if not (
-            isinstance(function, ast.Name)
-            and function.id == "InlineKeyboardButton"
-        ):
-            continue
-        for keyword in node.keywords:
-            if keyword.arg == "callback_data":
-                callbacks.append((_sample_callback(keyword.value), node.lineno))
+    for path, tree in (
+        (path, ast.parse(path.read_text(encoding="utf-8")))
+        for path in BOT_ROUTER_DIRECTORY.rglob("*.py")
+    ):
+      for node in ast.walk(tree):
+          if not isinstance(node, ast.Call):
+              continue
+          function = node.func
+          if not (
+              isinstance(function, ast.Name)
+              and function.id == "InlineKeyboardButton"
+          ):
+              continue
+          for keyword in node.keywords:
+              if keyword.arg == "callback_data":
+                  callbacks.append((str(path), _sample_callback(keyword.value), node.lineno))
 
     assert callbacks, "No inline keyboard callback buttons were found."
     unmatched = [
-        (sample, line)
-        for sample, line in callbacks
+        (path, sample, line)
+        for path, sample, line in callbacks
         if not any(_matches(sample, callback_filter) for callback_filter in filters)
     ]
     oversized = [
-        (sample, len(sample.encode("utf-8")), line)
-        for sample, line in callbacks
+        (path, sample, len(sample.encode("utf-8")), line)
+        for path, sample, line in callbacks
         if len(sample.encode("utf-8")) > 64
     ]
 
@@ -123,7 +135,7 @@ def test_every_inline_button_callback_has_a_registered_handler_and_fits_telegram
 
 
 def test_class_list_button_routes_to_the_class_detail_handler() -> None:
-    tree = ast.parse(ROUTER_PATH.read_text(encoding="utf-8"))
+    tree = ast.parse(PRODUCT_ROUTER_PATH.read_text(encoding="utf-8"))
     filters = _callback_filters(tree)
     assert any(
         kind == "regexp" and str(value) == r"^product:class:[0-9]+$"
