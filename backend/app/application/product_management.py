@@ -130,3 +130,85 @@ async def require_product_school(
     if school is None:
         raise ResourceNotFound("مدرسه موردنظر پیدا نشد.")
     return school
+
+
+async def create_product_class(
+    db: AsyncSession,
+    *,
+    school_id: int,
+    name: str,
+    grade: str,
+    section: str | None = None,
+) -> dict:
+    normalized_name = " ".join(name.split())
+    normalized_grade = " ".join(grade.split())
+    normalized_section = " ".join(section.split()) if section else None
+    if school_id <= 0:
+        raise InvalidApplicationInput("شناسه مدرسه معتبر نیست.")
+    if not 2 <= len(normalized_name) <= 80:
+        raise InvalidApplicationInput("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+    if not 1 <= len(normalized_grade) <= 32:
+        raise InvalidApplicationInput("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+    if normalized_section is not None and len(normalized_section) > 32:
+        raise InvalidApplicationInput("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+
+    school_result = await db.execute(
+        text(
+            "SELECT id FROM public.schools "
+            "WHERE id = :school_id AND is_active IS TRUE"
+        ),
+        {"school_id": school_id},
+    )
+    if school_result.scalar_one_or_none() is None:
+        raise ResourceNotFound("مدرسه فعال پیدا نشد.")
+
+    # ClassMate's current bot and worker still require academic_year_id.
+    # It is an internal compatibility key: admins never select or manage it.
+    year_result = await db.execute(
+        text(
+            """
+            SELECT id
+            FROM public.academic_years
+            WHERE school_id = :school_id
+            ORDER BY is_current DESC, id DESC
+            LIMIT 1
+            """
+        ),
+        {"school_id": school_id},
+    )
+    academic_year_id = year_result.scalar_one_or_none()
+    if academic_year_id is None:
+        internal_year = await db.execute(
+            text(
+                """
+                INSERT INTO public.academic_years
+                    (school_id, name, starts_on, ends_on, is_current)
+                VALUES
+                    (:school_id, 'پیش‌فرض داخلی', NULL, NULL, TRUE)
+                ON CONFLICT (school_id, name)
+                DO UPDATE SET is_current = TRUE
+                RETURNING id
+                """
+            ),
+            {"school_id": school_id},
+        )
+        academic_year_id = internal_year.scalar_one()
+
+    result = await db.execute(
+        text(
+            """
+            INSERT INTO public.classes
+                (academic_year_id, name, grade, section, is_active)
+            VALUES
+                (:academic_year_id, :name, :grade, :section, TRUE)
+            RETURNING id, name, grade, section, is_active
+            """
+        ),
+        {
+            "academic_year_id": academic_year_id,
+            "name": normalized_name,
+            "grade": normalized_grade,
+            "section": normalized_section,
+        },
+    )
+    return dict(result.mappings().one())

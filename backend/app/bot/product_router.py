@@ -19,6 +19,7 @@ from app.application.errors import AccessDenied, ApplicationError
 from app.application.product_management import (
     create_product_school,
     get_product_school,
+    create_product_class,
     list_product_classes,
     list_product_schools,
 )
@@ -35,6 +36,13 @@ CREATE_SCHOOL_BUTTON = "➕ ایجاد مدرسه"
 
 class SchoolCreation(StatesGroup):
     name = State()
+    confirm = State()
+
+
+class ClassCreation(StatesGroup):
+    name = State()
+    grade = State()
+    section = State()
     confirm = State()
 
 
@@ -206,6 +214,18 @@ async def school_creation_cancel_command(
 ) -> None:
     await state.clear()
     await message.answer("ایجاد مدرسه لغو شد؛ هیچ تغییری ثبت نشد.")
+
+
+@router.message(Command("cancel"), ClassCreation.name)
+@router.message(Command("cancel"), ClassCreation.grade)
+@router.message(Command("cancel"), ClassCreation.section)
+@router.message(Command("cancel"), ClassCreation.confirm)
+async def class_creation_cancel_command(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await message.answer("ایجاد کلاس لغو شد؛ هیچ تغییری ثبت نشد.")
 
 
 @router.message(SchoolCreation.name, F.text)
@@ -398,19 +418,269 @@ async def product_school_detail_callback(
     else:
         lines.append("هنوز کلاسی برای این مدرسه ثبت نشده است.")
 
+    can_create_class = (
+        school["is_active"]
+        and await _has_permission(db, principal, "platform:classes:create")
+    )
+    rows = []
+    if can_create_class:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="➕ افزودن کلاس",
+                    callback_data=f"product:class:create:{school_id}",
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="⬅️ بازگشت به مدارس",
+                    callback_data="product:schools",
+                )
+            ],
+            [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
+        ]
+    )
     await callback.answer()
     if callback.message is not None:
         await callback.message.edit_text(
             "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+async def _begin_class_creation(
+    message: Message,
+    *,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    school_id: int,
+) -> None:
+    if not await _has_permission(db, principal, "platform:classes:create"):
+        await message.answer("مجوز ایجاد کلاس را ندارید.")
+        return
+    await state.clear()
+    token = secrets.token_urlsafe(8)
+    await state.update_data(
+        product_class_token=token,
+        product_class_school_id=school_id,
+    )
+    await state.set_state(ClassCreation.name)
+    await message.answer("نام کلاس را وارد کنید (۲ تا ۸۰ نویسه):")
+
+
+@router.callback_query(F.data.regexp(r"^product:class:create:[0-9]+$"))
+async def product_class_create_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    try:
+        school_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        async with product_session_factory() as product_db:
+            school = await get_product_school(product_db, school_id=school_id)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not validate school before class creation.")
+        await callback.answer("بررسی مدرسه ناموفق بود.", show_alert=True)
+        return
+    if school is None or not school["is_active"]:
+        await callback.answer("مدرسه فعال پیدا نشد.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await _begin_class_creation(
+            callback.message,
+            principal=principal,
+            db=db,
+            state=state,
+            school_id=school_id,
+        )
+
+
+@router.message(ClassCreation.name, F.text)
+async def class_name_input(message: Message, state: FSMContext) -> None:
+    value = " ".join((message.text or "").split())
+    if not 2 <= len(value) <= 80:
+        await message.answer("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+        return
+    await state.update_data(product_class_name=value)
+    await state.set_state(ClassCreation.grade)
+    await message.answer("پایه یا مقطع کلاس را وارد کنید (مثلاً دهم):")
+
+
+@router.message(ClassCreation.grade, F.text)
+async def class_grade_input(message: Message, state: FSMContext) -> None:
+    value = " ".join((message.text or "").split())
+    if not 1 <= len(value) <= 32:
+        await message.answer("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+        return
+    await state.update_data(product_class_grade=value)
+    await state.set_state(ClassCreation.section)
+    await message.answer("نام بخش/شعبه را وارد کنید؛ اگر ندارد، فقط «-» بفرستید:")
+
+
+@router.message(ClassCreation.section, F.text)
+async def class_section_input(message: Message, state: FSMContext) -> None:
+    value = " ".join((message.text or "").split())
+    section = None if value == "-" else value
+    if section is not None and len(section) > 32:
+        await message.answer("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+        return
+    data = await state.get_data()
+    token = data.get("product_class_token")
+    if not token:
+        await state.clear()
+        await message.answer("فرم ایجاد کلاس منقضی شده است؛ دوباره شروع کنید.")
+        return
+    await state.update_data(product_class_section=section)
+    await state.set_state(ClassCreation.confirm)
+    await message.answer(
+        "پیش‌نمایش ایجاد کلاس\n\n"
+        f"نام: {data.get('product_class_name')}\n"
+        f"پایه: {data.get('product_class_grade')}\n"
+        f"بخش: {section or 'بدون بخش'}\n\n"
+        "ثبت نهایی شود؟",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ تأیید ایجاد کلاس",
+                        callback_data=f"product:class:confirm:{token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو",
+                        callback_data=f"product:class:cancel:{token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("product:class:confirm:"))
+async def product_class_create_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != ClassCreation.confirm.state
+        or not token
+        or token != data.get("product_class_token")
+    ):
+        await callback.answer("این تأیید منقضی شده است.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:classes:create"):
+        await state.clear()
+        await callback.answer("مجوز ایجاد کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await state.clear()
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    school_id = int(data.get("product_class_school_id") or 0)
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                school_class = await create_product_class(
+                    product_db,
+                    school_id=school_id,
+                    name=data.get("product_class_name", ""),
+                    grade=data.get("product_class_grade", ""),
+                    section=data.get("product_class_section"),
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not create ClassMate product class.")
+        await state.clear()
+        await callback.answer("ایجاد کلاس در دیتابیس ClassMate ناموفق بود.", show_alert=True)
+        return
+
+    audit_warning = False
+    try:
+        await record_event(
+            db,
+            event_type="product.class.created",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={
+                "class_id": school_class["id"],
+                "school_id": school_id,
+                "name": school_class["name"],
+                "grade": school_class["grade"],
+            },
+        )
+        await db.commit()
+    except Exception:
+        audit_warning = True
+        await db.rollback()
+        logger.exception(
+            "Class %s was created but Work audit recording failed.",
+            school_class["id"],
+        )
+
+    await state.clear()
+    await callback.answer("کلاس ایجاد شد.")
+    if callback.message is not None:
+        notice = (
+            "⚠️ کلاس ثبت شد، اما ثبت رویداد ممیزی نیازمند بررسی است. "
+            if audit_warning
+            else ""
+        )
+        await callback.message.edit_text(
+            f"✅ {notice}کلاس ایجاد شد.\n\n"
+            f"شناسه: {school_class['id']}\n"
+            f"نام: {school_class['name']}\n"
+            f"پایه: {school_class['grade']}",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="⬅️ بازگشت به مدارس",
-                            callback_data="product:schools",
+                            text="🏫 بازگشت به مدرسه",
+                            callback_data=f"product:school:{school_id}",
                         )
                     ],
                     [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
                 ]
             ),
         )
+
+
+@router.callback_query(F.data.startswith("product:class:cancel:"))
+async def product_class_create_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != ClassCreation.confirm.state
+        or not token
+        or token != data.get("product_class_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("عملیات لغو شد.")
+    if callback.message is not None:
+        await callback.message.edit_text("ایجاد کلاس لغو شد؛ تغییری ثبت نشد.")

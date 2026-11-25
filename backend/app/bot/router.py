@@ -18,7 +18,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
-from sqlalchemy import or_, select, text
+from sqlalchemy import or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors import (
@@ -41,7 +41,7 @@ from app.application.tenants import (
     list_accessible_tenants,
     list_tenants,
 )
-from app.db.models import TenantMembership, User
+from app.db.models import User
 from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import (
     PairingNotAllowed,
