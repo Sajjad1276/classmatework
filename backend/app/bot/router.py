@@ -35,11 +35,7 @@ from app.application.tenant_access import (
     reactivate_tenant_member,
     suspend_tenant_member,
 )
-from app.application.tenants import (
-    create_tenant,
-    list_accessible_tenants,
-    list_tenants,
-)
+from app.application.tenants import create_tenant
 from app.db.models import User
 from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import (
@@ -1766,7 +1762,7 @@ async def tenant_confirm_callback(
         return
 
     try:
-        tenant = await create_tenant(
+        await create_tenant(
             db,
             actor_id=principal.user.id,
             name=data.get("tenant_name", ""),
