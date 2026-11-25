@@ -1449,7 +1449,8 @@ async def product_class_detail_callback(
                                 callback_data=f"product:class:status:{class_id}:{0 if class_info['is_active'] else 1}",
                             ),
                         ]
-                    ] if await _has_permission(db, principal, "platform:classes:manage") else []
+                        if await _has_permission(db, principal, "platform:classes:manage")
+                        else []
                     ),
                     [
                         InlineKeyboardButton(
