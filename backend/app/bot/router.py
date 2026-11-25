@@ -726,7 +726,8 @@ async def _member_directory_content(
 
 
 def _member_suspend_callback_data(flow_token: str, member_user_id: UUID) -> str:
-    callback_data = f"member:suspend:start:{flow_token}:{member_user_id.hex}"
+    # Keep this callback under Telegram's 64-byte limit (UUID hex = 32 bytes).
+    callback_data = f"m:s:start:{flow_token}:{member_user_id.hex}"
     if len(callback_data.encode("utf-8")) > 64:
         raise ValueError("Member action callback exceeds Telegram's 64-byte limit.")
     return callback_data
@@ -774,7 +775,7 @@ async def _restore_member_directory_after_suspend(
     return True
 
 
-@router.callback_query(F.data.startswith("member:suspend:start:"))
+@router.callback_query(F.data.startswith("m:s:start:"))
 async def member_suspend_start_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -783,7 +784,7 @@ async def member_suspend_start_callback(
 ) -> None:
     parts = (callback.data or "").split(":")
     supplied_token = parts[3] if len(parts) == 5 else ""
-    if len(parts) != 5 or parts[0:3] != ["member", "suspend", "start"]:
+    if len(parts) != 5 or parts[0:3] != ["m", "s", "start"]:
         await callback.answer("درخواست تعلیق معتبر نیست.", show_alert=True)
         return
 

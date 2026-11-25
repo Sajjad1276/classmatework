@@ -30,6 +30,12 @@ def _sample_callback(node: ast.expr) -> str:
                 else:
                     parts.append("1")
         return "".join(parts)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_member_suspend_callback_data"
+    ):
+        return "m:s:start:AbCdEf12:0123456789abcdef0123456789abcdef"
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         return _sample_callback(node.left) + _sample_callback(node.right)
     raise AssertionError(f"Unsupported callback_data expression: {ast.dump(node)}")
@@ -141,3 +147,18 @@ def test_class_list_button_routes_to_the_class_detail_handler() -> None:
     )
     class_button = "product:class:123"
     assert any(_matches(class_button, callback_filter) for callback_filter in filters)
+
+
+
+def test_member_suspend_callback_stays_within_telegram_limit() -> None:
+    from uuid import UUID
+
+    from app.bot.router import _member_suspend_callback_data
+
+    callback_data = _member_suspend_callback_data(
+        "AbCdEf12",
+        UUID("01234567-89ab-cdef-0123-456789abcdef"),
+    )
+
+    assert callback_data == "m:s:start:AbCdEf12:0123456789abcdef0123456789abcdef"
+    assert len(callback_data.encode("utf-8")) <= 64
