@@ -31,9 +31,11 @@ from app.application.product_management import (
     list_product_class_members,
     list_product_classes,
     list_product_schools,
+    issue_product_group_link_code,
     set_product_announcement_active,
     set_product_class_active,
     set_product_class_member_active,
+    set_product_class_member_role,
     set_product_school_active,
     update_product_class,
     update_product_school,
@@ -1428,6 +1430,18 @@ async def product_class_detail_callback(
                             callback_data=f"product:timetable:add:{class_id}",
                         )
                     ],
+                    *(
+                        [
+                            InlineKeyboardButton(
+                                text="🔗 اتصال گروه تلگرام",
+                                callback_data=f"product:group:link:{class_id}",
+                            )
+                        ]
+                        if class_info["is_active"]
+                        and class_info["group_chat_id"] is None
+                        and await _has_permission(db, principal, "platform:groups:manage")
+                        else []
+                    ),
                     [
                         InlineKeyboardButton(
                             text="👥 اعضای کلاس",
@@ -1970,6 +1984,192 @@ async def timetable_create_cancel_callback(
         await callback.message.edit_text("ثبت زنگ لغو شد؛ تغییری ثبت نشد.")
 
 
+
+
+@router.callback_query(F.data.regexp(r"^product:group:link:[0-9]+$"))
+async def product_group_link_issue_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:groups:manage"):
+        await callback.answer("مجوز اتصال گروه تلگرام را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+    raw_code = secrets.token_hex(12).upper()
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                link = await issue_product_group_link_code(
+                    product_db,
+                    class_id=class_id,
+                    code=raw_code,
+                    ttl_minutes=15,
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not issue a ClassMate group link code.")
+        await callback.answer("صدور کد اتصال گروه ناموفق بود.", show_alert=True)
+        return
+
+    try:
+        await record_event(
+            db,
+            event_type="product.class_group.link_code_issued",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={
+                "class_id": class_id,
+                "expires_at": link["group_link_code_expires_at"].isoformat(),
+            },
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Group link-code audit recording failed for class %s.", class_id)
+
+    await callback.answer("کد اتصال صادر شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "🔗 <b>کد اتصال گروه تلگرام</b>\n\n"
+            f"کلاس: {link['name']}\n"
+            "اعتبار: ۱۵ دقیقه\n"
+            "کد یک‌بارمصرف:\n"
+            f"<code>{raw_code}</code>\n\n"
+            "ربات ClassMate را در گروه مقصد مدیر کنید؛ سپس مدیر همان گروه "
+            "باید دستور زیر را داخل گروه ارسال کند:\n"
+            f"<code>/link {raw_code}</code>\n\n"
+            "این کد را در گروه عمومی یا برای افراد غیرمدیر ارسال نکنید.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ],
+                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:member:role:[0-9]+:[0-9]+$"))
+async def product_class_member_role_prompt_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+) -> None:
+    if not await _has_permission(db, principal, "platform:members:manage"):
+        await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, user_id = int(parts[3]), int(parts[4])
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "نقش جدید عضو را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="👨‍🎓 دانش‌آموز",
+                            callback_data=f"product:member:role:confirm:{class_id}:{user_id}:student",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="👨‍🏫 مدیر کلاس",
+                            callback_data=f"product:member:role:confirm:{class_id}:{user_id}:class_manager",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="🛡 تأییدکننده",
+                            callback_data=f"product:member:role:confirm:{class_id}:{user_id}:trusted_approver",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو",
+                            callback_data=f"product:members:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:member:role:confirm:[0-9]+:[0-9]+:(student|class_manager|trusted_approver)$"))
+async def product_class_member_role_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:members:manage"):
+        await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, user_id, role = int(parts[4]), int(parts[5]), parts[6]
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                changed = await set_product_class_member_role(
+                    product_db,
+                    class_id=class_id,
+                    user_id=user_id,
+                    role=role,
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not set ClassMate class member role.")
+        await callback.answer("تغییر نقش عضو ناموفق بود.", show_alert=True)
+        return
+    if not changed:
+        await callback.answer("عضویت فعال پیدا نشد.", show_alert=True)
+        return
+    try:
+        await record_event(
+            db,
+            event_type="product.class_member.role_changed",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={"class_id": class_id, "user_id": user_id, "role": role},
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Class member role audit recording failed.")
+    await callback.answer("نقش عضو تغییر کرد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "نقش عضو تغییر کرد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="👥 بازگشت به اعضای کلاس",
+                            callback_data=f"product:members:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
 @router.callback_query(F.data.regexp(r"^product:members:[0-9]+$"))
 async def product_class_members_callback(
     callback: CallbackQuery,
@@ -2008,23 +2208,32 @@ async def product_class_members_callback(
     if members:
         for member in members[:30]:
             active = member["membership_is_active"] and member["user_is_active"]
+            role_label = {
+                "student": "دانش‌آموز",
+                "class_manager": "مدیر کلاس",
+                "trusted_approver": "تأییدکننده",
+            }.get(member["membership_role"], member["membership_role"])
             lines.append(
                 f"• {member['full_name']} · {member['telegram_id']} · "
-                f"{'فعال' if active else 'غیرفعال'}"
+                f"{role_label} · {'فعال' if active else 'غیرفعال'}"
             )
             rows.append(
                 [
                     InlineKeyboardButton(
                         text=(
-                            f"⛔ تعلیق · {member['full_name'][:22]}"
+                            f"⛔ تعلیق · {member['full_name'][:18]}"
                             if active
-                            else f"♻️ فعال‌سازی · {member['full_name'][:22]}"
+                            else f"♻️ فعال‌سازی · {member['full_name'][:18]}"
                         ),
                         callback_data=(
                             f"product:member:status:{class_id}:{member['user_id']}:"
                             f"{0 if active else 1}"
                         ),
-                    )
+                    ),
+                    InlineKeyboardButton(
+                        text="🎖 نقش",
+                        callback_data=f"product:member:role:{class_id}:{member['user_id']}",
+                    ),
                 ]
             )
     else:

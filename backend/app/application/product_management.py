@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import unicodedata
-from datetime import time
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -477,7 +478,8 @@ async def list_product_class_members(
                 u.full_name,
                 u.username,
                 u.is_active AS user_is_active,
-                cm.is_active AS membership_is_active
+                cm.is_active AS membership_is_active,
+                cm.role AS membership_role
             FROM public.class_memberships AS cm
             JOIN public.users AS u ON u.id = cm.user_id
             WHERE cm.class_id = :class_id
@@ -511,9 +513,9 @@ async def add_product_class_member(
         text(
             """
             INSERT INTO public.users
-                (telegram_id, full_name, private_chat_started, is_active)
+                (telegram_id, full_name, is_platform_admin, private_chat_started, is_active)
             VALUES
-                (:telegram_id, :full_name, FALSE, TRUE)
+                (:telegram_id, :full_name, FALSE, FALSE, TRUE)
             ON CONFLICT (telegram_id) DO NOTHING
             RETURNING id, full_name, is_active
             """
@@ -539,10 +541,10 @@ async def add_product_class_member(
     membership = await db.execute(
         text(
             """
-            INSERT INTO public.class_memberships (class_id, user_id, is_active)
-            VALUES (:class_id, :user_id, TRUE)
+            INSERT INTO public.class_memberships (class_id, user_id, role, is_active)
+            VALUES (:class_id, :user_id, 'student', TRUE)
             ON CONFLICT (class_id, user_id)
-            DO UPDATE SET is_active = TRUE
+            DO UPDATE SET is_active = TRUE, role = 'student'
             RETURNING id
             """
         ),
@@ -820,5 +822,88 @@ async def set_product_class_active(
     if row is None:
         raise ResourceNotFound(
             "کلاس پیدا نشد یا مدرسه غیرفعال است؛ ابتدا وضعیت مدرسه را بررسی کنید."
+        )
+    return dict(row)
+
+
+async def set_product_class_member_role(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    user_id: int,
+    role: str,
+) -> bool:
+    allowed_roles = {"student", "class_manager", "trusted_approver"}
+    if class_id <= 0 or user_id <= 0:
+        raise InvalidApplicationInput("شناسه عضو یا کلاس معتبر نیست.")
+    if role not in allowed_roles:
+        raise InvalidApplicationInput("نقش انتخاب‌شده برای عضو کلاس مجاز نیست.")
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.class_memberships AS cm
+            SET role = :role
+            FROM public.users AS u
+            WHERE cm.class_id = :class_id
+              AND cm.user_id = :user_id
+              AND cm.user_id = u.id
+              AND cm.is_active IS TRUE
+              AND u.is_active IS TRUE
+            RETURNING cm.id
+            """
+        ),
+        {"class_id": class_id, "user_id": user_id, "role": role},
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def issue_product_group_link_code(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    code: str,
+    ttl_minutes: int = 15,
+) -> dict:
+    normalized_code = code.strip().upper()
+    if class_id <= 0:
+        raise InvalidApplicationInput("شناسه کلاس معتبر نیست.")
+    if not 16 <= len(normalized_code) <= 64 or any(ch.isspace() for ch in normalized_code):
+        raise InvalidApplicationInput("کد اتصال باید بین ۱۶ تا ۶۴ نویسه و بدون فاصله باشد.")
+    if not 1 <= ttl_minutes <= 60:
+        raise InvalidApplicationInput("مدت اعتبار کد اتصال باید بین ۱ تا ۶۰ دقیقه باشد.")
+
+    class_info = await get_product_class(db, class_id=class_id)
+    if class_info is None or not class_info["is_active"]:
+        raise ResourceNotFound("کلاس فعال پیدا نشد.")
+    code_hash = hashlib.sha256(normalized_code.encode("utf-8")).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.classes AS c
+            SET group_link_code_hash = :code_hash,
+                group_link_code_expires_at = :expires_at
+            FROM public.academic_years AS ay
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE c.id = :class_id
+              AND c.academic_year_id = ay.id
+              AND c.is_active IS TRUE
+              AND s.is_active IS TRUE
+              AND c.group_chat_id IS NULL
+            RETURNING c.id, c.name, c.group_chat_id, c.group_chat_title,
+                      c.group_link_code_expires_at
+            """
+        ),
+        {
+            "class_id": class_id,
+            "code_hash": code_hash,
+            "expires_at": expires_at,
+        },
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ResourceConflict(
+            "این کلاس از قبل گروه تلگرام دارد یا مدرسه/کلاس غیرفعال شده است."
         )
     return dict(row)

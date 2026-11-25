@@ -196,3 +196,73 @@ async def test_set_product_school_active_rejects_invalid_id_before_database_writ
     with pytest.raises(InvalidApplicationInput):
         await set_product_school_active(db, school_id=0, is_active=False)
     db.execute.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_issue_product_group_link_code_hashes_raw_code_and_sets_expiry() -> None:
+    from datetime import datetime, timezone
+
+    from app.application.product_management import issue_product_group_link_code
+
+    db = AsyncMock()
+    db.execute.side_effect = [
+        FakeResult(
+            [
+                {
+                    "id": 31,
+                    "name": "دهم الف",
+                    "grade": "دهم",
+                    "section": "الف",
+                    "is_active": True,
+                    "school_id": 7,
+                    "school_name": "دبیرستان",
+                }
+            ]
+        ),
+        FakeResult(
+            [
+                {
+                    "id": 31,
+                    "name": "دهم الف",
+                    "group_chat_id": None,
+                    "group_chat_title": None,
+                    "group_link_code_expires_at": datetime.now(timezone.utc),
+                }
+            ]
+        ),
+    ]
+
+    raw_code = "A1B2C3D4E5F60718293A4B5C"
+    result = await issue_product_group_link_code(db, class_id=31, code=raw_code)
+
+    update_params = db.execute.await_args_list[1].args[1]
+    assert result["id"] == 31
+    assert update_params["code_hash"] != raw_code
+    assert len(update_params["code_hash"]) == 64
+    assert update_params["expires_at"].tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_issue_product_group_link_code_rejects_short_code_before_database_read() -> None:
+    from app.application.product_management import issue_product_group_link_code
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await issue_product_group_link_code(db, class_id=1, code="short")
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_product_class_member_role_rejects_privileged_role_values() -> None:
+    from app.application.product_management import set_product_class_member_role
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await set_product_class_member_role(
+            db,
+            class_id=1,
+            user_id=2,
+            role="platform_admin",
+        )
+    db.execute.assert_not_awaited()
