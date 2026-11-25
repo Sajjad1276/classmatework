@@ -83,8 +83,8 @@ def wizard_controls(flow_token: str) -> InlineKeyboardMarkup:
     )
 
 MAIN_MENU_ACCOUNT = "👤 حساب مدیریتی من"
-MAIN_MENU_TENANTS = "🏫 مدیریت مدارس و کلاس‌ها"
-MAIN_MENU_CREATE_TENANT = "➕ ایجاد مجموعه جدید"
+MAIN_MENU_SCHOOLS = "🏫 مدیریت مدارس و کلاس‌ها"
+MAIN_MENU_CREATE_SCHOOL = "➕ ایجاد مدرسه"
 MAIN_MENU_HELP = "❓ راهنما"
 MAIN_MENU_REPORTS = "📊 داشبورد و گزارش‌ها"
 
@@ -101,7 +101,7 @@ async def main_menu(
     can_list_tenants = await has_permission(
         db,
         user_id=principal.user.id,
-        permission_key="platform:tenants:read",
+        permission_key="platform:schools:read",
         tenant_id=None,
         scope_type="platform",
         scope_id=None,
@@ -109,7 +109,7 @@ async def main_menu(
     can_create_tenants = await has_permission(
         db,
         user_id=principal.user.id,
-        permission_key="platform:tenants:create",
+        permission_key="platform:schools:create",
         tenant_id=None,
         scope_type="platform",
         scope_id=None,
@@ -138,13 +138,13 @@ async def main_menu(
 
     first_row = [KeyboardButton(text=MAIN_MENU_ACCOUNT)]
     if can_list_tenants or has_active_membership:
-        first_row.append(KeyboardButton(text=MAIN_MENU_TENANTS))
+        first_row.append(KeyboardButton(text=MAIN_MENU_SCHOOLS))
 
     second_row = []
     if can_read_reports:
         second_row.append(KeyboardButton(text=MAIN_MENU_REPORTS))
     if can_create_tenants:
-        second_row.append(KeyboardButton(text=MAIN_MENU_CREATE_TENANT))
+        second_row.append(KeyboardButton(text=MAIN_MENU_CREATE_SCHOOL))
     second_row.append(KeyboardButton(text=MAIN_MENU_HELP))
 
     keyboard = [first_row]
@@ -294,8 +294,8 @@ async def show_main_menu(
     F.text.in_(
         {
             MAIN_MENU_ACCOUNT,
-            MAIN_MENU_TENANTS,
-            MAIN_MENU_CREATE_TENANT,
+            MAIN_MENU_SCHOOLS,
+            MAIN_MENU_CREATE_SCHOOL,
             MAIN_MENU_HELP,
         }
     )
@@ -313,9 +313,9 @@ async def root_menu_button_handler(
 
     if selected == MAIN_MENU_ACCOUNT:
         await _show_account_panel(message, principal)
-    elif selected == MAIN_MENU_TENANTS:
+    elif selected == MAIN_MENU_SCHOOLS:
         await _show_tenant_list(message, principal, db)
-    elif selected == MAIN_MENU_CREATE_TENANT:
+    elif selected == MAIN_MENU_CREATE_SCHOOL:
         await _begin_tenant_creation(message, principal, db, state)
     elif selected == MAIN_MENU_HELP:
         await _show_help_panel(message)

@@ -14,7 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.bot.academic_router import router as academic_router
+from app.bot.product_router import router as product_router
 from app.bot.control_router import router as control_router
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
 from app.bot.middleware import (
@@ -218,7 +218,7 @@ async def main() -> None:
             observer.outer_middleware(DatabaseSessionMiddleware(session_factory))
             observer.outer_middleware(TelegramIdentityMiddleware())
 
-        dispatcher.include_router(academic_router)
+        dispatcher.include_router(product_router)
         dispatcher.include_router(control_router)
         dispatcher.include_router(router)
 

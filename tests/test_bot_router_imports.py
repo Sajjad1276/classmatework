@@ -1,5 +1,6 @@
-def test_academic_bot_router_imports_with_tenant_workflows() -> None:
-    from app.bot.academic_router import router
+def test_product_management_router_imports() -> None:
+    from app.bot.product_router import router
 
-    assert router.name == "academic-structure"
+    assert router.name == "product-management"
+    assert len(router.message.handlers) >= 1
     assert len(router.callback_query.handlers) >= 1
