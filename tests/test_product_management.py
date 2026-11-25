@@ -478,3 +478,65 @@ async def test_get_product_class_returns_school_and_class_join_code_status() -> 
     assert "member_join_code_hash IS NOT NULL" in sql
 
 
+
+
+
+@pytest.mark.asyncio
+async def test_bulk_issue_missing_class_codes_only_writes_missing_hashes() -> None:
+    import hashlib
+
+    from app.application.product_management import issue_missing_product_class_join_codes
+
+    db = AsyncMock()
+    db.execute.side_effect = [
+        FakeResult(
+            [
+                {"class_id": 31, "class_name": "دهم الف", "school_id": 7, "school_name": "دبیرستان نمونه"},
+                {"class_id": 32, "class_name": "دهم ب", "school_id": 7, "school_name": "دبیرستان نمونه"},
+            ]
+        ),
+        FakeScalarResult(31),
+        FakeScalarResult(32),
+    ]
+
+    issued = await issue_missing_product_class_join_codes(db)
+
+    assert [item["class_id"] for item in issued] == [31, 32]
+    assert all(len(item["join_code"]) == 10 for item in issued)
+    assert all(set(item["join_code"]) <= set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for item in issued)
+    first_update = db.execute.await_args_list[1].args[1]
+    second_update = db.execute.await_args_list[2].args[1]
+    assert first_update["code_hash"] == hashlib.sha256(issued[0]["join_code"].encode()).hexdigest()
+    assert second_update["code_hash"] == hashlib.sha256(issued[1]["join_code"].encode()).hexdigest()
+    assert "member_join_code_hash IS NULL" in str(db.execute.await_args_list[1].args[0])
+    assert "member_join_code_expires_at = NULL" in str(db.execute.await_args_list[1].args[0])
+
+
+@pytest.mark.asyncio
+async def test_bulk_issue_missing_class_codes_skips_concurrently_issued_code() -> None:
+    from app.application.product_management import issue_missing_product_class_join_codes
+
+    db = AsyncMock()
+    db.execute.side_effect = [
+        FakeResult(
+            [{"class_id": 31, "class_name": "دهم الف", "school_id": 7, "school_name": "دبیرستان نمونه"}]
+        ),
+        FakeScalarResult(None),
+    ]
+
+    issued = await issue_missing_product_class_join_codes(db)
+
+    assert issued == []
+    assert db.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_issue_missing_class_codes_rejects_invalid_limit_before_database_access() -> None:
+    from app.application.product_management import issue_missing_product_class_join_codes
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await issue_missing_product_class_join_codes(db, limit=0)
+    with pytest.raises(InvalidApplicationInput):
+        await issue_missing_product_class_join_codes(db, limit=5001)
+    db.execute.assert_not_awaited()

@@ -1404,3 +1404,66 @@ async def issue_product_class_join_code(
         "member_join_code": normalized_code,
         "has_member_join_code": True,
     }
+
+
+
+async def issue_missing_product_class_join_codes(
+    db: AsyncSession,
+    *,
+    limit: int = 2000,
+) -> list[dict]:
+    if not 1 <= limit <= 5000:
+        raise InvalidApplicationInput("تعداد کلاس‌های درخواستی برای صدور کد معتبر نیست.")
+
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                c.id AS class_id,
+                c.name AS class_name,
+                s.id AS school_id,
+                s.name AS school_name
+            FROM public.classes AS c
+            JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE c.member_join_code_hash IS NULL
+              AND c.is_active IS TRUE
+              AND s.is_active IS TRUE
+            ORDER BY s.name ASC, c.name ASC, c.id ASC
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
+    )
+    candidates = [dict(row) for row in result.mappings().all()]
+    issued: list[dict] = []
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+    for item in candidates:
+        raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
+        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        stored = await db.execute(
+            text(
+                """
+                UPDATE public.classes AS c
+                SET member_join_code_hash = :code_hash,
+                    member_join_code_expires_at = NULL
+                FROM public.academic_years AS ay
+                JOIN public.schools AS s ON s.id = ay.school_id
+                WHERE c.id = :class_id
+                  AND c.academic_year_id = ay.id
+                  AND c.member_join_code_hash IS NULL
+                  AND c.is_active IS TRUE
+                  AND s.is_active IS TRUE
+                RETURNING c.id
+                """
+            ),
+            {"class_id": item["class_id"], "code_hash": code_hash},
+        )
+        if stored.scalar_one_or_none() is None:
+            # Another manager may have issued the code since the candidate query.
+            # Never overwrite it.
+            continue
+        issued.append({**item, "join_code": raw_code})
+
+    return issued
