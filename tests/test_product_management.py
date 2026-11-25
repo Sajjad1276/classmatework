@@ -266,3 +266,50 @@ async def test_set_product_class_member_role_rejects_privileged_role_values() ->
             role="platform_admin",
         )
     db.execute.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_list_product_class_records_rejects_invalid_status_before_database_read() -> None:
+    from app.application.product_management import list_product_class_records
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await list_product_class_records(db, class_id=1, status="UNKNOWN")
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_review_product_record_rejects_invalid_decision_before_database_read() -> None:
+    from app.application.product_management import review_product_class_record
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await review_product_class_record(
+            db,
+            class_id=1,
+            entity_type="homework",
+            record_id=2,
+            decision="publish",
+            reviewer_telegram_id=10,
+            reviewer_name="مدیر",
+        )
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_review_product_record_rejects_unknown_entity_before_database_read() -> None:
+    from app.application.product_management import review_product_class_record
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await review_product_class_record(
+            db,
+            class_id=1,
+            entity_type="attendance",
+            record_id=2,
+            decision="approve",
+            reviewer_telegram_id=10,
+            reviewer_name="مدیر",
+        )
+    db.execute.assert_not_awaited()

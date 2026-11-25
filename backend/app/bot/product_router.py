@@ -1455,6 +1455,17 @@ async def product_class_detail_callback(
                     *(
                         [
                             InlineKeyboardButton(
+                                text="📚 محتوا و صف بررسی",
+                                callback_data=f"product:records:{class_id}",
+                            )
+                        ]
+                        if await _has_permission(db, principal, "platform:records:read")
+                        or await _has_permission(db, principal, "platform:records:review")
+                        else []
+                    ),
+                    *(
+                        [
+                            InlineKeyboardButton(
                                 text="✏️ ویرایش کلاس",
                                 callback_data=f"product:class:edit:{class_id}",
                             ),
@@ -2163,6 +2174,302 @@ async def product_class_member_role_confirm_callback(
                         InlineKeyboardButton(
                             text="👥 بازگشت به اعضای کلاس",
                             callback_data=f"product:members:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+
+
+@router.callback_query(F.data.regexp(r"^product:records:[0-9]+$"))
+async def product_class_records_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    can_read = await _has_permission(db, principal, "platform:records:read")
+    can_review = await _has_permission(db, principal, "platform:records:review")
+    if not can_read and not can_review:
+        await callback.answer("مجوز مشاهدهٔ محتوای آموزشی را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+    try:
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+            records = await list_product_class_records(
+                product_db,
+                class_id=class_id,
+                status="PENDING",
+                limit=50,
+            )
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not load pending records for ClassMate class %s.", class_id)
+        await callback.answer("دریافت صف بررسی ناموفق بود.", show_alert=True)
+        return
+    if class_info is None:
+        await callback.answer("کلاس پیدا نشد.", show_alert=True)
+        return
+
+    counts = {"homework": 0, "exam": 0, "report": 0}
+    for item in records:
+        counts[item["entity_type"]] += 1
+    lines = [
+        f"📚 محتوای آموزشی کلاس {class_info['name']}",
+        "",
+        f"تکلیف‌های در انتظار: {counts['homework']}",
+        f"آزمون‌های در انتظار: {counts['exam']}",
+        f"گزارش‌های روزانه در انتظار: {counts['report']}",
+        "",
+    ]
+    rows = []
+    if records:
+        for item in records[:30]:
+            label = {
+                "homework": "تکلیف",
+                "exam": "آزمون",
+                "report": "گزارش",
+            }[item["entity_type"]]
+            title = str(item["title"])[:30]
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"🕓 {label}: {title}",
+                        callback_data=(
+                            f"product:record:detail:{class_id}:"
+                            f"{item['entity_type']}:{item['id']}"
+                        ),
+                    )
+                ]
+            )
+    else:
+        lines.append("محتوای در انتظار بررسی وجود ندارد.")
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="⬅️ بازگشت به کلاس",
+                    callback_data=f"product:class:{class_id}",
+                )
+            ],
+            [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
+        ]
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(
+    F.data.regexp(r"^product:record:detail:[0-9]+:(homework|exam|report):[0-9]+$")
+)
+async def product_class_record_detail_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:records:read") and not await _has_permission(
+        db, principal, "platform:records:review"
+    ):
+        await callback.answer("مجوز مشاهدهٔ محتوا را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, entity_type, record_id = int(parts[3]), parts[4], int(parts[5])
+    try:
+        async with product_session_factory() as product_db:
+            record = await get_product_class_record(
+                product_db,
+                class_id=class_id,
+                entity_type=entity_type,
+                record_id=record_id,
+            )
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not load ClassMate educational record detail.")
+        await callback.answer("دریافت جزئیات محتوا ناموفق بود.", show_alert=True)
+        return
+    if record is None:
+        await callback.answer("محتوا پیدا نشد.", show_alert=True)
+        return
+    type_label = {"homework": "تکلیف", "exam": "آزمون", "report": "گزارش روزانه"}[entity_type]
+    body = str(record["body"] or "")
+    text_body = body[:2600] + ("…" if len(body) > 2600 else "")
+    lines = [
+        f"📄 {type_label}: {record['title']}",
+        f"کلاس: {record['class_name']}",
+        f"درس: {record['subject_name']}",
+        f"زمان/مهلت: {record['schedule_label']}",
+        f"وضعیت: {record['status']}",
+        "",
+        text_body,
+    ]
+    rows = []
+    if record["status"] in {"PENDING", "REVISION_REQUESTED"} and await _has_permission(
+        db, principal, "platform:records:review"
+    ):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ تأیید و انتشار",
+                    callback_data=f"product:record:review:{class_id}:{entity_type}:{record_id}:approve",
+                ),
+                InlineKeyboardButton(
+                    text="⛔ رد محتوا",
+                    callback_data=f"product:record:review:{class_id}:{entity_type}:{record_id}:reject",
+                ),
+            ]
+        )
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="⬅️ بازگشت به صف بررسی",
+                    callback_data=f"product:records:{class_id}",
+                )
+            ],
+            [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
+        ]
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+
+@router.callback_query(
+    F.data.regexp(r"^product:record:review:[0-9]+:(homework|exam|report):[0-9]+:(approve|reject)$")
+)
+async def product_record_review_prompt_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+) -> None:
+    if not await _has_permission(db, principal, "platform:records:review"):
+        await callback.answer("مجوز بررسی محتوا را ندارید.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, entity_type, record_id, decision = int(parts[3]), parts[4], int(parts[5]), parts[6]
+    action = "تأیید و انتشار" if decision == "approve" else "رد"
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"آیا از «{action}» این محتوا اطمینان دارید؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"✅ تأیید {action}",
+                            callback_data=(
+                                f"product:record:review:confirm:{class_id}:"
+                                f"{entity_type}:{record_id}:{decision}"
+                            ),
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو",
+                            callback_data=f"product:record:detail:{class_id}:{entity_type}:{record_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(
+    F.data.regexp(r"^product:record:review:confirm:[0-9]+:(homework|exam|report):[0-9]+:(approve|reject)$")
+)
+async def product_record_review_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:records:review"):
+        await callback.answer("مجوز بررسی محتوا را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, entity_type, record_id, decision = (
+        int(parts[4]),
+        parts[5],
+        int(parts[6]),
+        parts[7],
+    )
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                record = await review_product_class_record(
+                    product_db,
+                    class_id=class_id,
+                    entity_type=entity_type,
+                    record_id=record_id,
+                    decision=decision,
+                    reviewer_telegram_id=principal.telegram_account.telegram_user_id,
+                    reviewer_name=principal.user.display_name,
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not review ClassMate educational record.")
+        await callback.answer("بررسی محتوا ناموفق بود.", show_alert=True)
+        return
+
+    try:
+        await record_event(
+            db,
+            event_type=f"product.{entity_type}.{decision}d",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={
+                "class_id": class_id,
+                "record_id": record_id,
+                "entity_type": entity_type,
+                "published_to_group": record["published_to_group"],
+            },
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Work audit recording failed for record %s.", record_id)
+
+    await callback.answer("محتوا تأیید و منتشر شد." if decision == "approve" else "محتوا رد شد.")
+    if callback.message is not None:
+        notice = (
+            "به صف ارسال گروه اضافه شد."
+            if record["published_to_group"]
+            else "در گروهی منتشر نشد؛ برای کلاس گروه متصل نشده است."
+        ) if decision == "approve" else "هیچ پیامی به گروه ارسال نشد."
+        await callback.message.edit_text(
+            f"✅ وضعیت محتوا: {record['status']}\n{notice}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="📚 بازگشت به محتوای کلاس",
+                            callback_data=f"product:records:{class_id}",
                         )
                     ]
                 ]

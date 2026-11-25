@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import unicodedata
+import uuid
 from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import text
@@ -907,3 +909,320 @@ async def issue_product_group_link_code(
             "این کلاس از قبل گروه تلگرام دارد یا مدرسه/کلاس غیرفعال شده است."
         )
     return dict(row)
+
+
+
+async def list_product_class_records(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    status: str = "PENDING",
+    limit: int = 50,
+) -> list[dict]:
+    allowed_statuses = {
+        "PENDING",
+        "REVISION_REQUESTED",
+        "APPROVED",
+        "REJECTED",
+        "CANCELLED",
+        "EXPIRED",
+    }
+    if class_id <= 0 or status not in allowed_statuses or not 1 <= limit <= 100:
+        raise InvalidApplicationInput("درخواست فهرست محتوای آموزشی معتبر نیست.")
+
+    result = await db.execute(
+        text(
+            """
+            SELECT *
+            FROM (
+                SELECT
+                    'homework' AS entity_type,
+                    h.id,
+                    h.title,
+                    h.description AS body,
+                    COALESCE(h.due_on::text, 'بدون مهلت') AS schedule_label,
+                    h.status,
+                    h.created_at,
+                    s.name AS subject_name,
+                    c.name AS class_name
+                FROM public.homeworks AS h
+                JOIN public.classes AS c ON c.id = h.class_id
+                JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+                JOIN public.schools AS sc ON sc.id = ay.school_id
+                JOIN public.subjects AS s ON s.id = h.subject_id
+                WHERE h.class_id = :class_id
+                  AND c.is_active IS TRUE
+                  AND sc.is_active IS TRUE
+                  AND h.status = :status
+
+                UNION ALL
+
+                SELECT
+                    'exam' AS entity_type,
+                    e.id,
+                    e.title,
+                    e.scope AS body,
+                    e.scheduled_at::text AS schedule_label,
+                    e.status,
+                    e.created_at,
+                    s.name AS subject_name,
+                    c.name AS class_name
+                FROM public.exams AS e
+                JOIN public.classes AS c ON c.id = e.class_id
+                JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+                JOIN public.schools AS sc ON sc.id = ay.school_id
+                JOIN public.subjects AS s ON s.id = e.subject_id
+                WHERE e.class_id = :class_id
+                  AND c.is_active IS TRUE
+                  AND sc.is_active IS TRUE
+                  AND e.status = :status
+
+                UNION ALL
+
+                SELECT
+                    'report' AS entity_type,
+                    r.id,
+                    COALESCE(r.title, 'گزارش روزانه') AS title,
+                    r.body,
+                    r.report_date::text AS schedule_label,
+                    r.status,
+                    r.created_at,
+                    '—' AS subject_name,
+                    c.name AS class_name
+                FROM public.daily_reports AS r
+                JOIN public.classes AS c ON c.id = r.class_id
+                JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+                JOIN public.schools AS sc ON sc.id = ay.school_id
+                WHERE r.class_id = :class_id
+                  AND c.is_active IS TRUE
+                  AND sc.is_active IS TRUE
+                  AND r.status = :status
+            ) AS records
+            ORDER BY created_at DESC, entity_type ASC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {"class_id": class_id, "status": status, "limit": limit},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
+async def get_product_class_record(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    entity_type: str,
+    record_id: int,
+) -> dict | None:
+    tables = {
+        "homework": ("homeworks", "description", "due_on::text"),
+        "exam": ("exams", "scope", "scheduled_at::text"),
+        "report": ("daily_reports", "body", "report_date::text"),
+    }
+    if class_id <= 0 or record_id <= 0 or entity_type not in tables:
+        raise InvalidApplicationInput("شناسه یا نوع محتوای آموزشی معتبر نیست.")
+    table, body_column, schedule_expression = tables[entity_type]
+    title_expression = (
+        "COALESCE(r.title, 'گزارش روزانه')" if entity_type == "report" else "r.title"
+    )
+    subject_expression = (
+        "'—'::text" if entity_type == "report" else "s.name"
+    )
+    subject_join = (
+        "" if entity_type == "report" else "JOIN public.subjects AS s ON s.id = r.subject_id"
+    )
+    result = await db.execute(
+        text(
+            f"""
+            SELECT
+                r.id,
+                :entity_type AS entity_type,
+                {title_expression} AS title,
+                r.{body_column} AS body,
+                {schedule_expression} AS schedule_label,
+                r.status,
+                r.created_at,
+                {subject_expression} AS subject_name,
+                c.id AS class_id,
+                c.name AS class_name,
+                c.group_chat_id
+            FROM public.{table} AS r
+            JOIN public.classes AS c ON c.id = r.class_id
+            JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+            JOIN public.schools AS sc ON sc.id = ay.school_id
+            {subject_join}
+            WHERE r.id = :record_id
+              AND r.class_id = :class_id
+              AND c.is_active IS TRUE
+              AND sc.is_active IS TRUE
+            """
+        ),
+        {
+            "entity_type": entity_type,
+            "record_id": record_id,
+            "class_id": class_id,
+        },
+    )
+    row = result.mappings().one_or_none()
+    return dict(row) if row is not None else None
+
+
+async def review_product_class_record(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    entity_type: str,
+    record_id: int,
+    decision: str,
+    reviewer_telegram_id: int,
+    reviewer_name: str,
+    note: str | None = None,
+) -> dict:
+    tables = {
+        "homework": ("homeworks", "تکلیف"),
+        "exam": ("exams", "آزمون"),
+        "report": ("daily_reports", "گزارش روزانه"),
+    }
+    if class_id <= 0 or record_id <= 0 or entity_type not in tables:
+        raise InvalidApplicationInput("شناسه یا نوع محتوای آموزشی معتبر نیست.")
+    if decision not in {"approve", "reject"}:
+        raise InvalidApplicationInput("تصمیم بررسی معتبر نیست.")
+    if reviewer_telegram_id <= 0:
+        raise InvalidApplicationInput("شناسه مدیر بررسی‌کننده معتبر نیست.")
+
+    current = await get_product_class_record(
+        db,
+        class_id=class_id,
+        entity_type=entity_type,
+        record_id=record_id,
+    )
+    if current is None:
+        raise ResourceNotFound("محتوای آموزشی موردنظر پیدا نشد.")
+    if current["status"] not in {"PENDING", "REVISION_REQUESTED"}:
+        raise ResourceConflict("این محتوا قبلاً بررسی شده و دیگر در صف انتظار نیست.")
+
+    reviewer_result = await db.execute(
+        text(
+            """
+            INSERT INTO public.users
+                (telegram_id, full_name, is_platform_admin, private_chat_started, is_active)
+            VALUES
+                (:telegram_id, :full_name, FALSE, FALSE, TRUE)
+            ON CONFLICT (telegram_id) DO NOTHING
+            RETURNING id, is_active
+            """
+        ),
+        {
+            "telegram_id": reviewer_telegram_id,
+            "full_name": " ".join(reviewer_name.split())[:160] or "مدیر ClassMate Work",
+        },
+    )
+    reviewer = reviewer_result.mappings().one_or_none()
+    if reviewer is None:
+        existing = await db.execute(
+            text(
+                "SELECT id, is_active FROM public.users WHERE telegram_id = :telegram_id"
+            ),
+            {"telegram_id": reviewer_telegram_id},
+        )
+        reviewer = existing.mappings().one()
+    if not reviewer["is_active"]:
+        raise ResourceConflict("حساب مدیر بررسی‌کننده در ClassMate غیرفعال است.")
+
+    table, entity_label = tables[entity_type]
+    next_status = "APPROVED" if decision == "approve" else "REJECTED"
+    now = datetime.now(timezone.utc)
+    update_result = await db.execute(
+        text(
+            f"""
+            UPDATE public.{table}
+            SET status = :status,
+                approved_by = CASE WHEN :status = 'APPROVED' THEN :reviewer_id ELSE approved_by END,
+                approved_at = CASE WHEN :status = 'APPROVED' THEN :approved_at ELSE approved_at END
+            WHERE id = :record_id
+              AND class_id = :class_id
+              AND status IN ('PENDING', 'REVISION_REQUESTED')
+            RETURNING id, status
+            """
+        ),
+        {
+            "status": next_status,
+            "reviewer_id": reviewer["id"],
+            "approved_at": now,
+            "record_id": record_id,
+            "class_id": class_id,
+        },
+    )
+    updated = update_result.mappings().one_or_none()
+    if updated is None:
+        raise ResourceConflict("وضعیت محتوا هم‌زمان تغییر کرده است؛ فهرست را تازه‌سازی کنید.")
+
+    event_result = await db.execute(
+        text(
+            """
+            INSERT INTO public.approval_events
+                (entity_type, entity_id, actor_id, action, note)
+            VALUES
+                (:entity_type, :entity_id, :actor_id, :action, :note)
+            RETURNING id
+            """
+        ),
+        {
+            "entity_type": entity_type,
+            "entity_id": record_id,
+            "actor_id": reviewer["id"],
+            "action": decision,
+            "note": note.strip()[:2000] if note and note.strip() else None,
+        },
+    )
+    approval_event_id = event_result.scalar_one()
+
+    published_to_group = False
+    if decision == "approve" and current.get("group_chat_id") is not None:
+        safe_title = html.escape(str(current["title"]))
+        safe_subject = html.escape(str(current["subject_name"]))
+        safe_class = html.escape(str(current["class_name"]))
+        safe_schedule = html.escape(str(current["schedule_label"]))
+        safe_body = html.escape(str(current["body"] or ""))[:2600]
+        message_text = (
+            f"📌 <b>{entity_label} تأیید شد</b>\n"
+            f"کلاس: {safe_class}\n"
+            f"عنوان: {safe_title}\n"
+            f"درس: {safe_subject}\n"
+            f"زمان/مهلت: {safe_schedule}\n\n"
+            f"{safe_body}"
+        )[:4096]
+        await db.execute(
+            text(
+                """
+                INSERT INTO public.telegram_outbox
+                    (target_type, target_chat_id, class_id, entity_type, entity_id,
+                     expected_record_status, recipient_user_id, text, parse_mode,
+                     disable_notification, action_type, action_id, scheduled_at,
+                     status, attempts, idempotency_key)
+                VALUES
+                    ('group', :chat_id, :class_id, :entity_type, :entity_id,
+                     'APPROVED', NULL, :message, 'HTML', FALSE, NULL, NULL, :scheduled_at,
+                     'pending', 0, :idempotency_key)
+                """
+            ),
+            {
+                "chat_id": current["group_chat_id"],
+                "class_id": class_id,
+                "entity_type": entity_type,
+                "entity_id": record_id,
+                "message": message_text,
+                "scheduled_at": now,
+                "idempotency_key": (
+                    f"work-review:{entity_type}:{record_id}:approved:{uuid.uuid4().hex}"
+                ),
+            },
+        )
+        published_to_group = True
+
+    return {
+        **current,
+        "status": next_status,
+        "approval_event_id": approval_event_id,
+        "published_to_group": published_to_group,
+    }
