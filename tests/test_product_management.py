@@ -214,7 +214,6 @@ async def test_set_product_school_active_rejects_invalid_id_before_database_writ
 
 @pytest.mark.asyncio
 async def test_issue_product_group_link_code_hashes_raw_code_and_sets_expiry() -> None:
-    from datetime import datetime, timezone
 
     from app.application.product_management import issue_product_group_link_code
 
