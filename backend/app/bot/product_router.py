@@ -32,7 +32,11 @@ from app.application.product_management import (
     list_product_classes,
     list_product_schools,
     set_product_announcement_active,
+    set_product_class_active,
     set_product_class_member_active,
+    set_product_school_active,
+    update_product_class,
+    update_product_school,
 )
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
@@ -50,7 +54,19 @@ class SchoolCreation(StatesGroup):
     confirm = State()
 
 
+class SchoolEditing(StatesGroup):
+    name = State()
+    confirm = State()
+
+
 class ClassCreation(StatesGroup):
+    name = State()
+    grade = State()
+    section = State()
+    confirm = State()
+
+
+class ClassEditing(StatesGroup):
     name = State()
     grade = State()
     section = State()
@@ -244,6 +260,8 @@ async def school_create_callback(
 
 @router.message(Command("cancel"), SchoolCreation.name)
 @router.message(Command("cancel"), SchoolCreation.confirm)
+@router.message(Command("cancel"), SchoolEditing.name)
+@router.message(Command("cancel"), SchoolEditing.confirm)
 async def school_creation_cancel_command(
     message: Message,
     state: FSMContext,
@@ -256,6 +274,10 @@ async def school_creation_cancel_command(
 @router.message(Command("cancel"), ClassCreation.grade)
 @router.message(Command("cancel"), ClassCreation.section)
 @router.message(Command("cancel"), ClassCreation.confirm)
+@router.message(Command("cancel"), ClassEditing.name)
+@router.message(Command("cancel"), ClassEditing.grade)
+@router.message(Command("cancel"), ClassEditing.section)
+@router.message(Command("cancel"), ClassEditing.confirm)
 async def class_creation_cancel_command(
     message: Message,
     state: FSMContext,
@@ -438,6 +460,7 @@ async def product_school_detail_callback(
         f"🏫 مدرسه: {school['name']}",
         f"شناسه: {school['id']}",
         f"وضعیت: {status}",
+        f"منطقه زمانی: {school['timezone']}",
         f"تعداد کلاس‌ها: {school['class_count']}",
         "",
         "کلاس‌ها:",
@@ -467,6 +490,19 @@ async def product_school_detail_callback(
                     text="➕ افزودن کلاس",
                     callback_data=f"product:class:create:{school_id}",
                 )
+            ]
+        )
+    if await _has_permission(db, principal, "platform:schools:manage"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✏️ ویرایش نام مدرسه",
+                    callback_data=f"product:school:edit:{school_id}",
+                ),
+                InlineKeyboardButton(
+                    text=("⛔ غیرفعال‌سازی مدرسه" if school["is_active"] else "♻️ فعال‌سازی مدرسه"),
+                    callback_data=f"product:school:status:{school_id}:{0 if school['is_active'] else 1}",
+                ),
             ]
         )
     rows.extend(
@@ -752,6 +788,582 @@ async def product_class_create_cancel_callback(
         await callback.message.edit_text("ایجاد کلاس لغو شد؛ تغییری ثبت نشد.")
 
 
+
+
+@router.callback_query(F.data.regexp(r"^product:school:edit:[0-9]+$"))
+async def product_school_edit_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:schools:manage"):
+        await callback.answer("مجوز ویرایش مدرسه را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    school_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+    async with product_session_factory() as product_db:
+        school = await get_product_school(product_db, school_id=school_id)
+    if school is None:
+        await callback.answer("مدرسه پیدا نشد.", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(product_school_edit_id=school_id)
+    await state.set_state(SchoolEditing.name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            f"نام فعلی مدرسه: {school['name']}\nنام جدید را وارد کنید:"
+        )
+
+
+@router.message(SchoolEditing.name, F.text)
+async def product_school_edit_name_input(message: Message, state: FSMContext) -> None:
+    name = " ".join((message.text or "").split())
+    if not 2 <= len(name) <= 180:
+        await message.answer("نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+        return
+    data = await state.get_data()
+    school_id = int(data.get("product_school_edit_id") or 0)
+    if school_id <= 0:
+        await state.clear()
+        await message.answer("فرم ویرایش مدرسه منقضی شده است؛ دوباره شروع کنید.")
+        return
+    token = secrets.token_urlsafe(8)
+    await state.update_data(product_school_edit_name=name, product_school_edit_token=token)
+    await state.set_state(SchoolEditing.confirm)
+    await message.answer(
+        f"پیش‌نمایش ویرایش مدرسه\n\nشناسه: {school_id}\nنام جدید: {name}\n\nثبت شود؟",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ تأیید ویرایش",
+                        callback_data=f"product:school:edit:confirm:{token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو",
+                        callback_data=f"product:school:edit:cancel:{token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("product:school:edit:confirm:"))
+async def product_school_edit_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != SchoolEditing.confirm.state
+        or not token
+        or token != data.get("product_school_edit_token")
+    ):
+        await callback.answer("این تأیید منقضی شده است.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:schools:manage"):
+        await state.clear()
+        await callback.answer("مجوز ویرایش مدرسه را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await state.clear()
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    school_id = int(data.get("product_school_edit_id") or 0)
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                school = await update_product_school(
+                    product_db,
+                    school_id=school_id,
+                    name=data.get("product_school_edit_name", ""),
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not update ClassMate school %s.", school_id)
+        await state.clear()
+        await callback.answer("ویرایش مدرسه ناموفق بود.", show_alert=True)
+        return
+    try:
+        await record_event(
+            db,
+            event_type="product.school.updated",
+            actor_id=principal.user.id,
+            aggregate_type="school",
+            event_data={"school_id": school_id, "name": school["name"]},
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("School update audit recording failed for %s.", school_id)
+    await state.clear()
+    await callback.answer("مدرسه ویرایش شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"✅ نام مدرسه به «{school['name']}» تغییر کرد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🏫 بازگشت به مدرسه",
+                            callback_data=f"product:school:{school_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:school:edit:cancel:"))
+async def product_school_edit_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != SchoolEditing.confirm.state
+        or not token
+        or token != data.get("product_school_edit_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("عملیات لغو شد.")
+    if callback.message is not None:
+        await callback.message.edit_text("ویرایش مدرسه لغو شد؛ تغییری ثبت نشد.")
+
+
+@router.callback_query(F.data.regexp(r"^product:school:status:[0-9]+:[01]$"))
+async def product_school_status_prompt_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:schools:manage"):
+        await callback.answer("مجوز تغییر وضعیت مدرسه را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    school_id, desired = int(parts[3]), parts[4] == "1"
+    async with product_session_factory() as product_db:
+        school = await get_product_school(product_db, school_id=school_id)
+    if school is None:
+        await callback.answer("مدرسه پیدا نشد.", show_alert=True)
+        return
+    action = "فعال‌سازی" if desired else "غیرفعال‌سازی"
+    warning = (
+        "\n\nبا غیرفعال‌سازی مدرسه، دسترسی آموزشی کلاس‌های آن نیز متوقف می‌شود؛ "
+        "هیچ داده‌ای حذف نخواهد شد."
+        if not desired
+        else ""
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"آیا می‌خواهید مدرسهٔ «{school['name']}» را {action} کنید؟{warning}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"✅ تأیید {action}",
+                            callback_data=f"product:school:status:confirm:{school_id}:{1 if desired else 0}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو",
+                            callback_data=f"product:school:{school_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:school:status:confirm:[0-9]+:[01]$"))
+async def product_school_status_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:schools:manage"):
+        await callback.answer("مجوز تغییر وضعیت مدرسه را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    school_id, desired = int(parts[4]), parts[5] == "1"
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                school = await set_product_school_active(
+                    product_db,
+                    school_id=school_id,
+                    is_active=desired,
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not change ClassMate school status.")
+        await callback.answer("تغییر وضعیت مدرسه ناموفق بود.", show_alert=True)
+        return
+    try:
+        await record_event(
+            db,
+            event_type="product.school.status_changed",
+            actor_id=principal.user.id,
+            aggregate_type="school",
+            event_data={"school_id": school_id, "is_active": desired},
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("School status audit recording failed for %s.", school_id)
+    await callback.answer("وضعیت مدرسه تغییر کرد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"وضعیت مدرسه «{school['name']}» به {'فعال' if desired else 'غیرفعال'} تغییر کرد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🏫 بازگشت به مدرسه",
+                            callback_data=f"product:school:{school_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:class:edit:[0-9]+$"))
+async def product_class_edit_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await callback.answer("مجوز ویرایش کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+    async with product_session_factory() as product_db:
+        class_info = await get_product_class(product_db, class_id=class_id)
+    if class_info is None:
+        await callback.answer("کلاس پیدا نشد.", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(
+        product_class_edit_id=class_id,
+        product_class_edit_name=class_info["name"],
+        product_class_edit_grade=class_info["grade"],
+        product_class_edit_section=class_info["section"],
+    )
+    await state.set_state(ClassEditing.name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            f"نام فعلی کلاس: {class_info['name']}\nنام جدید را وارد کنید:"
+        )
+
+
+@router.message(ClassEditing.name, F.text)
+async def product_class_edit_name_input(message: Message, state: FSMContext) -> None:
+    name = " ".join((message.text or "").split())
+    if not 2 <= len(name) <= 80:
+        await message.answer("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+        return
+    await state.update_data(product_class_edit_name=name)
+    await state.set_state(ClassEditing.grade)
+    await message.answer("پایهٔ جدید کلاس را وارد کنید:")
+
+
+@router.message(ClassEditing.grade, F.text)
+async def product_class_edit_grade_input(message: Message, state: FSMContext) -> None:
+    grade = " ".join((message.text or "").split())
+    if not 1 <= len(grade) <= 32:
+        await message.answer("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+        return
+    await state.update_data(product_class_edit_grade=grade)
+    await state.set_state(ClassEditing.section)
+    await message.answer("بخش جدید را وارد کنید؛ برای پاک‌کردن بخش فعلی «-» بفرستید:")
+
+
+@router.message(ClassEditing.section, F.text)
+async def product_class_edit_section_input(message: Message, state: FSMContext) -> None:
+    section = " ".join((message.text or "").split())
+    if section == "-":
+        section = None
+    if section is not None and len(section) > 32:
+        await message.answer("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+        return
+    data = await state.get_data()
+    class_id = int(data.get("product_class_edit_id") or 0)
+    token = secrets.token_urlsafe(8)
+    await state.update_data(
+        product_class_edit_section=section,
+        product_class_edit_token=token,
+    )
+    await state.set_state(ClassEditing.confirm)
+    await message.answer(
+        "پیش‌نمایش ویرایش کلاس\n\n"
+        f"شناسه: {class_id}\n"
+        f"نام: {data.get('product_class_edit_name')}\n"
+        f"پایه: {data.get('product_class_edit_grade')}\n"
+        f"بخش: {section or 'بدون بخش'}\n\n"
+        "ثبت تغییرات انجام شود؟",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ تأیید ویرایش",
+                        callback_data=f"product:class:edit:confirm:{token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو",
+                        callback_data=f"product:class:edit:cancel:{token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("product:class:edit:confirm:"))
+async def product_class_edit_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != ClassEditing.confirm.state
+        or not token
+        or token != data.get("product_class_edit_token")
+    ):
+        await callback.answer("این تأیید منقضی شده است.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await state.clear()
+        await callback.answer("مجوز ویرایش کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await state.clear()
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    class_id = int(data.get("product_class_edit_id") or 0)
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                class_info = await update_product_class(
+                    product_db,
+                    class_id=class_id,
+                    name=data.get("product_class_edit_name", ""),
+                    grade=data.get("product_class_edit_grade", ""),
+                    section=data.get("product_class_edit_section"),
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not update ClassMate class %s.", class_id)
+        await state.clear()
+        await callback.answer("ویرایش کلاس ناموفق بود.", show_alert=True)
+        return
+    try:
+        await record_event(
+            db,
+            event_type="product.class.updated",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={
+                "class_id": class_id,
+                "name": class_info["name"],
+                "grade": class_info["grade"],
+                "section": class_info["section"],
+            },
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Class update audit recording failed for %s.", class_id)
+    await state.clear()
+    await callback.answer("کلاس ویرایش شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"✅ کلاس «{class_info['name']}» ویرایش شد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="بازگشت به مدیریت کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:class:edit:cancel:"))
+async def product_class_edit_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != ClassEditing.confirm.state
+        or not token
+        or token != data.get("product_class_edit_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("عملیات لغو شد.")
+    if callback.message is not None:
+        await callback.message.edit_text("ویرایش کلاس لغو شد؛ تغییری ثبت نشد.")
+
+
+@router.callback_query(F.data.regexp(r"^product:class:status:[0-9]+:[01]$"))
+async def product_class_status_prompt_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await callback.answer("مجوز تغییر وضعیت کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, desired = int(parts[3]), parts[4] == "1"
+    async with product_session_factory() as product_db:
+        class_info = await get_product_class(product_db, class_id=class_id)
+    if class_info is None:
+        await callback.answer("کلاس پیدا نشد.", show_alert=True)
+        return
+    action = "فعال‌سازی" if desired else "غیرفعال‌سازی"
+    warning = (
+        "\n\nبا غیرفعال‌سازی کلاس، دسترسی آموزشی و ارسال‌های زمان‌بندی‌شدهٔ آن متوقف می‌شود؛ "
+        "هیچ داده‌ای حذف نخواهد شد."
+        if not desired
+        else ""
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"آیا می‌خواهید کلاس «{class_info['name']}» را {action} کنید؟{warning}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"✅ تأیید {action}",
+                            callback_data=f"product:class:status:confirm:{class_id}:{1 if desired else 0}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:class:status:confirm:[0-9]+:[01]$"))
+async def product_class_status_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await callback.answer("مجوز تغییر وضعیت کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    class_id, desired = int(parts[4]), parts[5] == "1"
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                class_info = await set_product_class_active(
+                    product_db,
+                    class_id=class_id,
+                    is_active=desired,
+                )
+    except ApplicationError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not change ClassMate class status.")
+        await callback.answer("تغییر وضعیت کلاس ناموفق بود.", show_alert=True)
+        return
+    try:
+        await record_event(
+            db,
+            event_type="product.class.status_changed",
+            actor_id=principal.user.id,
+            aggregate_type="class",
+            event_data={"class_id": class_id, "is_active": desired},
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Class status audit recording failed for %s.", class_id)
+    await callback.answer("وضعیت کلاس تغییر کرد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"وضعیت کلاس «{class_info['name']}» به {'فعال' if desired else 'غیرفعال'} تغییر کرد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="بازگشت به مدیریت کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
 @router.callback_query(F.data.regexp(r"^product:class:[0-9]+$"))
 async def product_class_detail_callback(
     callback: CallbackQuery,
@@ -788,6 +1400,7 @@ async def product_class_detail_callback(
         f"پایه: {class_info['grade']}",
         f"بخش: {class_info['section'] or '—'}",
         f"وضعیت: {'فعال' if class_info['is_active'] else 'غیرفعال'}",
+        f"گروه تلگرام: {class_info['group_chat_title'] or 'متصل نیست'}",
         "",
         f"درس‌های تخصیص‌یافته: {len(subjects)}",
     ]
@@ -825,6 +1438,19 @@ async def product_class_detail_callback(
                             callback_data=f"product:announcements:{class_id}",
                         ),
                     ],
+                    *(
+                        [
+                            InlineKeyboardButton(
+                                text="✏️ ویرایش کلاس",
+                                callback_data=f"product:class:edit:{class_id}",
+                            ),
+                            InlineKeyboardButton(
+                                text=("⛔ غیرفعال‌سازی کلاس" if class_info["is_active"] else "♻️ فعال‌سازی کلاس"),
+                                callback_data=f"product:class:status:{class_id}:{0 if class_info['is_active'] else 1}",
+                            ),
+                        ]
+                    ] if await _has_permission(db, principal, "platform:classes:manage") else []
+                    ),
                     [
                         InlineKeyboardButton(
                             text="⬅️ بازگشت به مدرسه",

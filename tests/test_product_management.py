@@ -127,3 +127,69 @@ async def test_add_class_member_rejects_invalid_telegram_id_before_database_writ
             full_name="کاربر",
         )
     db.execute.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_update_product_school_normalizes_whitespace() -> None:
+    from app.application.product_management import update_product_school
+
+    db = AsyncMock()
+    db.execute.return_value = FakeResult(
+        [{"id": 12, "name": "دبیرستان جدید", "timezone": "Asia/Tehran", "is_active": True}]
+    )
+
+    school = await update_product_school(db, school_id=12, name=" دبیرستان   جدید ")
+
+    assert school["name"] == "دبیرستان جدید"
+    assert db.execute.await_args.args[1] == {
+        "school_id": 12,
+        "name": "دبیرستان جدید",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_product_school_rejects_invalid_input_before_database_write() -> None:
+    from app.application.product_management import update_product_school
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await update_product_school(db, school_id=0, name="مدرسه")
+    with pytest.raises(InvalidApplicationInput):
+        await update_product_school(db, school_id=1, name=" ")
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_product_class_rejects_invalid_grade_before_database_write() -> None:
+    from app.application.product_management import update_product_class
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await update_product_class(
+            db,
+            class_id=1,
+            name="دهم الف",
+            grade="",
+        )
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_product_class_active_rejects_invalid_id_before_database_write() -> None:
+    from app.application.product_management import set_product_class_active
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await set_product_class_active(db, class_id=0, is_active=False)
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_product_school_active_rejects_invalid_id_before_database_write() -> None:
+    from app.application.product_management import set_product_school_active
+
+    db = AsyncMock()
+    with pytest.raises(InvalidApplicationInput):
+        await set_product_school_active(db, school_id=0, is_active=False)
+    db.execute.assert_not_awaited()

@@ -23,12 +23,13 @@ async def list_product_schools(
             SELECT
                 s.id,
                 s.name,
+                s.timezone,
                 s.is_active,
                 COUNT(DISTINCT c.id) AS class_count
             FROM public.schools AS s
             LEFT JOIN public.academic_years AS ay ON ay.school_id = s.id
             LEFT JOIN public.classes AS c ON c.academic_year_id = ay.id
-            GROUP BY s.id, s.name, s.is_active
+            GROUP BY s.id, s.name, s.timezone, s.is_active
             ORDER BY s.is_active DESC, s.name ASC, s.id ASC
             LIMIT :limit
             """
@@ -52,6 +53,7 @@ async def get_product_school(
             SELECT
                 s.id,
                 s.name,
+                s.timezone,
                 s.is_active,
                 COUNT(DISTINCT c.id) AS class_count
             FROM public.schools AS s
@@ -235,7 +237,9 @@ async def get_product_class(
                 c.section,
                 c.is_active,
                 ay.school_id,
-                s.name AS school_name
+                s.name AS school_name,
+                c.group_chat_id,
+                c.group_chat_title
             FROM public.classes AS c
             JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
             JOIN public.schools AS s ON s.id = ay.school_id
@@ -690,3 +694,131 @@ async def set_product_announcement_active(
         },
     )
     return result.scalar_one_or_none() is not None
+
+
+
+async def update_product_school(
+    db: AsyncSession,
+    *,
+    school_id: int,
+    name: str,
+) -> dict:
+    normalized_name = " ".join(name.split())
+    if school_id <= 0:
+        raise InvalidApplicationInput("شناسه مدرسه معتبر نیست.")
+    if not 2 <= len(normalized_name) <= 180:
+        raise InvalidApplicationInput("نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.schools
+            SET name = :name
+            WHERE id = :school_id
+            RETURNING id, name, timezone, is_active
+            """
+        ),
+        {"school_id": school_id, "name": normalized_name},
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ResourceNotFound("مدرسه موردنظر پیدا نشد.")
+    return dict(row)
+
+
+async def set_product_school_active(
+    db: AsyncSession,
+    *,
+    school_id: int,
+    is_active: bool,
+) -> dict:
+    if school_id <= 0:
+        raise InvalidApplicationInput("شناسه مدرسه معتبر نیست.")
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.schools
+            SET is_active = :is_active
+            WHERE id = :school_id
+            RETURNING id, name, timezone, is_active
+            """
+        ),
+        {"school_id": school_id, "is_active": is_active},
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ResourceNotFound("مدرسه موردنظر پیدا نشد.")
+    return dict(row)
+
+
+async def update_product_class(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    name: str,
+    grade: str,
+    section: str | None = None,
+) -> dict:
+    normalized_name = " ".join(name.split())
+    normalized_grade = " ".join(grade.split())
+    normalized_section = " ".join(section.split()) if section else None
+    if class_id <= 0:
+        raise InvalidApplicationInput("شناسه کلاس معتبر نیست.")
+    if not 2 <= len(normalized_name) <= 80:
+        raise InvalidApplicationInput("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+    if not 1 <= len(normalized_grade) <= 32:
+        raise InvalidApplicationInput("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+    if normalized_section is not None and len(normalized_section) > 32:
+        raise InvalidApplicationInput("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.classes
+            SET name = :name, grade = :grade, section = :section
+            WHERE id = :class_id
+            RETURNING id, name, grade, section, is_active
+            """
+        ),
+        {
+            "class_id": class_id,
+            "name": normalized_name,
+            "grade": normalized_grade,
+            "section": normalized_section,
+        },
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ResourceNotFound("کلاس موردنظر پیدا نشد.")
+    return dict(row)
+
+
+async def set_product_class_active(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    is_active: bool,
+) -> dict:
+    if class_id <= 0:
+        raise InvalidApplicationInput("شناسه کلاس معتبر نیست.")
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.classes AS c
+            SET is_active = :is_active
+            FROM public.academic_years AS ay
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE c.id = :class_id
+              AND c.academic_year_id = ay.id
+              AND (:is_active IS FALSE OR s.is_active IS TRUE)
+            RETURNING c.id, c.name, c.grade, c.section, c.is_active, ay.school_id
+            """
+        ),
+        {"class_id": class_id, "is_active": is_active},
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ResourceNotFound(
+            "کلاس پیدا نشد یا مدرسه غیرفعال است؛ ابتدا وضعیت مدرسه را بررسی کنید."
+        )
+    return dict(row)
