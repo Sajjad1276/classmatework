@@ -98,7 +98,7 @@ async def main_menu(
     Every operational screen uses an inline keyboard; the root keyboard is
     removed on entry to those screens and restored only when returning home.
     """
-    can_list_tenants = await has_permission(
+    can_read_schools = await has_permission(
         db,
         user_id=principal.user.id,
         permission_key="platform:schools:read",
@@ -106,7 +106,7 @@ async def main_menu(
         scope_type="platform",
         scope_id=None,
     )
-    can_create_tenants = await has_permission(
+    can_create_schools = await has_permission(
         db,
         user_id=principal.user.id,
         permission_key="platform:schools:create",
@@ -114,7 +114,6 @@ async def main_menu(
         scope_type="platform",
         scope_id=None,
     )
-    now = datetime.now(UTC)
     can_read_reports = await has_permission(
         db,
         user_id=principal.user.id,
@@ -123,21 +122,9 @@ async def main_menu(
         scope_type="platform",
         scope_id=None,
     )
-    has_active_membership = (
-        await db.execute(
-            select(TenantMembership.id)
-            .where(
-                TenantMembership.user_id == principal.user.id,
-                TenantMembership.status == "active",
-                or_(TenantMembership.starts_at.is_(None), TenantMembership.starts_at <= now),
-                or_(TenantMembership.ends_at.is_(None), TenantMembership.ends_at > now),
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none() is not None
 
     first_row = [KeyboardButton(text=MAIN_MENU_ACCOUNT)]
-    if can_list_tenants or has_active_membership:
+    if can_list_tenants:
         first_row.append(KeyboardButton(text=MAIN_MENU_SCHOOLS))
 
     second_row = []

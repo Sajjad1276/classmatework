@@ -131,6 +131,48 @@ async def main() -> None:
             settings.c2_db_url.get_secret_value().strip()
         )
         product_session_factory = create_session_factory(product_engine)
+        try:
+            async with product_engine.connect() as product_connection:
+                product_state = (
+                    await product_connection.execute(
+                        text(
+                            "SELECT current_database() AS database, "
+                            "current_schema() AS schema, "
+                            "to_regclass('public.schools')::text AS schools_table, "
+                            "to_regclass('public.classes')::text AS classes_table, "
+                            "to_regclass('public.academic_years')::text AS years_table, "
+                            "to_regclass('public.subjects')::text AS subjects_table, "
+                            "to_regclass('public.timetable_entries')::text AS timetable_table"
+                        )
+                    )
+                ).mappings().one()
+                required_tables = (
+                    "schools_table",
+                    "classes_table",
+                    "years_table",
+                    "subjects_table",
+                    "timetable_table",
+                )
+                missing_tables = [
+                    name for name in required_tables if product_state[name] is None
+                ]
+                if missing_tables:
+                    raise RuntimeError(
+                        "ClassMate product database is missing required tables: "
+                        + ", ".join(missing_tables)
+                    )
+            logger.info(
+                "ClassMate product database connected; database=%s schema=%s",
+                product_state["database"],
+                product_state["schema"],
+            )
+        except Exception:
+            logger.exception(
+                "ClassMate product database is unavailable; product management is disabled."
+            )
+            await product_engine.dispose()
+            product_engine = None
+            product_session_factory = None
 
     redis = create_redis_client(settings.redis_url)
     token = secrets.token_urlsafe(32)

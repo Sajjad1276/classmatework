@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-from collections.abc import Callable
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -197,6 +196,16 @@ async def school_create_callback(
             db=db,
             state=state,
         )
+
+
+@router.message(Command("cancel"), SchoolCreation.name)
+@router.message(Command("cancel"), SchoolCreation.confirm)
+async def school_creation_cancel_command(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await message.answer("ایجاد مدرسه لغو شد؛ هیچ تغییری ثبت نشد.")
 
 
 @router.message(SchoolCreation.name, F.text)
