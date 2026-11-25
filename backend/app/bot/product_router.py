@@ -542,7 +542,7 @@ async def product_school_detail_callback(
                     callback_data="product:schools",
                 )
             ],
-            [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
+
         ]
     )
     await callback.answer()
@@ -601,6 +601,7 @@ async def product_class_create_callback(
         return
     await callback.answer()
     if callback.message is not None:
+        await _close_inline_panel(callback.message)
         await _begin_class_creation(
             callback.message,
             principal=principal,
@@ -791,7 +792,7 @@ async def product_class_create_confirm_callback(
                             callback_data=f"product:school:{school_id}",
                         )
                     ],
-                    [InlineKeyboardButton(text="خانه", callback_data="root:menu")],
+
                 ]
             ),
         )
@@ -839,6 +840,7 @@ async def product_school_edit_callback(
     if school is None:
         await callback.answer("مدرسه پیدا نشد.", show_alert=True)
         return
+    await _close_inline_panel(callback.message)
     await state.clear()
     await state.update_data(product_school_edit_id=school_id)
     await state.set_state(SchoolEditing.name)
@@ -1106,6 +1108,7 @@ async def product_class_edit_callback(
     if class_info is None:
         await callback.answer("کلاس پیدا نشد.", show_alert=True)
         return
+    await _close_inline_panel(callback.message)
     await state.clear()
     await state.update_data(
         product_class_edit_id=class_id,
@@ -1746,6 +1749,7 @@ async def product_timetable_add_callback(
         )
         return
 
+    await _close_inline_panel(callback.message)
     await state.clear()
     token = secrets.token_urlsafe(8)
     await state.update_data(
@@ -1822,6 +1826,7 @@ async def timetable_subject_select_callback(
     if subject is None:
         await callback.answer("درس انتخاب‌شده معتبر نیست.", show_alert=True)
         return
+    await _close_inline_panel(callback.message)
     await state.update_data(
         product_timetable_subject_id=subject_id,
         product_timetable_subject_name=subject["name"],
