@@ -14,7 +14,7 @@ PRODUCT_ROUTER_PATH = BOT_ROUTER_DIRECTORY / "product_router.py"
 INTEGER_ID_PLACEHOLDER = "2147483647"
 
 
-def _sample_callback(node: ast.expr) -> str:
+def _sample_callback(node: ast.expr, router_name: str = "") -> str:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
@@ -30,6 +30,12 @@ def _sample_callback(node: ast.expr) -> str:
                     parts.append("homework")
                 elif "decision" in expression:
                     parts.append("approve")
+                elif router_name == "control_router.py" and any(
+                    key in expression for key in ("class_id", "class_group.id")
+                ):
+                    parts.append("123e4567-e89b-12d3-a456-426614174000")
+                elif router_name == "router.py" and "tenant_id" in expression:
+                    parts.append("123e4567-e89b-12d3-a456-426614174000")
                 elif any(key in expression for key in ("class_id", "school_id", "user_id", "record_id", "announcement_id", "subject_id", "item['id']")):
                     parts.append(INTEGER_ID_PLACEHOLDER)
                 else:
@@ -42,7 +48,7 @@ def _sample_callback(node: ast.expr) -> str:
     ):
         return "m:s:start:AbCdEf12:0123456789abcdef0123456789abcdef"
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return _sample_callback(node.left) + _sample_callback(node.right)
+        return _sample_callback(node.left, router_name) + _sample_callback(node.right, router_name)
     raise AssertionError(f"Unsupported callback_data expression: {ast.dump(node)}")
 
 
@@ -125,7 +131,7 @@ def test_every_inline_button_callback_has_a_registered_handler_and_fits_telegram
                 continue
             for keyword in node.keywords:
                 if keyword.arg == "callback_data":
-                    callbacks.append((str(path), _sample_callback(keyword.value), node.lineno))
+                    callbacks.append((str(path), _sample_callback(keyword.value, path.name), node.lineno))
 
     assert callbacks, "No inline keyboard callback buttons were found."
     unmatched = [
