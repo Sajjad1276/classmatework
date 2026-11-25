@@ -453,3 +453,240 @@ async def create_product_timetable_entry(
     if row is None:
         raise ResourceConflict("برای این کلاس، در این روز و زنگ قبلاً برنامه ثبت شده است.")
     return dict(row)
+
+
+
+async def list_product_class_members(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    limit: int = 100,
+) -> list[dict]:
+    if class_id <= 0 or not 1 <= limit <= 200:
+        raise InvalidApplicationInput("درخواست فهرست اعضا معتبر نیست.")
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                u.id AS user_id,
+                u.telegram_id,
+                u.full_name,
+                u.username,
+                u.is_active AS user_is_active,
+                cm.is_active AS membership_is_active
+            FROM public.class_memberships AS cm
+            JOIN public.users AS u ON u.id = cm.user_id
+            WHERE cm.class_id = :class_id
+            ORDER BY cm.is_active DESC, u.full_name ASC, u.id ASC
+            LIMIT :limit
+            """
+        ),
+        {"class_id": class_id, "limit": limit},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
+async def add_product_class_member(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    telegram_id: int,
+    full_name: str,
+) -> dict:
+    normalized_name = " ".join(full_name.split())
+    if class_id <= 0 or not 0 < telegram_id <= 9_223_372_036_854_775_807:
+        raise InvalidApplicationInput("شناسه کلاس یا Telegram ID معتبر نیست.")
+    if not 1 <= len(normalized_name) <= 160:
+        raise InvalidApplicationInput("نام عضو باید بین ۱ تا ۱۶۰ نویسه باشد.")
+
+    class_info = await get_product_class(db, class_id=class_id)
+    if class_info is None or not class_info["is_active"]:
+        raise ResourceNotFound("کلاس فعال پیدا نشد.")
+
+    user_result = await db.execute(
+        text(
+            """
+            INSERT INTO public.users
+                (telegram_id, full_name, private_chat_started, is_active)
+            VALUES
+                (:telegram_id, :full_name, FALSE, TRUE)
+            ON CONFLICT (telegram_id) DO NOTHING
+            RETURNING id, full_name, is_active
+            """
+        ),
+        {"telegram_id": telegram_id, "full_name": normalized_name},
+    )
+    user = user_result.mappings().one_or_none()
+    if user is None:
+        existing = await db.execute(
+            text(
+                """
+                SELECT id, full_name, is_active
+                FROM public.users
+                WHERE telegram_id = :telegram_id
+                """
+            ),
+            {"telegram_id": telegram_id},
+        )
+        user = existing.mappings().one()
+    if not user["is_active"]:
+        raise ResourceConflict("حساب کاربری در ClassMate غیرفعال است و به کلاس اضافه نشد.")
+
+    membership = await db.execute(
+        text(
+            """
+            INSERT INTO public.class_memberships (class_id, user_id, is_active)
+            VALUES (:class_id, :user_id, TRUE)
+            ON CONFLICT (class_id, user_id)
+            DO UPDATE SET is_active = TRUE
+            RETURNING id
+            """
+        ),
+        {"class_id": class_id, "user_id": user["id"]},
+    )
+    return {
+        "user_id": user["id"],
+        "telegram_id": telegram_id,
+        "full_name": user["full_name"],
+        "membership_id": membership.scalar_one(),
+        "school_id": class_info["school_id"],
+    }
+
+
+async def set_product_class_member_active(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    user_id: int,
+    is_active: bool,
+) -> bool:
+    if class_id <= 0 or user_id <= 0:
+        raise InvalidApplicationInput("شناسه عضو یا کلاس معتبر نیست.")
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.class_memberships
+            SET is_active = :is_active
+            WHERE class_id = :class_id AND user_id = :user_id
+            RETURNING id
+            """
+        ),
+        {"class_id": class_id, "user_id": user_id, "is_active": is_active},
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def list_product_class_announcements(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    limit: int = 30,
+) -> list[dict]:
+    if class_id <= 0 or not 1 <= limit <= 100:
+        raise InvalidApplicationInput("درخواست فهرست اطلاعیه‌ها معتبر نیست.")
+    result = await db.execute(
+        text(
+            """
+            SELECT id, title, body, published_at, expires_at, is_active
+            FROM public.announcements
+            WHERE class_id = :class_id
+            ORDER BY published_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {"class_id": class_id, "limit": limit},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
+async def create_product_announcement(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    telegram_id: int,
+    author_name: str,
+    title: str,
+    body: str,
+) -> dict:
+    normalized_title = " ".join(title.split())
+    normalized_body = body.strip()
+    if class_id <= 0 or telegram_id <= 0:
+        raise InvalidApplicationInput("شناسه کلاس یا مدیر معتبر نیست.")
+    if not 2 <= len(normalized_title) <= 180:
+        raise InvalidApplicationInput("عنوان اطلاعیه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+    if not 2 <= len(normalized_body) <= 8000:
+        raise InvalidApplicationInput("متن اطلاعیه باید بین ۲ تا ۸۰۰۰ نویسه باشد.")
+
+    class_info = await get_product_class(db, class_id=class_id)
+    if class_info is None or not class_info["is_active"]:
+        raise ResourceNotFound("کلاس فعال پیدا نشد.")
+
+    author = await db.execute(
+        text(
+            """
+            INSERT INTO public.users
+                (telegram_id, full_name, private_chat_started, is_active)
+            VALUES
+                (:telegram_id, :full_name, FALSE, TRUE)
+            ON CONFLICT (telegram_id) DO NOTHING
+            RETURNING id, is_active
+            """
+        ),
+        {"telegram_id": telegram_id, "full_name": author_name[:160] or "مدیر ClassMate"},
+    )
+    author_row = author.mappings().one_or_none()
+    if author_row is None:
+        existing = await db.execute(
+            text("SELECT id, is_active FROM public.users WHERE telegram_id = :telegram_id"),
+            {"telegram_id": telegram_id},
+        )
+        author_row = existing.mappings().one()
+    if not author_row["is_active"]:
+        raise ResourceConflict("حساب مدیر در دیتابیس ClassMate غیرفعال است.")
+
+    result = await db.execute(
+        text(
+            """
+            INSERT INTO public.announcements
+                (class_id, title, body, created_by, is_active)
+            VALUES
+                (:class_id, :title, :body, :created_by, TRUE)
+            RETURNING id, title, published_at, is_active
+            """
+        ),
+        {
+            "class_id": class_id,
+            "title": normalized_title,
+            "body": normalized_body,
+            "created_by": author_row["id"],
+        },
+    )
+    row = result.mappings().one()
+    return dict(row)
+
+
+async def set_product_announcement_active(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    announcement_id: int,
+    is_active: bool,
+) -> bool:
+    if class_id <= 0 or announcement_id <= 0:
+        raise InvalidApplicationInput("شناسه اطلاعیه یا کلاس معتبر نیست.")
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.announcements
+            SET is_active = :is_active
+            WHERE id = :announcement_id AND class_id = :class_id
+            RETURNING id
+            """
+        ),
+        {
+            "class_id": class_id,
+            "announcement_id": announcement_id,
+            "is_active": is_active,
+        },
+    )
+    return result.scalar_one_or_none() is not None

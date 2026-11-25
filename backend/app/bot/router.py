@@ -253,8 +253,8 @@ async def _show_account_panel(
 async def _show_help_panel(message: Message) -> None:
     await message.answer(
         "راهنمای ClassMate Work\n\n"
-        "برای مدیریت مدارس و کلاس‌ها، وارد «مدیریت مدارس و کلاس‌ها» شوید. "
-        "سپس مجموعه، مدرسه و سال تحصیلی موردنظر را انتخاب کنید.\n\n"
+        "برای مدیریت مدارس، کلاس‌ها، درس‌ها، اعضا و برنامه هفتگی، "
+        "وارد «مدیریت مدارس و کلاس‌ها» شوید.\n\n"
         "در پنل‌های داخلی فقط دکمه «بازگشت» برای رفتن به سطح قبلی وجود دارد. "
         "فرم‌ها کدهای سیستمی را خودکار می‌سازند و اطلاعات قابل پیش‌فرض را از شما نمی‌پرسند.",
         reply_markup=InlineKeyboardMarkup(
@@ -1880,13 +1880,10 @@ async def help_command(
         "/menu — منوی اصلی\n"
         "/back — بازگشت یک مرحله در فرم\n"
         "/cancel — لغو فرم جاری\n"
-        "/roles [TENANT_UUID] — فهرست نقش‌های قابل واگذاری\n"
-        "/role_create TENANT_UUID KEY PERMISSIONS | NAME — ساخت نقش محدود به اختیارات شما\n"
-        "/members TENANT_UUID [SEARCH] — فهرست صفحه‌بندی‌شده و جست‌وجوی اعضای مجموعه\n"
-        "/member_suspend TENANT_UUID USER_UUID | REASON — تعلیق عضو پس از تأیید\n"
-        "/member_reactivate TENANT_UUID USER_UUID ROLE_KEY | REASON — فعال‌سازی مجدد با نقش مشخص\n"
-        "/invite TELEGRAM_ID ROLE_KEY SCOPE_TYPE SCOPE_ID نام — دعوت با نقش مشخص\n"
-        "/invites [TENANT_UUID] — فهرست دعوت‌های باز و منقضی‌شده\n"
+        "/schools — فهرست مدارس ClassMate\n"
+        "/school_create — ایجاد مدرسه\n"
+        "/roles — فهرست نقش‌های مدیریتی\n"
+        "/invite — دعوت مدیر سامانه\n"
         "/revoke_invite INVITATION_UUID — لغو دعوت پذیرفته‌نشده\n"
         "/help — راهنما\n"
         "/status — بررسی سلامت اتصال‌ها\n\n"
