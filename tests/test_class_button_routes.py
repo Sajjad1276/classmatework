@@ -217,6 +217,12 @@ async def test_class_join_code_button_displays_the_existing_code_without_rotatin
 @pytest.mark.asyncio
 async def test_class_join_code_rotation_replaces_code_and_stores_the_new_secret(monkeypatch):
     monkeypatch.setattr(product_router, "_has_permission", AsyncMock(return_value=True))
+    monkeypatch.setattr(product_router, "_require_private_callback", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        product_router,
+        "get_product_class",
+        AsyncMock(return_value={"id": 37, "name": "دهم الف"}),
+    )
     issue_code = AsyncMock(return_value={"id": 37, "name": "دهم الف"})
     store_secret = AsyncMock()
     record = AsyncMock()
@@ -227,11 +233,32 @@ async def test_class_join_code_rotation_replaces_code_and_stores_the_new_secret(
     callback = _callback("product:class:join-code:rotate:37")
     principal = SimpleNamespace(user=SimpleNamespace(id=42))
     db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    state = MemoryState()
 
     await product_router.product_class_join_code_rotate_callback(
         callback,
         principal=principal,
         db=db,
+        state=state,
+        product_session_factory=lambda: ProductSessionContext(),
+    )
+
+    issue_code.assert_not_awaited()
+    store_secret.assert_not_awaited()
+    record.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    preview_text = callback.message.edit_text.await_args.args[0]
+    assert "پیش‌نمایش تغییر کد ورود کلاس" in preview_text
+    confirm_markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    confirm_data = confirm_markup.inline_keyboard[0][0].callback_data
+    assert confirm_data.startswith("product:class:join-code:rotate-confirm:")
+
+    confirm_callback = _callback(confirm_data)
+    await product_router.product_class_join_code_rotate_confirm_callback(
+        confirm_callback,
+        principal=principal,
+        db=db,
+        state=state,
         product_session_factory=lambda: ProductSessionContext(),
     )
 
@@ -242,12 +269,9 @@ async def test_class_join_code_rotation_replaces_code_and_stores_the_new_secret(
     store_secret.assert_awaited_once_with(db, class_id=37, code=code)
     record.assert_awaited_once()
     db.commit.assert_awaited_once()
-    text = callback.message.edit_text.await_args.args[0]
-    assert code in text
-    markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
-    assert markup.inline_keyboard[0][0].text == "♻️ تغییر کد ورود"
-
-
+    final_text = confirm_callback.message.edit_text.await_args.args[0]
+    assert code in final_text
+    assert "کد ورود" in final_text
 
 
 @pytest.mark.asyncio
