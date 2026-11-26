@@ -63,6 +63,14 @@ class TenantCreation(StatesGroup):
     name = State()
     confirm = State()
 
+class RoleCreationWizard(StatesGroup):
+    confirm = State()
+
+
+class InviteRevocationWizard(StatesGroup):
+    confirm = State()
+
+
 class MemberSuspension(StatesGroup):
     reason = State()
     confirm = State()
@@ -530,6 +538,7 @@ async def role_create_command(
     message: Message,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
 ) -> None:
     text_value = (message.text or "").strip()
     if "|" not in text_value:
@@ -554,36 +563,141 @@ async def role_create_command(
         await message.answer("شناسه Tenant معتبر نیست.")
         return
 
+    role_key = parts[2].strip()
+    display_name = display_name.strip()
     permission_keys = tuple(
         item.strip()
         for item in parts[3].split(",")
         if item.strip()
     )
+    if not role_key or not display_name or not permission_keys:
+        await message.answer("کلید نقش، نام نمایشی و حداقل یک مجوز باید وارد شوند.")
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        role_create_token=token,
+        role_create_tenant_id=str(tenant_id),
+        role_create_key=role_key,
+        role_create_name=display_name,
+        role_create_permissions=list(permission_keys),
+    )
+    await state.set_state(RoleCreationWizard.confirm)
+    permissions_preview = "\n".join(f"• {item}" for item in permission_keys)
+    await message.answer(
+        "پیش‌نمایش ایجاد نقش مدیریتی\n\n"
+        f"مجموعه: {tenant_id}\n"
+        f"کلید نقش: {role_key}\n"
+        f"نام نمایشی: {display_name}\n"
+        f"مجوزهای قابل واگذاری ({len(permission_keys)}):\n{permissions_preview}\n\n"
+        "با تأیید، این نقش با همین مجوزها ایجاد می‌شود. "
+        "مجوزهای غیرقابل واگذاری در مرحلهٔ ثبت توسط سیاست دسترسی رد خواهند شد.\n\n"
+        "ایجاد نقش انجام شود؟",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ تأیید ایجاد نقش",
+                        callback_data=f"role:create:confirm:{token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو عملیات",
+                        callback_data=f"role:create:cancel:{token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("role:create:confirm:"))
+async def role_create_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != RoleCreationWizard.confirm.state
+        or not token
+        or token != data.get("role_create_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+
     try:
+        tenant_id = UUID(str(data.get("role_create_tenant_id") or ""))
+        permission_keys = tuple(str(value) for value in data.get("role_create_permissions", []))
         role = await create_tenant_role(
             db,
             actor_id=principal.user.id,
             tenant_id=tenant_id,
-            key=parts[2],
-            name=display_name,
+            key=str(data.get("role_create_key") or ""),
+            name=str(data.get("role_create_name") or ""),
             permission_keys=permission_keys,
         )
+    except ValueError:
+        await state.clear()
+        await callback.answer("اطلاعات فرم معتبر نیست.", show_alert=True)
+        return
     except AccessDenied:
-        await message.answer(
-            "مجوز ساخت این نقش یا واگذاری یکی از Permissionهای انتخاب‌شده را ندارید."
+        await state.clear()
+        await callback.answer(
+            "مجوز ساخت این نقش یا واگذاری یکی از Permissionهای انتخاب‌شده را ندارید.",
+            show_alert=True,
         )
         return
     except ApplicationError as exc:
-        await message.answer(str(exc))
+        await callback.answer(str(exc), show_alert=True)
         return
 
-    await message.answer(
-        "نقش جدید ایجاد شد.\n\n"
-        f"شناسه: {role.key}\n"
-        f"نام: {role.name}\n"
-        f"محدوده: {tenant_id}\n"
-        f"تعداد مجوزها: {len(permission_keys)}"
-    )
+    await state.clear()
+    await callback.answer("نقش مدیریتی پس از تأیید ایجاد شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "✅ نقش جدید ایجاد شد.\n\n"
+            f"کلید: {role.key}\n"
+            f"نام: {role.name}\n"
+            f"محدوده: {tenant_id}\n"
+            f"تعداد مجوزها: {len(permission_keys)}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("role:create:cancel:"))
+async def role_create_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != RoleCreationWizard.confirm.state
+        or not token
+        or token != data.get("role_create_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("ایجاد نقش لغو شد؛ تغییری ثبت نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "ایجاد نقش لغو شد؛ هیچ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
+                ]
+            ),
+        )
 
 
 async def _member_directory_content(
@@ -1687,6 +1801,7 @@ async def revoke_invite_command(
     message: Message,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
 ) -> None:
     parts = (message.text or "").strip().split(maxsplit=1)
     if len(parts) != 2:
@@ -1697,23 +1812,118 @@ async def revoke_invite_command(
         return
     try:
         invitation_id = UUID(parts[1])
-        await revoke_admin_pairing(
-            db,
-            actor_id=principal.user.id,
-            pairing_id=invitation_id,
-        )
     except ValueError:
         await message.answer("شناسه دعوت معتبر نیست.")
         return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        invite_revoke_token=token,
+        invite_revoke_id=str(invitation_id),
+    )
+    await state.set_state(InviteRevocationWizard.confirm)
+    await message.answer(
+        "پیش‌نمایش لغو دعوت‌نامه\n\n"
+        f"شناسه دعوت‌نامه: {invitation_id}\n\n"
+        "با تأیید، لینک دعوت قبلی فوراً غیرقابل استفاده می‌شود. "
+        "این عملیات، عضویت کاربری را که دعوت را قبلاً پذیرفته باشد حذف نمی‌کند.\n\n"
+        "لغو دعوت‌نامه انجام شود؟",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ تأیید لغو دعوت‌نامه",
+                        callback_data=f"invite:revoke:confirm:{token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو عملیات",
+                        callback_data=f"invite:revoke:cancel:{token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("invite:revoke:confirm:"))
+async def revoke_invite_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != InviteRevocationWizard.confirm.state
+        or not token
+        or token != data.get("invite_revoke_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    try:
+        await revoke_admin_pairing(
+            db,
+            actor_id=principal.user.id,
+            pairing_id=UUID(str(data.get("invite_revoke_id") or "")),
+        )
+    except ValueError:
+        await state.clear()
+        await callback.answer("شناسه دعوت معتبر نیست.", show_alert=True)
+        return
     except PairingNotAllowed:
-        await message.answer("مجوز لغو این دعوت‌نامه را ندارید.")
+        await state.clear()
+        await callback.answer("مجوز لغو این دعوت‌نامه را ندارید.", show_alert=True)
         return
     except PairingRejected:
-        await message.answer(
-            "دعوت‌نامه وجود ندارد، قبلاً لغو شده یا توسط کاربر پذیرفته شده است."
+        await state.clear()
+        await callback.answer(
+            "دعوت‌نامه وجود ندارد، قبلاً لغو شده یا توسط کاربر پذیرفته شده است.",
+            show_alert=True,
         )
         return
-    await message.answer("دعوت‌نامه لغو شد؛ لینک قبلی دیگر قابل استفاده نیست.")
+
+    await state.clear()
+    await callback.answer("دعوت‌نامه پس از تأیید لغو شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "✅ دعوت‌نامه لغو شد؛ لینک قبلی دیگر قابل استفاده نیست.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("invite:revoke:cancel:"))
+async def revoke_invite_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != InviteRevocationWizard.confirm.state
+        or not token
+        or token != data.get("invite_revoke_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("لغو دعوت‌نامه لغو شد؛ لینک قبلی معتبر ماند.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "عملیات لغو دعوت‌نامه متوقف شد؛ هیچ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")]
+                ]
+            ),
+        )
 
 
 @router.callback_query(F.data == "tenant:list")
