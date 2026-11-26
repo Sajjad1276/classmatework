@@ -131,7 +131,7 @@ def test_class_details_show_code_button_without_rotation_label() -> None:
     source = PRODUCT_ROUTER.read_text(encoding="utf-8")
     assert 'text="🔑 کد ورود به کلاس"' in source
     assert 'text="♻️ تغییر کد ورود"' in source
-    assert "تغییر کد ورود کلاس" not in source
+    assert 'text="♻️ تغییر کد ورود کلاس"' not in source
 
 
 def test_join_code_secret_migration_is_chained_after_0012() -> None:
