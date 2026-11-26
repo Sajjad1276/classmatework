@@ -79,7 +79,6 @@ def wizard_controls(flow_token: str) -> InlineKeyboardMarkup:
 
 MAIN_MENU_ACCOUNT = "👤 حساب مدیریتی من"
 MAIN_MENU_SCHOOLS = "🏫 مدیریت مدارس و کلاس‌ها"
-MAIN_MENU_CREATE_SCHOOL = "➕ ایجاد مدرسه"
 MAIN_MENU_HELP = "❓ راهنما"
 MAIN_MENU_REPORTS = "📊 داشبورد و گزارش‌ها"
 
@@ -97,14 +96,6 @@ async def main_menu(
         db,
         user_id=principal.user.id,
         permission_key="platform:schools:read",
-        tenant_id=None,
-        scope_type="platform",
-        scope_id=None,
-    )
-    can_create_schools = await has_permission(
-        db,
-        user_id=principal.user.id,
-        permission_key="platform:schools:create",
         tenant_id=None,
         scope_type="platform",
         scope_id=None,
