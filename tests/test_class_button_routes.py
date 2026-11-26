@@ -379,6 +379,8 @@ async def test_owner_class_shortcut_opens_the_unique_class_detail_directly(monke
                 "grade": "دهم",
                 "section": None,
                 "school_name": "دبیرستان نمونه",
+                "academic_year_name": "۱۴۰۵-۱۴۰۶",
+                "is_current_academic_year": True,
             }
         ]),
     )
