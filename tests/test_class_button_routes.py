@@ -38,7 +38,6 @@ async def test_class_button_opens_detail_and_displays_all_permitted_actions(monk
             "platform:subjects:manage",
             "platform:timetable:manage",
             "platform:classes:manage",
-            "platform:groups:manage",
             "platform:members:manage",
             "platform:announcements:manage",
             "platform:records:read",
@@ -85,14 +84,14 @@ async def test_class_button_opens_detail_and_displays_all_permitted_actions(monk
     labels = {button.text for button in buttons}
 
     assert "product:class:join-code:37" in callback_data
-    assert "product:group:link:37" in callback_data
+    assert "product:group:link:37" not in callback_data
     assert "product:subject:add:37" in callback_data
     assert "product:timetable:view:37" in callback_data
     assert "product:timetable:add:37" in callback_data
     assert "product:members:37" in callback_data
     assert "product:announcements:37" in callback_data
     assert "🔑 کد ورود به کلاس" in labels
-    assert "➕ افزودن گروه" in labels
+    assert not any("گروه" in label for label in labels)
     assert "⬅️ بازگشت به مدرسه" in labels
 
 
