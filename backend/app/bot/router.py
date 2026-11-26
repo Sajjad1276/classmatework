@@ -17,7 +17,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors import (
@@ -25,12 +24,7 @@ from app.application.errors import (
     ApplicationError,
 )
 from app.application.tenant_access import (
-    create_tenant_role,
-    list_admin_invitations,
-    list_platform_roles,
     list_tenant_members_page,
-    list_tenant_roles,
-    preview_tenant_member_reactivation,
     preview_tenant_member_suspension,
     reactivate_tenant_member,
     suspend_tenant_member,
@@ -39,11 +33,8 @@ from app.application.tenants import create_tenant
 from app.db.models import User
 from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import (
-    PairingNotAllowed,
     PairingRejected,
     consume_admin_pairing,
-    create_admin_pairing,
-    revoke_admin_pairing,
 )
 from app.modules.identity.principal import TelegramPrincipal
 
