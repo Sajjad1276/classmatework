@@ -45,6 +45,28 @@ class PrivateChatOnlyMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+class StartOnlyCommandMiddleware(BaseMiddleware):
+    """Allow /start and route every other interaction through the bot panels."""
+
+    async def __call__(
+        self,
+        handler: Callable[[Any, dict[str, Any]], Awaitable[Any]],
+        event: Message | CallbackQuery,
+        data: dict[str, Any],
+    ) -> Any:
+        if isinstance(event, Message):
+            raw_text = (event.text or event.caption or "").strip()
+            if raw_text.startswith("/"):
+                command = raw_text.split(maxsplit=1)[0].split("@", maxsplit=1)[0]
+                if command.casefold() != "/start":
+                    await event.answer(
+                        "برای استفاده از امکانات، از دکمه‌های پنل استفاده کنید؛ "
+                        "فقط دستور /start فعال است."
+                    )
+                    return None
+        return await handler(event, data)
+
+
 class DatabaseSessionMiddleware(BaseMiddleware):
     """Provide one short-lived AsyncSession per Telegram update."""
 
