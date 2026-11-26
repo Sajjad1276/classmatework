@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -489,6 +489,7 @@ async def get_platform_report(
     db: AsyncSession,
     *,
     actor_id: UUID,
+    product_db: AsyncSession | None = None,
 ) -> dict[str, int | datetime]:
     await _require(
         db,
@@ -501,57 +502,173 @@ async def get_platform_report(
     async def count(statement) -> int:
         return int((await db.execute(statement)).scalar_one() or 0)
 
-    total_users = await count(select(func.count()).select_from(UsageIdentity))
-    active_users = await count(
-        select(func.count()).select_from(UsageIdentity).where(UsageIdentity.status == "active")
-    )
+    async def product_count(statement: str, params: dict | None = None) -> int:
+        if product_db is None:
+            return 0
+        value = await product_db.execute(text(statement), params or {})
+        return int(value.scalar_one() or 0)
 
-    async def new_users_since(delta: timedelta) -> int:
-        return await count(
+    if product_db is not None:
+        # The learner-facing ClassMate database is the source of truth for
+        # bot starts, active accounts, student memberships and product totals.
+        total_users = await product_count("SELECT COUNT(*) FROM public.users")
+        started_users = await product_count(
+            "SELECT COUNT(*) FROM public.users WHERE private_chat_started IS TRUE"
+        )
+        active_users = await product_count(
+            "SELECT COUNT(*) FROM public.users WHERE is_active IS TRUE"
+        )
+        active_started_users = await product_count(
+            """
+            SELECT COUNT(*) FROM public.users
+            WHERE is_active IS TRUE AND private_chat_started IS TRUE
+            """
+        )
+        new_users = {}
+        for label, delta in (
+            ("1d", timedelta(days=1)),
+            ("7d", timedelta(days=7)),
+            ("30d", timedelta(days=30)),
+        ):
+            new_users[label] = await product_count(
+                "SELECT COUNT(*) FROM public.users WHERE created_at >= :since",
+                {"since": now - delta},
+            )
+
+        active_users_since = {}
+        for label, delta in (
+            ("1h", timedelta(hours=1)),
+            ("4h", timedelta(hours=4)),
+            ("12h", timedelta(hours=12)),
+            ("24h", timedelta(hours=24)),
+        ):
+            active_users_since[label] = await product_count(
+                """
+                SELECT COUNT(*) FROM public.users
+                WHERE is_active IS TRUE
+                  AND private_chat_started IS TRUE
+                  AND last_seen_at >= :since
+                """,
+                {"since": now - delta},
+            )
+
+        active_memberships = await product_count(
+            "SELECT COUNT(*) FROM public.class_memberships WHERE is_active IS TRUE"
+        )
+        active_students = await product_count(
+            """
+            SELECT COUNT(*)
+            FROM public.class_memberships AS cm
+            JOIN public.users AS u ON u.id = cm.user_id
+            WHERE cm.is_active IS TRUE
+              AND cm.role = 'student'
+              AND u.is_active IS TRUE
+              AND u.private_chat_started IS TRUE
+            """
+        )
+        report = {
+            "total_users": total_users,
+            "started_users": started_users,
+            "active_users": active_users,
+            "active_started_users": active_started_users,
+            "new_users_1d": new_users["1d"],
+            "new_users_7d": new_users["7d"],
+            "new_users_30d": new_users["30d"],
+            "active_users_1h": active_users_since["1h"],
+            "active_users_4h": active_users_since["4h"],
+            "active_users_12h": active_users_since["12h"],
+            "active_users_24h": active_users_since["24h"],
+            "active_memberships": active_memberships,
+            "active_students": active_students,
+            "schools": await product_count("SELECT COUNT(*) FROM public.schools"),
+            "active_schools": await product_count(
+                "SELECT COUNT(*) FROM public.schools WHERE is_active IS TRUE"
+            ),
+            "classes": await product_count("SELECT COUNT(*) FROM public.classes"),
+            "active_classes": await product_count(
+                "SELECT COUNT(*) FROM public.classes WHERE is_active IS TRUE"
+            ),
+            "subjects": await product_count("SELECT COUNT(*) FROM public.subjects"),
+            "connected_groups": await product_count(
+                "SELECT COUNT(*) FROM public.classes WHERE group_chat_id IS NOT NULL"
+            ),
+            "events_24h": await count(
+                select(func.count()).select_from(UsageEvent).where(
+                    UsageEvent.occurred_at >= now - timedelta(hours=24)
+                )
+            ),
+            "source_is_product_db": 1,
+            "generated_at": now,
+        }
+    else:
+        # Kept for unit tests and offline diagnostics. The Telegram report
+        # handler refuses to render this fallback as live ClassMate statistics.
+        total_users = await count(select(func.count()).select_from(UsageIdentity))
+        active_users = await count(
             select(func.count()).select_from(UsageIdentity).where(
-                UsageIdentity.first_seen_at >= now - delta
+                UsageIdentity.status == "active"
             )
         )
 
-    async def active_users_since(delta: timedelta) -> int:
-        return await count(
-            select(func.count(func.distinct(UsageEvent.actor_key_hash)))
-            .select_from(UsageEvent)
-            .join(
-                UsageIdentity,
-                UsageIdentity.actor_key_hash == UsageEvent.actor_key_hash,
+        async def new_users_since(delta: timedelta) -> int:
+            return await count(
+                select(func.count()).select_from(UsageIdentity).where(
+                    UsageIdentity.first_seen_at >= now - delta
+                )
             )
-            .where(
-                UsageEvent.actor_key_hash.is_not(None),
-                UsageIdentity.status == "active",
-                UsageEvent.occurred_at >= now - delta,
-            )
-        )
 
-    report = {
-        "total_users": total_users,
-        "active_users": active_users,
-        "new_users_1d": await new_users_since(timedelta(days=1)),
-        "new_users_7d": await new_users_since(timedelta(days=7)),
-        "new_users_30d": await new_users_since(timedelta(days=30)),
-        "active_users_1h": await active_users_since(timedelta(hours=1)),
-        "active_users_4h": await active_users_since(timedelta(hours=4)),
-        "active_users_12h": await active_users_since(timedelta(hours=12)),
-        "schools": await count(select(func.count()).select_from(School)),
-        "classes": await count(select(func.count()).select_from(ClassGroup)),
-        "subjects": await count(select(func.count()).select_from(Subject)),
-        "connected_groups": await count(
-            select(func.count()).select_from(ClassTelegramGroup).where(
-                ClassTelegramGroup.status == "active"
+        async def active_users_since(delta: timedelta) -> int:
+            return await count(
+                select(func.count(func.distinct(UsageEvent.actor_key_hash)))
+                .select_from(UsageEvent)
+                .join(
+                    UsageIdentity,
+                    UsageIdentity.actor_key_hash == UsageEvent.actor_key_hash,
+                )
+                .where(
+                    UsageEvent.actor_key_hash.is_not(None),
+                    UsageIdentity.status == "active",
+                    UsageEvent.occurred_at >= now - delta,
+                )
             )
-        ),
-        "events_24h": await count(
-            select(func.count()).select_from(UsageEvent).where(
-                UsageEvent.occurred_at >= now - timedelta(hours=24)
-            )
-        ),
-        "generated_at": now,
-    }
+
+        report = {
+            "total_users": total_users,
+            "started_users": total_users,
+            "active_users": active_users,
+            "active_started_users": active_users,
+            "new_users_1d": await new_users_since(timedelta(days=1)),
+            "new_users_7d": await new_users_since(timedelta(days=7)),
+            "new_users_30d": await new_users_since(timedelta(days=30)),
+            "active_users_1h": await active_users_since(timedelta(hours=1)),
+            "active_users_4h": await active_users_since(timedelta(hours=4)),
+            "active_users_12h": await active_users_since(timedelta(hours=12)),
+            "active_users_24h": await active_users_since(timedelta(hours=24)),
+            "active_memberships": 0,
+            "active_students": 0,
+            "schools": await count(select(func.count()).select_from(School)),
+            "active_schools": await count(
+                select(func.count()).select_from(School).where(School.status == "active")
+            ),
+            "classes": await count(select(func.count()).select_from(ClassGroup)),
+            "active_classes": await count(
+                select(func.count()).select_from(ClassGroup).where(ClassGroup.status == "active")
+            ),
+            "subjects": await count(select(func.count()).select_from(Subject)),
+            "connected_groups": await count(
+                select(func.count()).select_from(ClassTelegramGroup).where(
+                    ClassTelegramGroup.status == "active"
+                )
+            ),
+            "events_24h": await count(
+                select(func.count()).select_from(UsageEvent).where(
+                    UsageEvent.occurred_at >= now - timedelta(hours=24)
+                )
+            ),
+            "source_is_product_db": 0,
+            "generated_at": now,
+        }
+
     await record_event(
         db,
         event_type="platform.report.viewed",
@@ -560,6 +677,7 @@ async def get_platform_report(
     )
     await db.commit()
     return report
+
 
 async def list_school_class_group_directory(
     db: AsyncSession,
