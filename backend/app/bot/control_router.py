@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import secrets
 from html import escape
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -10,6 +11,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from app.bot.ux import ensure_back_button
 from aiogram.types import (
     CallbackQuery,
@@ -36,6 +38,10 @@ from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="control-center")
+
+
+class GroupHandshakeWizard(StatesGroup):
+    confirm = State()
 
 
 def InlineKeyboardMarkup(*args, **kwargs) -> TelegramInlineKeyboardMarkup:
@@ -243,14 +249,89 @@ async def class_group_panel_callback(
     )
 
 
-@router.callback_query(F.data.startswith("class:group:code:"))
+@router.callback_query(F.data.regexp(r"^class:group:code:[0-9a-fA-F-]{36}$"))
 async def class_group_code_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
 ) -> None:
     try:
         class_id = UUID((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        class_group = (
+            await db.execute(select(ClassGroup).where(ClassGroup.id == class_id))
+        ).scalar_one_or_none()
+        if class_group is None:
+            raise ApplicationError("کلاس پیدا نشد.")
+        allowed = await has_permission(
+            db,
+            user_id=principal.user.id,
+            permission_key="class:group:manage",
+            tenant_id=class_group.tenant_id,
+            scope_type="class",
+            scope_id=class_group.id,
+        )
+        if not allowed:
+            raise ApplicationError("مجوز صدور کد اتصال گروه را ندارید.")
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        group_handshake_token=token,
+        group_handshake_class_id=str(class_id),
+    )
+    await state.set_state(GroupHandshakeWizard.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش صدور کد اتصال گروه\n\n"
+            f"کلاس: {escape(class_group.name)}\n\n"
+            "با تأیید، یک کد یک‌بارمصرف با اعتبار محدود صادر می‌شود. "
+            "صدور کد به‌تنهایی گروه را متصل نمی‌کند؛ اتصال پس از بررسی مدیر بودن "
+            "ربات و مدیر فرستنده در گروه انجام می‌شود.\n\n"
+            "کد اتصال صادر شود؟",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید صدور کد",
+                            callback_data=f"cg:c:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"cg:x:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("cg:c:"))
+async def class_group_code_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != GroupHandshakeWizard.confirm.state
+        or not token
+        or token != data.get("group_handshake_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+
+    try:
+        class_id = UUID(str(data.get("group_handshake_class_id") or ""))
         code, class_group, expires_at = await create_class_group_handshake(
             db,
             actor_id=principal.user.id,
@@ -259,8 +340,12 @@ async def class_group_code_callback(
     except (ValueError, ApplicationError) as exc:
         await callback.answer(str(exc), show_alert=True)
         return
+    except Exception:
+        await callback.answer("صدور کد اتصال ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
+        return
 
-    await callback.answer("کد اتصال صادر شد.")
+    await state.clear()
+    await callback.answer("کد اتصال پس از تأیید صادر شد.")
     expires_local = expires_at.astimezone(TEHRAN)
     if callback.message is not None:
         await callback.message.edit_text(
@@ -278,6 +363,39 @@ async def class_group_code_callback(
                         InlineKeyboardButton(
                             text="⬅️ بازگشت به مدیریت گروه",
                             callback_data=f"class:group:{class_group.id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("cg:x:"))
+async def class_group_code_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != GroupHandshakeWizard.confirm.state
+        or not token
+        or token != data.get("group_handshake_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = data.get("group_handshake_class_id")
+    await state.clear()
+    await callback.answer("صدور کد لغو شد؛ تغییری ثبت نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "صدور کد اتصال لغو شد؛ هیچ کدی صادر نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به مدیریت گروه",
+                            callback_data=f"class:group:{class_id}",
                         )
                     ]
                 ]
