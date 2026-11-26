@@ -450,21 +450,22 @@ async def test_platform_report_reads_private_starts_and_activity_from_live_class
     product_factory = async_sessionmaker(product_engine, expire_on_commit=False)
 
     async with product_engine.begin() as connection:
+        await connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS public")
         await connection.execute(text(
-            "CREATE TABLE users (id INTEGER PRIMARY KEY, private_chat_started BOOLEAN NOT NULL, "
+            "CREATE TABLE public.users (id INTEGER PRIMARY KEY, private_chat_started BOOLEAN NOT NULL, "
             "is_active BOOLEAN NOT NULL, created_at DATETIME NOT NULL, last_seen_at DATETIME)"
         ))
         await connection.execute(text(
-            "CREATE TABLE schools (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL)"
+            "CREATE TABLE public.schools (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL)"
         ))
         await connection.execute(text(
-            "CREATE TABLE classes (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL, group_chat_id BIGINT)"
+            "CREATE TABLE public.classes (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL, group_chat_id BIGINT)"
         ))
         await connection.execute(text(
-            "CREATE TABLE subjects (id INTEGER PRIMARY KEY)"
+            "CREATE TABLE public.subjects (id INTEGER PRIMARY KEY)"
         ))
         await connection.execute(text(
-            "CREATE TABLE class_memberships (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
+            "CREATE TABLE public.class_memberships (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
             "is_active BOOLEAN NOT NULL, role VARCHAR(32) NOT NULL)"
         ))
 
