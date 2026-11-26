@@ -108,6 +108,29 @@ async def list_product_classes(
     return [dict(row) for row in result.mappings().all()]
 
 
+async def list_product_class_shortcut_candidates(db: AsyncSession) -> list[dict]:
+    """Return active classes with their school labels for owner shortcuts."""
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.grade,
+                c.section,
+                s.name AS school_name
+            FROM public.classes AS c
+            JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE c.is_active IS TRUE
+              AND s.is_active IS TRUE
+            ORDER BY s.name ASC, c.grade ASC, c.name ASC, c.id ASC
+            """
+        )
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
 async def create_product_school(
     db: AsyncSession,
     *,
