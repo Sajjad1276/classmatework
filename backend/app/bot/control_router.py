@@ -11,11 +11,13 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
     Message,
     ReplyKeyboardRemove,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from aiogram.types import (
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
+)
 
 from app.application.control_center import (
     get_class_subject_catalog,
