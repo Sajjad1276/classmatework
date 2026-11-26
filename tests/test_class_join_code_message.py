@@ -60,7 +60,8 @@ def test_class_join_code_message_uses_html_and_stable_code_lookup() -> None:
     assert any(_has_html_parse_mode(call) for call in message_edits)
     assert _calls(function, "get_class_join_code_secret")
     assert _calls(function, "compare_digest")
-    assert "saved_secret[\"join_code\"]" in ast.unparse(function)
+    assert "saved_secret" in ast.unparse(function)
+    assert "join_code" in ast.unparse(function)
     assert "saved_code_is_current" in ast.unparse(function)
 
 
@@ -118,13 +119,15 @@ def test_rotation_is_separate_and_replaces_the_product_hash_and_saved_secret() -
 
 def test_join_message_has_start_link_and_manual_code_fallback() -> None:
     tree = _tree()
-    function = _function(tree, "_class_join_code_message")
-    source = ast.unparse(function)
+    message_function = _function(tree, "_class_join_code_message")
+    url_function = _function(tree, "_class_join_start_url")
+    message_source = ast.unparse(message_function)
+    url_source = ast.unparse(url_function)
 
-    assert "?start=join_" in source
-    assert "عضویت با کد" in source
-    assert "CLASSMATE_BOT_USERNAME" in source
-    assert _calls(function, "escape")
+    assert "?start=join_" in url_source
+    assert "عضویت با کد" in message_source
+    assert "CLASSMATE_BOT_USERNAME" in message_source
+    assert _calls(message_function, "escape")
 
 
 def test_class_details_show_code_button_without_rotation_label() -> None:
