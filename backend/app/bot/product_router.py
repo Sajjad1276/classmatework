@@ -9,7 +9,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app.bot.ux import ensure_back_button
+from app.bot.ux import ensure_back_button, wizard_controls as shared_wizard_controls
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -149,6 +149,7 @@ class ClassEditing(StatesGroup):
 
 class SubjectCreation(StatesGroup):
     name = State()
+    confirm = State()
 
 
 class TimetableCreation(StatesGroup):
@@ -346,8 +347,8 @@ async def _begin_school_creation(
     await state.update_data(product_school_token=token)
     await state.set_state(SchoolCreation.name)
     await message.answer(
-        "نام مدرسه را وارد کنید (۲ تا ۱۸۰ نویسه):\n\n"
-        "برای لغو، /cancel را بفرستید."
+        "نام مدرسه را وارد کنید (۲ تا ۱۸۰ نویسه):",
+        reply_markup=shared_wizard_controls(),
     )
 
 
@@ -418,7 +419,10 @@ async def class_creation_cancel_command(
 async def school_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 180:
-        await message.answer("نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد. دوباره وارد کنید.")
+        await message.answer(
+            "خطا: نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.\n\nنام مدرسه را دوباره وارد کنید:",
+            reply_markup=shared_wizard_controls(),
+        )
         return
 
     data = await state.get_data()
@@ -782,7 +786,7 @@ async def _begin_class_creation(
         product_class_school_id=school_id,
     )
     await state.set_state(ClassCreation.name)
-    await message.answer("نام کلاس را وارد کنید (۲ تا ۸۰ نویسه):")
+    await message.answer("نام کلاس را وارد کنید (۲ تا ۸۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.callback_query(F.data.regexp(r"^product:class:create:[0-9]+$"))
@@ -855,22 +859,22 @@ async def member_announcement_cancel_command(
 async def class_name_input(message: Message, state: FSMContext) -> None:
     value = " ".join((message.text or "").split())
     if not 2 <= len(value) <= 80:
-        await message.answer("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+        await message.answer("خطا: نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.\n\nنام کلاس را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_name=value)
     await state.set_state(ClassCreation.grade)
-    await message.answer("پایه یا مقطع کلاس را وارد کنید (مثلاً دهم):")
+    await message.answer("پایه یا مقطع کلاس را وارد کنید (مثلاً دهم):", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassCreation.grade, F.text)
 async def class_grade_input(message: Message, state: FSMContext) -> None:
     value = " ".join((message.text or "").split())
     if not 1 <= len(value) <= 32:
-        await message.answer("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+        await message.answer("خطا: پایه باید بین ۱ تا ۳۲ نویسه باشد.\n\nپایه یا مقطع را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_grade=value)
     await state.set_state(ClassCreation.section)
-    await message.answer("نام بخش/شعبه را وارد کنید؛ اگر ندارد، فقط «-» بفرستید:")
+    await message.answer("نام بخش/شعبه را وارد کنید؛ اگر ندارد، فقط «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassCreation.section, F.text)
@@ -878,7 +882,7 @@ async def class_section_input(message: Message, state: FSMContext) -> None:
     value = " ".join((message.text or "").split())
     section = None if value == "-" else value
     if section is not None and len(section) > 32:
-        await message.answer("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+        await message.answer("خطا: عنوان بخش کلاس حداکثر ۳۲ نویسه است.\n\nبخش/شعبه را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     token = data.get("product_class_token")
@@ -1074,7 +1078,8 @@ async def product_school_edit_callback(
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            f"نام فعلی مدرسه: {school['name']}\nنام جدید را وارد کنید:"
+            f"نام فعلی مدرسه: {school['name']}\nنام جدید را وارد کنید:",
+            reply_markup=shared_wizard_controls(),
         )
 
 
@@ -1082,7 +1087,7 @@ async def product_school_edit_callback(
 async def product_school_edit_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 180:
-        await message.answer("نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+        await message.answer("خطا: نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.\n\nنام جدید را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     school_id = int(data.get("product_school_edit_id") or 0)
@@ -1347,7 +1352,8 @@ async def product_class_edit_callback(
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            f"نام فعلی کلاس: {class_info['name']}\nنام جدید را وارد کنید:"
+            f"نام فعلی کلاس: {class_info['name']}\nنام جدید را وارد کنید:",
+            reply_markup=shared_wizard_controls(),
         )
 
 
@@ -1355,22 +1361,22 @@ async def product_class_edit_callback(
 async def product_class_edit_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 80:
-        await message.answer("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+        await message.answer("خطا: نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.\n\nنام کلاس را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_edit_name=name)
     await state.set_state(ClassEditing.grade)
-    await message.answer("پایهٔ جدید کلاس را وارد کنید:")
+    await message.answer("پایهٔ جدید کلاس را وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassEditing.grade, F.text)
 async def product_class_edit_grade_input(message: Message, state: FSMContext) -> None:
     grade = " ".join((message.text or "").split())
     if not 1 <= len(grade) <= 32:
-        await message.answer("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+        await message.answer("خطا: پایه باید بین ۱ تا ۳۲ نویسه باشد.\n\nپایه یا مقطع را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_edit_grade=grade)
     await state.set_state(ClassEditing.section)
-    await message.answer("بخش جدید را وارد کنید؛ برای پاک‌کردن بخش فعلی «-» بفرستید:")
+    await message.answer("بخش جدید را وارد کنید؛ برای پاک‌کردن بخش فعلی «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassEditing.section, F.text)
@@ -1379,7 +1385,7 @@ async def product_class_edit_section_input(message: Message, state: FSMContext) 
     if section == "-":
         section = None
     if section is not None and len(section) > 32:
-        await message.answer("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+        await message.answer("خطا: عنوان بخش کلاس حداکثر ۳۲ نویسه است.\n\nبخش/شعبه را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     class_id = int(data.get("product_class_edit_id") or 0)
@@ -2267,11 +2273,11 @@ async def timetable_subject_select_callback(
 async def timetable_period_input(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if not value.isdigit() or not 1 <= int(value) <= 16:
-        await message.answer("شماره زنگ باید عددی بین ۱ تا ۱۶ باشد.")
+        await message.answer("خطا: شماره زنگ باید عددی بین ۱ تا ۱۶ باشد.\n\nشماره زنگ را از ۱ تا ۱۶ دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_timetable_period=int(value))
     await state.set_state(TimetableCreation.time_range)
-    await message.answer("بازه زمانی را با قالب 08:00-08:45 وارد کنید؛ اگر زمان مشخص نیست، «-» بفرستید:")
+    await message.answer("بازه زمانی را با قالب 08:00-08:45 وارد کنید؛ اگر زمان مشخص نیست، «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(TimetableCreation.time_range, F.text)
@@ -2282,7 +2288,7 @@ async def timetable_time_range_input(message: Message, state: FSMContext) -> Non
     else:
         parts = value.split("-")
         if len(parts) != 2:
-            await message.answer("قالب زمان نامعتبر است؛ نمونه صحیح: 08:00-08:45")
+            await message.answer("خطا: قالب زمان نامعتبر است.\n\nبازه زمانی را با قالب 08:00-08:45 دوباره وارد کنید:", reply_markup=shared_wizard_controls())
             return
         try:
             from datetime import time as time_type
@@ -2290,10 +2296,10 @@ async def timetable_time_range_input(message: Message, state: FSMContext) -> Non
             start = time_type.fromisoformat(parts[0].strip())
             end = time_type.fromisoformat(parts[1].strip())
         except ValueError:
-            await message.answer("زمان باید با قالب HH:MM باشد.")
+            await message.answer("خطا: زمان باید با قالب HH:MM باشد.\n\nبازه زمانی را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
             return
         if end <= start:
-            await message.answer("زمان پایان باید بعد از زمان شروع باشد.")
+            await message.answer("خطا: زمان پایان باید بعد از زمان شروع باشد.\n\nبازه زمانی را اصلاح کنید:", reply_markup=shared_wizard_controls())
             return
         start_time, end_time = start.strftime("%H:%M"), end.strftime("%H:%M")
     await state.update_data(
@@ -2301,7 +2307,7 @@ async def timetable_time_range_input(message: Message, state: FSMContext) -> Non
         product_timetable_end=end_time,
     )
     await state.set_state(TimetableCreation.room)
-    await message.answer("نام کلاس/اتاق را وارد کنید؛ اگر ندارد، «-» بفرستید:")
+    await message.answer("نام کلاس/اتاق را وارد کنید؛ اگر ندارد، «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(TimetableCreation.room, F.text)
@@ -2310,7 +2316,7 @@ async def timetable_room_input(message: Message, state: FSMContext) -> None:
     if room == "-":
         room = None
     if room is not None and len(room) > 80:
-        await message.answer("نام کلاس/اتاق حداکثر ۸۰ نویسه است.")
+        await message.answer("خطا: نام کلاس/اتاق حداکثر ۸۰ نویسه است.\n\nنام اتاق را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_timetable_room=room)
     data = await state.get_data()
@@ -3327,25 +3333,25 @@ async def product_announcement_add_callback(
     await state.set_state(AnnouncementCreation.title)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("عنوان اطلاعیه را وارد کنید (۲ تا ۱۸۰ نویسه):")
+        await callback.message.answer("عنوان اطلاعیه را وارد کنید (۲ تا ۱۸۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.message(AnnouncementCreation.title, F.text)
 async def product_announcement_title_input(message: Message, state: FSMContext) -> None:
     title = " ".join((message.text or "").split())
     if not 2 <= len(title) <= 180:
-        await message.answer("عنوان اطلاعیه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+        await message.answer("خطا: عنوان اطلاعیه باید بین ۲ تا ۱۸۰ نویسه باشد.\n\nعنوان را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_announcement_title=title)
     await state.set_state(AnnouncementCreation.body)
-    await message.answer("متن کامل اطلاعیه را وارد کنید (۲ تا ۸۰۰۰ نویسه):")
+    await message.answer("متن کامل اطلاعیه را وارد کنید (۲ تا ۸۰۰۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.message(AnnouncementCreation.body, F.text)
 async def product_announcement_body_input(message: Message, state: FSMContext) -> None:
     body = (message.text or "").strip()
     if not 2 <= len(body) <= 8000:
-        await message.answer("متن اطلاعیه باید بین ۲ تا ۸۰۰۰ نویسه باشد.")
+        await message.answer("خطا: متن اطلاعیه باید بین ۲ تا ۸۰۰۰ نویسه باشد.\n\nمتن را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     token = secrets.token_urlsafe(8)
