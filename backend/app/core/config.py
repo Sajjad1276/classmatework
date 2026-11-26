@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # Separate connection to the live ClassMate product database. It must never
     # inherit ClassMate Work's schema search_path.
     c2_db_url: SecretStr | None = None
+    # Username of the student-facing ClassMate bot (not this admin bot).
+    classmate_bot_username: str | None = None
     redis_url: str = "redis://localhost:6379/0"
     telegram_bot_token: SecretStr | None = None
     bot_fsm_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
