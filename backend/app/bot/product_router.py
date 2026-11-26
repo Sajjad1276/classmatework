@@ -23,7 +23,6 @@ from app.application.class_join_codes import (
     store_class_join_code_secret,
 )
 from app.application.errors import ApplicationError, ResourceConflict
-from app.core.config import get_settings
 from app.application.product_management import (
     add_product_class_member,
     create_and_assign_product_subject,
@@ -53,6 +52,7 @@ from app.application.product_management import (
     update_product_class,
     update_product_school,
 )
+from app.core.config import get_settings
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
 from app.modules.identity.principal import TelegramPrincipal
