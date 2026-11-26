@@ -1,10 +1,9 @@
+import pytest
+from app.bot import product_router
+from app.bot.middleware import StartOnlyCommandMiddleware
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-
-import pytest
-
-from app.bot.middleware import StartOnlyCommandMiddleware
-from app.bot import product_router
 
 
 @pytest.mark.asyncio
