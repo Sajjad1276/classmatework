@@ -522,8 +522,9 @@ async def test_platform_report_reads_private_starts_and_activity_from_live_class
             "INSERT INTO subjects (id) VALUES (1), (2), (3)"
         ))
         await product_db.execute(text(
-            "INSERT INTO class_memberships (id, user_id, is_active, role) VALUES "
-            "(1, 1, TRUE, 'student'), (2, 1, TRUE, 'class_manager'), (3, 2, TRUE, 'student')"
+            "INSERT INTO public.class_memberships (id, user_id, is_active, role) VALUES "
+            "(1, 1, TRUE, 'STUDENT'), (2, 1, TRUE, 'CLASS_MANAGER'), "
+            "(3, 2, TRUE, 'STUDENT'), (4, 1, TRUE, 'STUDENT')"
         ))
         await product_db.commit()
 
@@ -538,7 +539,7 @@ async def test_platform_report_reads_private_starts_and_activity_from_live_class
         assert report["active_users"] == 2
         assert report["active_started_users"] == 1
         assert report["active_students"] == 1
-        assert report["active_memberships"] == 3
+        assert report["active_memberships"] == 4
         assert report["new_users_1d"] == 1
         assert report["new_users_7d"] == 1
         assert report["new_users_30d"] == 2
