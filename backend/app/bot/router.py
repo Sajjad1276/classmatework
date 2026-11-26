@@ -125,8 +125,6 @@ async def main_menu(
     second_row = []
     if can_read_reports:
         second_row.append(KeyboardButton(text=MAIN_MENU_REPORTS))
-    if can_create_schools:
-        second_row.append(KeyboardButton(text=MAIN_MENU_CREATE_SCHOOL))
     second_row.append(KeyboardButton(text=MAIN_MENU_HELP))
 
     keyboard = [first_row]
@@ -259,7 +257,6 @@ async def show_main_menu(
         {
             MAIN_MENU_ACCOUNT,
             MAIN_MENU_SCHOOLS,
-            MAIN_MENU_CREATE_SCHOOL,
             MAIN_MENU_HELP,
         }
     )
@@ -279,8 +276,6 @@ async def root_menu_button_handler(
         await _show_account_panel(message, principal)
     elif selected == MAIN_MENU_SCHOOLS:
         await _show_tenant_list(message, principal, db)
-    elif selected == MAIN_MENU_CREATE_SCHOOL:
-        await _begin_tenant_creation(message, principal, db, state)
     elif selected == MAIN_MENU_HELP:
         await _show_help_panel(message)
 
