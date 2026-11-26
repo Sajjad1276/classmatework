@@ -68,7 +68,7 @@ def wizard_controls(flow_token: str) -> InlineKeyboardMarkup:
         ]
     )
 
-MAIN_MENU_ACCOUNT = "👤 حساب مدیریتی من"
+MAIN_MENU_ACCOUNT = "🎓 کلاس من · دهم ۱۰۴"
 MAIN_MENU_SCHOOLS = "🏫 مدیریت مدارس و کلاس‌ها"
 MAIN_MENU_HELP = "❓ راهنما"
 MAIN_MENU_REPORTS = "📊 داشبورد و گزارش‌ها"
@@ -255,7 +255,10 @@ async def root_menu_button_handler(
     await _hide_root_keyboard(message)
 
     if selected == MAIN_MENU_ACCOUNT:
-        await _show_account_panel(message, principal)
+        await message.answer(
+            "پنل مستقیم کلاس دهم ۱۰۴ از دیتابیس ClassMate قابل دریافت نیست. "
+            "اتصال دیتابیس اصلی را بررسی کنید."
+        )
     elif selected == MAIN_MENU_SCHOOLS:
         await _show_tenant_list(message, principal, db)
     elif selected == MAIN_MENU_HELP:
