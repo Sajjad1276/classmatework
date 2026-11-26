@@ -221,7 +221,7 @@ async def _render_class_subject_panel(
         [
             InlineKeyboardButton(
                 text="⬅️ بازگشت به کلاس",
-                callback_data="school:groups",
+                callback_data="product:schools",
             )
         ]
     )
