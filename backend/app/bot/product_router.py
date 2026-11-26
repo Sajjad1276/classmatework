@@ -6,7 +6,6 @@ import re
 import secrets
 
 from aiogram import F, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -292,7 +291,6 @@ async def _show_school_directory(
 
 
 @router.message(F.text == SCHOOLS_BUTTON)
-@router.message(Command("schools"))
 async def schools_button_handler(
     message: Message,
     principal: TelegramPrincipal,
@@ -341,12 +339,11 @@ async def _begin_school_creation(
     await state.set_state(SchoolCreation.name)
     await message.answer(
         "نام مدرسه را وارد کنید (۲ تا ۱۸۰ نویسه):\n\n"
-        "برای لغو، /cancel را بفرستید."
+        "برای لغو فرم یا بازگشت به پنل اصلی، دستور /start را بفرستید."
     )
 
 
 @router.message(F.text == CREATE_SCHOOL_BUTTON)
-@router.message(Command("school_create"))
 async def school_create_button_handler(
     message: Message,
     principal: TelegramPrincipal,
@@ -378,34 +375,6 @@ async def school_create_callback(
             db=db,
             state=state,
         )
-
-
-@router.message(Command("cancel"), SchoolCreation.name)
-@router.message(Command("cancel"), SchoolCreation.confirm)
-@router.message(Command("cancel"), SchoolEditing.name)
-@router.message(Command("cancel"), SchoolEditing.confirm)
-async def school_creation_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("ایجاد مدرسه لغو شد؛ هیچ تغییری ثبت نشد.")
-
-
-@router.message(Command("cancel"), ClassCreation.name)
-@router.message(Command("cancel"), ClassCreation.grade)
-@router.message(Command("cancel"), ClassCreation.section)
-@router.message(Command("cancel"), ClassCreation.confirm)
-@router.message(Command("cancel"), ClassEditing.name)
-@router.message(Command("cancel"), ClassEditing.grade)
-@router.message(Command("cancel"), ClassEditing.section)
-@router.message(Command("cancel"), ClassEditing.confirm)
-async def class_creation_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("ایجاد کلاس لغو شد؛ هیچ تغییری ثبت نشد.")
 
 
 @router.message(SchoolCreation.name, F.text)
@@ -814,35 +783,6 @@ async def product_class_create_callback(
             state=state,
             school_id=school_id,
         )
-
-
-@router.message(Command("cancel"), SubjectCreation.name)
-@router.message(Command("cancel"), TimetableCreation.weekday)
-@router.message(Command("cancel"), TimetableCreation.subject)
-@router.message(Command("cancel"), TimetableCreation.period)
-@router.message(Command("cancel"), TimetableCreation.time_range)
-@router.message(Command("cancel"), TimetableCreation.room)
-@router.message(Command("cancel"), TimetableCreation.confirm)
-async def class_configuration_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("عملیات مدیریت کلاس لغو شد؛ تغییری ثبت نشد.")
-
-
-@router.message(Command("cancel"), MemberCreation.telegram_id)
-@router.message(Command("cancel"), MemberCreation.full_name)
-@router.message(Command("cancel"), MemberCreation.confirm)
-@router.message(Command("cancel"), AnnouncementCreation.title)
-@router.message(Command("cancel"), AnnouncementCreation.body)
-@router.message(Command("cancel"), AnnouncementCreation.confirm)
-async def member_announcement_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("عملیات لغو شد؛ تغییری ثبت نشد.")
 
 
 @router.message(ClassCreation.name, F.text)
