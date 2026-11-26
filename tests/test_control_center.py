@@ -542,7 +542,7 @@ async def test_platform_report_reads_private_starts_and_activity_from_live_class
         assert report["active_memberships"] == 4
         assert report["new_users_1d"] == 1
         assert report["new_users_7d"] == 1
-        assert report["new_users_30d"] == 2
+        assert report["new_users_30d"] == 3
         assert report["active_users_1h"] == 1
         assert report["active_users_4h"] == 2
         assert report["active_users_12h"] == 2
