@@ -1991,28 +1991,63 @@ async def _show_tenant_directory(
     *,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    page: int = 1,
 ) -> None:
+    if page < 1:
+        await message.answer("شماره صفحه معتبر نیست.")
+        return
     try:
-        tenants = await list_tenants(db, actor_id=principal.user.id, limit=50)
+        tenants = await list_tenants(
+            db,
+            actor_id=principal.user.id,
+            limit=9,
+            offset=(page - 1) * 8,
+        )
     except AccessDenied:
         tenants = await list_accessible_tenants(
             db,
             actor_id=principal.user.id,
-            limit=50,
+            limit=9,
+            offset=(page - 1) * 8,
         )
 
+    has_next = len(tenants) > 8
+    visible = tenants[:8]
     rows = [
-        [InlineKeyboardButton(
-            text=f"{tenant.name} · {tenant.slug}",
-            callback_data=f"tenant:open:{tenant.id}",
-        )]
-        for tenant in tenants
+        [
+            InlineKeyboardButton(
+                text=f"{tenant.name} · {tenant.slug}",
+                callback_data=f"tenant:open:{tenant.id}",
+            )
+        ]
+        for tenant in visible
     ]
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"tenant:directory:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"tenant:directory:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="structure:root")])
     body = (
-        "🏫 مدیریت مدارس و کلاس‌ها\n\nمجموعه را انتخاب کنید:"
-        if tenants
-        else "هنوز مجموعه‌ای ثبت نشده است."
+        f"🏫 مدیریت مدارس و کلاس‌ها\n\nصفحه: {page}\nمجموعه را انتخاب کنید:"
+        if visible
+        else (
+            "هنوز مجموعه‌ای ثبت نشده است."
+            if page == 1
+            else "مجموعه‌ای در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
     )
     await _render_panel(
         message,
@@ -2021,7 +2056,7 @@ async def _show_tenant_directory(
     )
 
 
-@router.callback_query(F.data == "tenant:directory")
+@router.callback_query(F.data.regexp(r"^tenant:directory(?::[1-9][0-9]*)?$"))
 async def tenant_directory_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2032,10 +2067,13 @@ async def tenant_directory_callback(
     if callback.message is not None:
         await _clear_flow(state)
         await state.set_data({})
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
         await _show_tenant_directory(
             callback.message,
             principal=principal,
             db=db,
+            page=page,
         )
 
 @router.callback_query(F.data.startswith("tenant:open:"))
@@ -2133,7 +2171,7 @@ async def structure_root_callback(
         )
 
 
-@router.callback_query(F.data == "school:list")
+@router.callback_query(F.data.regexp(r"^school:list(?::[1-9][0-9]*)?$"))
 async def school_list_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2141,24 +2179,50 @@ async def school_list_callback(
     state: FSMContext,
 ) -> None:
     try:
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
+        if page < 1:
+            raise ValueError
         tenant_id, _, _ = await _context_ids(state)
-        schools = await list_schools(
+        fetched = await list_schools(
             db,
             actor_id=principal.user.id,
             tenant_id=tenant_id,
-            limit=50,
+            limit=9,
+            offset=(page - 1) * 8,
         )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    schools = fetched[:8]
     rows = [
-        [InlineKeyboardButton(
-            text=f"{school.name} · {school.code}",
-            callback_data=f"school:open:{school.id}",
-        )]
+        [
+            InlineKeyboardButton(
+                text=f"{school.name} · {school.code}",
+                callback_data=f"school:open:{school.id}",
+            )
+        ]
         for school in schools
     ]
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"school:list:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"school:list:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     if await has_permission(
         db,
         user_id=principal.user.id,
@@ -2172,9 +2236,13 @@ async def school_list_callback(
 
     await callback.answer()
     body = (
-        f"🏫 مدارس مجموعه\n\nتعداد مدارس: {len(schools)}"
+        f"🏫 مدارس مجموعه\n\nصفحه: {page} · تعداد در این صفحه: {len(schools)}"
         if schools
-        else "هنوز مدرسه‌ای در این مجموعه ثبت نشده است."
+        else (
+            "هنوز مدرسه‌ای در این مجموعه ثبت نشده است."
+            if page == 1
+            else "مدرسه‌ای در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
     )
     if callback.message is not None:
         await _render_panel(
@@ -2182,6 +2250,7 @@ async def school_list_callback(
             body,
             InlineKeyboardMarkup(inline_keyboard=rows),
         )
+
 
 @router.callback_query(F.data.startswith("school:open:"))
 async def school_open_callback(
@@ -2284,7 +2353,7 @@ async def school_create_start(
         )
 
 
-@router.callback_query(F.data == "year:list")
+@router.callback_query(F.data.regexp(r"^year:list(?::[1-9][0-9]*)?$"))
 async def academic_year_list_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2292,27 +2361,53 @@ async def academic_year_list_callback(
     state: FSMContext,
 ) -> None:
     try:
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
+        if page < 1:
+            raise ValueError
         tenant_id, school_id, _ = await _context_ids(state)
         if school_id is None:
             raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
-        years = await list_academic_years(
+        fetched = await list_academic_years(
             db,
             actor_id=principal.user.id,
             tenant_id=tenant_id,
             school_id=school_id,
-            limit=50,
+            limit=9,
+            offset=(page - 1) * 8,
         )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    years = fetched[:8]
     rows = [
-        [InlineKeyboardButton(
-            text=f"{year.name} · {year.status}",
-            callback_data=f"year:open:{year.id}",
-        )]
+        [
+            InlineKeyboardButton(
+                text=f"{year.name} · {year.status}",
+                callback_data=f"year:open:{year.id}",
+            )
+        ]
         for year in years
     ]
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"year:list:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"year:list:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     if await _has_school_permission(
         db,
         actor_id=principal.user.id,
@@ -2325,9 +2420,13 @@ async def academic_year_list_callback(
 
     await callback.answer()
     body = (
-        f"📅 سال‌های تحصیلی\n\nتعداد: {len(years)}"
+        f"📅 سال‌های تحصیلی\n\nصفحه: {page} · تعداد در این صفحه: {len(years)}"
         if years
-        else "هنوز سال تحصیلی ثبت نشده است. برای ساخت کلاس ابتدا یک سال تحصیلی بسازید."
+        else (
+            "هنوز سال تحصیلی ثبت نشده است. برای ساخت کلاس ابتدا یک سال تحصیلی بسازید."
+            if page == 1
+            else "سالی در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
     )
     if callback.message is not None:
         await _render_panel(
@@ -2335,6 +2434,7 @@ async def academic_year_list_callback(
             body,
             InlineKeyboardMarkup(inline_keyboard=rows),
         )
+
 
 @router.callback_query(F.data.startswith("year:open:"))
 async def academic_year_open_callback(
@@ -2443,7 +2543,7 @@ async def academic_year_create_start(
         )
 
 
-@router.callback_query(F.data == "subject:list")
+@router.callback_query(F.data.regexp(r"^subject:list(?::[1-9][0-9]*)?$"))
 async def subject_list_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2451,24 +2551,53 @@ async def subject_list_callback(
     state: FSMContext,
 ) -> None:
     try:
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
+        if page < 1:
+            raise ValueError
         tenant_id, school_id, _ = await _context_ids(state)
         if school_id is None:
             raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
-        subjects = await list_subjects(
+        fetched = await list_subjects(
             db,
             actor_id=principal.user.id,
             tenant_id=tenant_id,
             school_id=school_id,
-            limit=100,
+            limit=9,
+            offset=(page - 1) * 8,
         )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    subjects = fetched[:8]
     rows = [
-        [InlineKeyboardButton(text=f"{subject.name} · {subject.code}", callback_data=f"subject:open:{subject.id}")]
+        [
+            InlineKeyboardButton(
+                text=f"{subject.name} · {subject.code}",
+                callback_data=f"subject:open:{subject.id}",
+            )
+        ]
         for subject in subjects
     ]
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"subject:list:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"subject:list:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     if await _has_school_permission(
         db,
         actor_id=principal.user.id,
@@ -2480,9 +2609,21 @@ async def subject_list_callback(
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="school:menu")])
 
     await callback.answer()
-    body = f"📚 درس‌های مدرسه\n\nتعداد: {len(subjects)}" if subjects else "هنوز درسی ثبت نشده است."
+    body = (
+        f"📚 درس‌های مدرسه\n\nصفحه: {page} · تعداد در این صفحه: {len(subjects)}"
+        if subjects
+        else (
+            "هنوز درسی ثبت نشده است."
+            if page == 1
+            else "درسی در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
+    )
     if callback.message is not None:
-        await _render_panel(callback.message, body, InlineKeyboardMarkup(inline_keyboard=rows))
+        await _render_panel(
+            callback.message,
+            body,
+            InlineKeyboardMarkup(inline_keyboard=rows),
+        )
 
 
 @router.callback_query(F.data.startswith("subject:open:"))
@@ -2564,7 +2705,7 @@ async def subject_create_start(
         )
 
 
-@router.callback_query(F.data == "class:list")
+@router.callback_query(F.data.regexp(r"^class:list(?::[1-9][0-9]*)?$"))
 async def class_list_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2572,28 +2713,54 @@ async def class_list_callback(
     state: FSMContext,
 ) -> None:
     try:
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
+        if page < 1:
+            raise ValueError
         tenant_id, school_id, year_id = await _context_ids(state)
         if school_id is None:
             raise ResourceNotFound("ابتدا مدرسه را انتخاب کنید.")
-        classes = await list_classes(
+        fetched = await list_classes(
             db,
             actor_id=principal.user.id,
             tenant_id=tenant_id,
             school_id=school_id,
             academic_year_id=year_id,
-            limit=100,
+            limit=9,
+            offset=(page - 1) * 8,
         )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    classes = fetched[:8]
     rows = [
-        [InlineKeyboardButton(
-            text=f"{item.name} · پایه {item.grade}",
-            callback_data=f"class:open:{item.id}",
-        )]
+        [
+            InlineKeyboardButton(
+                text=f"{item.name} · پایه {item.grade}",
+                callback_data=f"class:open:{item.id}",
+            )
+        ]
         for item in classes
     ]
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"class:list:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"class:list:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     if await _has_school_permission(
         db,
         actor_id=principal.user.id,
@@ -2608,7 +2775,15 @@ async def class_list_callback(
 
     await callback.answer()
     heading = "کلاس‌های سال انتخاب‌شده" if year_id is not None else "کلاس‌های مدرسه"
-    body = f"🏫 {heading}\n\nتعداد کلاس‌ها: {len(classes)}" if classes else "در این محدوده کلاسی ثبت نشده است."
+    body = (
+        f"🏫 {heading}\n\nصفحه: {page} · تعداد در این صفحه: {len(classes)}"
+        if classes
+        else (
+            "در این محدوده کلاسی ثبت نشده است."
+            if page == 1
+            else "کلاسی در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
+    )
     if callback.message is not None:
         await _render_panel(
             callback.message,
