@@ -530,6 +530,25 @@ class RoleBinding(Base):
 
 
 
+class ClassJoinCodeSecret(Base):
+    """Admin-side clear-text copy for displaying a stable class join code."""
+
+    __tablename__ = "class_join_code_secrets"
+    __table_args__ = (
+        UniqueConstraint("join_code_hash", name="uq_class_join_code_secrets_hash"),
+    )
+
+    class_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    join_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    join_code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
 class ProcessedTelegramUpdate(Base):
     __tablename__ = "processed_telegram_updates"
     __table_args__ = (
