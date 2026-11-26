@@ -79,7 +79,7 @@ def _is_owner_class_shortcut_candidate(item: dict) -> bool:
 
     name = _normalize_class_shortcut_label(item.get("name"))
     section = _normalize_class_shortcut_label(item.get("section"))
-    return name in {"104", "کلاس104", "دهم104", "پایهدهم104", "کلاسدهم104"} or section == "104"
+    return name.endswith("104") or section == "104"
 
 
 def _class_join_start_url(code: str) -> str | None:
