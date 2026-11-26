@@ -1703,6 +1703,11 @@ async def owner_class_shortcut_handler(
         async with product_session_factory() as product_db:
             candidates = await list_product_class_shortcut_candidates(product_db)
             matches = [item for item in candidates if _is_owner_class_shortcut_candidate(item)]
+            current_year_matches = [
+                item for item in matches if item.get("is_current_academic_year")
+            ]
+            if current_year_matches:
+                matches = current_year_matches
             if not matches:
                 await message.answer(
                     "کلاس فعال «دهم ۱۰۴» در دیتابیس ClassMate پیدا نشد. "
@@ -1713,7 +1718,10 @@ async def owner_class_shortcut_handler(
                 rows = [
                     [
                         InlineKeyboardButton(
-                            text=f"{item['school_name']} · {item['name']} · {item['grade']}"[:60],
+                            text=(
+                                f"{item['school_name']} · {item['name']} · "
+                                f"{item['grade']} · {item.get('academic_year_name') or 'سال نامشخص'}"
+                            )[:60],
                             callback_data=f"product:class:{item['id']}",
                         )
                     ]
