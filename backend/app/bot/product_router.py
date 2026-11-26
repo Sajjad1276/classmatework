@@ -165,6 +165,10 @@ class BulkJoinCodeWizard(StatesGroup):
     confirm = State()
 
 
+class MemberRoleChangeWizard(StatesGroup):
+    confirm = State()
+
+
 class TimetableCreation(StatesGroup):
     weekday = State()
     subject = State()
@@ -3115,18 +3119,90 @@ async def product_class_member_role_confirm_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+    state: FSMContext,
 ) -> None:
     if not await _require_private_callback(callback, "تغییر نقش عضو"):
         return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
         return
+    parts = (callback.data or "").split(":")
+    class_id, user_id, role = int(parts[1]), int(parts[2]), parts[3]
+    role_labels = {
+        "student": "دانش‌آموز",
+        "class_manager": "مدیر کلاس",
+        "trusted_approver": "تأییدکننده",
+    }
+    if role not in role_labels:
+        await callback.answer("نقش انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        member_role_change_token=token,
+        member_role_change_class_id=class_id,
+        member_role_change_user_id=user_id,
+        member_role_change_role=role,
+    )
+    await state.set_state(MemberRoleChangeWizard.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش تغییر نقش عضو\n\n"
+            f"شناسه کلاس: {class_id}\n"
+            f"شناسه عضو: {user_id}\n"
+            f"نقش جدید: {role_labels[role]}\n\n"
+            "با تأیید، نقش عضویت این کاربر در همین کلاس تغییر می‌کند. ادامه می‌دهید؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید تغییر نقش",
+                            callback_data=f"pmrc:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"pmrx:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("pmrc:"))
+async def product_class_member_role_apply_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberRoleChangeWizard.confirm.state
+        or not token
+        or token != data.get("member_role_change_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _require_private_callback(callback, "تغییر نقش عضو"):
+        return
+    if not await _has_permission(db, principal, "platform:members:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
+        return
     if product_session_factory is None:
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
-    parts = (callback.data or "").split(":")
-    class_id, user_id, role = int(parts[1]), int(parts[2]), parts[3]
+
+    class_id = int(data.get("member_role_change_class_id") or 0)
+    user_id = int(data.get("member_role_change_user_id") or 0)
+    role = str(data.get("member_role_change_role") or "")
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -3141,7 +3217,7 @@ async def product_class_member_role_confirm_callback(
         return
     except Exception:
         logger.exception("Could not set ClassMate class member role.")
-        await callback.answer("تغییر نقش عضو ناموفق بود.", show_alert=True)
+        await callback.answer("تغییر نقش عضو ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
     if not changed:
         await callback.answer("عضویت فعال پیدا نشد.", show_alert=True)
@@ -3158,10 +3234,11 @@ async def product_class_member_role_confirm_callback(
     except Exception:
         await db.rollback()
         logger.exception("Class member role audit recording failed.")
-    await callback.answer("نقش عضو تغییر کرد.")
+    await state.clear()
+    await callback.answer("نقش عضو پس از تأیید تغییر کرد.")
     if callback.message is not None:
         await callback.message.edit_text(
-            "نقش عضو تغییر کرد.",
+            "✅ نقش عضو تغییر کرد.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -3175,6 +3252,37 @@ async def product_class_member_role_confirm_callback(
         )
 
 
+@router.callback_query(F.data.startswith("pmrx:"))
+async def product_class_member_role_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberRoleChangeWizard.confirm.state
+        or not token
+        or token != data.get("member_role_change_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("member_role_change_class_id") or 0)
+    await state.clear()
+    await callback.answer("تغییر نقش لغو شد؛ نقش فعلی حفظ شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "تغییر نقش لغو شد؛ هیچ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="👥 بازگشت به اعضای کلاس",
+                            callback_data=f"product:members:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
 
 
 @router.callback_query(F.data.regexp(r"^product:records:[0-9]+(?::[1-9][0-9]*)?$"))
