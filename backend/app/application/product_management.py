@@ -118,7 +118,9 @@ async def list_product_class_shortcut_candidates(db: AsyncSession) -> list[dict]
                 c.name,
                 c.grade,
                 c.section,
-                s.name AS school_name
+                s.name AS school_name,
+                ay.name AS academic_year_name,
+                ay.is_current AS is_current_academic_year
             FROM public.classes AS c
             JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
             JOIN public.schools AS s ON s.id = ay.school_id
