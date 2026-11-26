@@ -1416,6 +1416,23 @@ async def issue_product_class_join_code(
 
 
 
+async def count_missing_product_class_join_codes(db: AsyncSession) -> int:
+    result = await db.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM public.classes AS c
+            JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE c.member_join_code_hash IS NULL
+              AND c.is_active IS TRUE
+              AND s.is_active IS TRUE
+            """
+        )
+    )
+    return int(result.scalar_one() or 0)
+
+
 async def issue_missing_product_class_join_codes(
     db: AsyncSession,
     *,
