@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import binascii
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -14,7 +15,7 @@ from aiogram.types import (
     Message,
     ReplyKeyboardRemove,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.control_center import (
     get_class_subject_catalog,
@@ -26,6 +27,7 @@ from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="control-center")
+logger = logging.getLogger(__name__)
 TEHRAN = ZoneInfo("Asia/Tehran")
 
 
@@ -33,35 +35,65 @@ def _report_text(report: dict) -> str:
     generated = report["generated_at"].astimezone(TEHRAN)
     return (
         "╔  🤖 آمار سامانه ClassMate\n"
+        "║  منبع: دیتابیس زنده ربات اصلی ClassMate\n"
         "║\n"
-        f"╣  👥 کل کاربران: {report['total_users']:,} نفر\n"
-        f"╣  ✅ کاربران فعال حساب: {report['active_users']:,} نفر\n"
+        f"╣  👥 کل حساب‌های ثبت‌شده: {report['total_users']:,}\n"
+        f"╣  🚀 شروع‌کنندگان ربات در چت خصوصی: {report['started_users']:,}\n"
+        f"╣  ✅ حساب‌های فعال: {report['active_users']:,}\n"
+        f"╣  🟢 شروع‌کنندگانِ دارای حساب فعال: {report['active_started_users']:,}\n"
         "║\n"
-        "╣  📥 کاربران جدید در روز / هفته / ماه گذشته:\n"
-        f"╣  {report['new_users_1d']:,} / {report['new_users_7d']:,} / {report['new_users_30d']:,} نفر\n"
+        f"╣  🎓 دانش‌آموزان دارای عضویت فعال: {report['active_students']:,}\n"
+        f"╣  🔗 کل عضویت‌های فعال در کلاس‌ها: {report['active_memberships']:,}\n"
         "║\n"
-        "╣  📡 کاربران فعال در یک / چهار / دوازده ساعت گذشته:\n"
-        f"╣  {report['active_users_1h']:,} / {report['active_users_4h']:,} / {report['active_users_12h']:,} نفر\n"
+        "╣  🆕 حساب‌های ثبت‌شده در روز / هفته / ماه گذشته:\n"
+        f"╣  {report['new_users_1d']:,} / {report['new_users_7d']:,} / {report['new_users_30d']:,}\n"
         "║\n"
-        f"╣  🏫 مدارس: {report['schools']:,}\n"
-        f"╣  👥 کلاس‌ها: {report['classes']:,}\n"
+        "╣  📡 کاربرانِ دارای تعامل خصوصی در یک / چهار / دوازده / بیست‌وچهار ساعت گذشته:\n"
+        f"╣  {report['active_users_1h']:,} / {report['active_users_4h']:,} / "
+        f"{report['active_users_12h']:,} / {report['active_users_24h']:,}\n"
+        "║\n"
+        f"╣  🏫 مدارس: {report['schools']:,} (فعال: {report['active_schools']:,})\n"
+        f"╣  👥 کلاس‌ها: {report['classes']:,} (فعال: {report['active_classes']:,})\n"
         f"╣  📚 درس‌ها: {report['subjects']:,}\n"
         f"╣  🔗 گروه‌های متصل به کلاس: {report['connected_groups']:,}\n"
-        f"╣  📡 رویدادهای ثبت‌شده در ۲۴ ساعت: {report['events_24h']:,}\n"
+        f"╣  🧾 رخدادهای تحلیلی ثبت‌شده در Work طی ۲۴ ساعت: {report['events_24h']:,}\n"
         "║\n"
         f"╚  🗓 {generated:%Y-%m-%d}   ⏰ {generated:%H:%M}"
     )
+
+
+async def _load_platform_report(
+    db: AsyncSession,
+    principal: TelegramPrincipal,
+    product_session_factory: async_sessionmaker[AsyncSession] | None,
+) -> dict:
+    if product_session_factory is None:
+        raise ApplicationError("اتصال دیتابیس اصلی ClassMate فعال نیست؛ آمار زنده قابل دریافت نیست.")
+    async with product_session_factory() as product_db:
+        return await get_platform_report(
+            db,
+            actor_id=principal.user.id,
+            product_db=product_db,
+        )
 
 
 async def _show_reports(
     message: Message,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None,
 ) -> None:
     try:
-        report = await get_platform_report(db, actor_id=principal.user.id)
+        report = await _load_platform_report(db, principal, product_session_factory)
     except ApplicationError as exc:
         await message.answer(str(exc))
+        return
+    except Exception:
+        logger.exception("Could not build the live ClassMate platform report.")
+        await message.answer(
+            "دریافت آمار از دیتابیس اصلی ClassMate ناموفق بود. "
+            "هیچ عدد جایگزین یا تخمینی نمایش داده نشد."
+        )
         return
 
     keyboard = InlineKeyboardMarkup(
@@ -86,9 +118,10 @@ async def reports_menu_button(
     message: Message,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     await _hide_root_keyboard(message)
-    await _show_reports(message, principal, db)
+    await _show_reports(message, principal, db, product_session_factory)
 
 
 @router.callback_query(F.data == "control:reports:refresh")
@@ -96,11 +129,19 @@ async def reports_refresh_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     try:
-        report = await get_platform_report(db, actor_id=principal.user.id)
+        report = await _load_platform_report(db, principal, product_session_factory)
     except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not refresh the live ClassMate platform report.")
+        await callback.answer(
+            "دریافت آمار از دیتابیس اصلی ClassMate ناموفق بود.",
+            show_alert=True,
+        )
         return
 
     await callback.answer("گزارش بروزرسانی شد.")
