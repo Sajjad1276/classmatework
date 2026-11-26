@@ -26,6 +26,7 @@ from app.application.class_join_codes import (
 from app.application.errors import ApplicationError, ResourceConflict
 from app.application.product_management import (
     add_product_class_member,
+    count_missing_product_class_join_codes,
     create_and_assign_product_subject,
     create_product_announcement,
     create_product_class,
@@ -157,6 +158,10 @@ class JoinCodeIssue(StatesGroup):
 
 
 class JoinCodeRotation(StatesGroup):
+    confirm = State()
+
+
+class BulkJoinCodeWizard(StatesGroup):
     confirm = State()
 
 
@@ -623,66 +628,15 @@ async def school_create_cancel_callback(
 
 
 @router.callback_query(F.data == "product:classes:join-codes:missing")
-async def product_missing_class_join_codes_callback(
+async def _render_bulk_join_code_result(
     callback: CallbackQuery,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+    issued: list[dict],
 ) -> None:
-    if not await _require_private_callback(callback, "صدور کد ورود کلاس‌ها"):
-        return
-    if not await _has_permission(db, principal, "platform:classes:manage"):
-        await callback.answer("مجوز صدور کد ورود کلاس‌ها را ندارید.", show_alert=True)
-        return
-    if product_session_factory is None:
-        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
-        return
-
-    try:
-        async with product_session_factory() as product_db:
-            async with product_db.begin():
-                issued = await issue_missing_product_class_join_codes(
-                    product_db,
-                    limit=2000,
-                )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    except Exception:
-        logger.exception("Could not issue missing ClassMate class join codes.")
-        await callback.answer("صدور گروهی کدهای ورود ناموفق بود.", show_alert=True)
-        return
-
-    if issued:
-        try:
-            for item in issued:
-                await store_class_join_code_secret(
-                    db,
-                    class_id=item["class_id"],
-                    code=item["join_code"],
-                )
-            await record_event(
-                db,
-                event_type="product.class.member_join_codes_backfilled",
-                actor_id=principal.user.id,
-                aggregate_type="platform",
-                event_data={
-                    "issued_count": len(issued),
-                    "class_ids": [item["class_id"] for item in issued],
-                },
-            )
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            logger.exception("Bulk class join-code audit recording failed.")
-
-    await callback.answer(f"برای {len(issued)} کلاس کد صادر شد." if issued else "کدی کم نبود.")
     if callback.message is None:
         return
-
     if not issued:
         await callback.message.edit_text(
-            "✅ همهٔ کلاس‌های فعال از قبل کد ورود دارند؛ کدی تغییر نکرد.",
+            "✅ در زمان تأیید، کدِ فاقد کد دیگری باقی نمانده بود؛ هیچ تغییری اعمال نشد.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
@@ -720,6 +674,180 @@ async def product_missing_class_join_codes_callback(
             for item in chunk
         )
         await callback.message.answer(body, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "product:classes:join-codes:missing")
+async def product_missing_class_join_codes_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _require_private_callback(callback, "صدور کد ورود کلاس‌ها"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await callback.answer("مجوز صدور کد ورود کلاس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    try:
+        async with product_session_factory() as product_db:
+            missing_count = await count_missing_product_class_join_codes(product_db)
+    except Exception:
+        logger.exception("Could not count missing ClassMate class join codes.")
+        await callback.answer("بررسی تعداد کدهای فاقد مقدار ناموفق بود.", show_alert=True)
+        return
+
+    if missing_count == 0:
+        await callback.answer("همهٔ کلاس‌های فعال کد ورود دارند.")
+        if callback.message is not None:
+            await callback.message.edit_text(
+                "✅ همهٔ کلاس‌های فعال از قبل کد ورود دارند؛ کدی تغییر نکرد.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
+                    ]
+                ),
+            )
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        bulk_join_code_token=token,
+        bulk_join_code_preview_count=missing_count,
+    )
+    await state.set_state(BulkJoinCodeWizard.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        capped_count = min(missing_count, 2000)
+        cap_note = (
+            "\nبه‌دلیل سقف هر عملیات، فقط ۲۰۰۰ کلاس اول بررسی و پردازش می‌شوند."
+            if missing_count > 2000
+            else ""
+        )
+        await callback.message.edit_text(
+            "پیش‌نمایش صدور گروهی کد ورود\n\n"
+            f"کلاس‌های فعال فاقد کد: {missing_count}\n"
+            f"حداکثر صدور در این عملیات: {capped_count}\n\n"
+            "کدهای موجود تغییر نمی‌کنند. برای هر کلاس فاقد کد یک کد مستقل ساخته می‌شود."
+            f"{cap_note}\n\n"
+            "با تأیید صریح، صدور گروهی آغاز می‌شود. ادامه می‌دهید؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید صدور گروهی",
+                            callback_data=f"product:classes:join-codes:confirm:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"product:classes:join-codes:cancel:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:classes:join-codes:confirm:"))
+async def product_missing_class_join_codes_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != BulkJoinCodeWizard.confirm.state
+        or not token
+        or token != data.get("bulk_join_code_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _require_private_callback(callback, "صدور کد ورود کلاس‌ها"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await state.clear()
+        await callback.answer("مجوز صدور کد ورود کلاس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                issued = await issue_missing_product_class_join_codes(
+                    product_db,
+                    limit=2000,
+                )
+        if issued:
+            for item in issued:
+                await store_class_join_code_secret(
+                    db,
+                    class_id=item["class_id"],
+                    code=item["join_code"],
+                )
+            await record_event(
+                db,
+                event_type="product.class.member_join_codes_backfilled",
+                actor_id=principal.user.id,
+                aggregate_type="platform",
+                event_data={
+                    "issued_count": len(issued),
+                    "class_ids": [item["class_id"] for item in issued],
+                    "previewed_count": data.get("bulk_join_code_preview_count"),
+                },
+            )
+            await db.commit()
+    except ApplicationError as exc:
+        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        await db.rollback()
+        logger.exception("Could not issue missing ClassMate class join codes.")
+        await callback.answer("صدور گروهی کدهای ورود ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer(f"برای {len(issued)} کلاس کد صادر شد." if issued else "کدی کم نبود.")
+    await _render_bulk_join_code_result(callback, issued)
+
+
+@router.callback_query(F.data.startswith("product:classes:join-codes:cancel:"))
+async def product_missing_class_join_codes_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != BulkJoinCodeWizard.confirm.state
+        or not token
+        or token != data.get("bulk_join_code_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("صدور گروهی لغو شد؛ هیچ کدی صادر نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "صدور گروهی کدها لغو شد؛ هیچ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
+                ]
+            ),
+        )
 
 
 @router.callback_query(F.data.regexp(r"^product:school:[0-9]+(?::page:[1-9][0-9]*)?$"))
