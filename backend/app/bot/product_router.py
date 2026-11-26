@@ -9,13 +9,14 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app.bot.ux import add_wizard_cancel, ensure_back_button, wizard_controls as shared_wizard_controls
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
     Message,
     ReplyKeyboardRemove,
+)
+from aiogram.types import (
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -53,6 +54,7 @@ from app.application.product_management import (
     update_product_class,
     update_product_school,
 )
+from app.bot.ux import add_wizard_cancel, ensure_back_button, wizard_controls as shared_wizard_controls
 from app.core.config import get_settings
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
@@ -992,6 +994,30 @@ async def product_school_detail_callback(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
+
+
+async def _begin_class_creation(
+    message: Message,
+    *,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    school_id: int,
+) -> None:
+    if not await _has_permission(db, principal, "platform:classes:create"):
+        await message.answer("مجوز ایجاد کلاس را ندارید.")
+        return
+    await state.clear()
+    token = secrets.token_urlsafe(8)
+    await state.update_data(
+        product_class_token=token,
+        product_class_school_id=school_id,
+    )
+    await state.set_state(ClassCreation.name)
+    await message.answer(
+        "نام کلاس را وارد کنید (۲ تا ۸۰ نویسه):",
+        reply_markup=shared_wizard_controls(),
+    )
 
 
 @router.callback_query(F.data.regexp(r"^product:class:create:[0-9]+$"))
