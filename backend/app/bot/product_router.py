@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import secrets
 
@@ -561,12 +562,13 @@ async def product_missing_class_join_codes_callback(
         "",
     ]
     first_lines.extend(
-        f"🏫 {item['school_name']} · {item['class_name']}\n"
-        f"<code>/join {item['join_code']}</code>"
+        f"🏫 {html.escape(str(item['school_name']))} · {html.escape(str(item['class_name']))}\n"
+        f"<code>/join {html.escape(str(item['join_code']))}</code>"
         for item in chunks[0]
     )
     await callback.message.edit_text(
         "\n\n".join(first_lines),
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
@@ -575,11 +577,11 @@ async def product_missing_class_join_codes_callback(
     )
     for chunk in chunks[1:]:
         body = "\n\n".join(
-            f"🏫 {item['school_name']} · {item['class_name']}\n"
-            f"<code>/join {item['join_code']}</code>"
+            f"🏫 {html.escape(str(item['school_name']))} · {html.escape(str(item['class_name']))}\n"
+            f"<code>/join {html.escape(str(item['join_code']))}</code>"
             for item in chunk
         )
-        await callback.message.answer(body)
+        await callback.message.answer(body, parse_mode="HTML")
 
 
 @router.callback_query(F.data.regexp(r"^product:school:[0-9]+$"))
@@ -920,11 +922,12 @@ async def product_class_create_confirm_callback(
         await callback.message.edit_text(
             f"✅ {notice}کلاس ایجاد شد.\n\n"
             f"شناسه: {school_class['id']}\n"
-            f"نام: {school_class['name']}\n"
-            f"پایه: {school_class['grade']}\n\n"
+            f"نام: {html.escape(str(school_class['name']))}\n"
+            f"پایه: {html.escape(str(school_class['grade']))}\n\n"
             "🔑 کد ورود مشترک دانش‌آموزان این کلاس:\n"
-            f"<code>/join {school_class['member_join_code']}</code>\n\n"
+            f"<code>/join {html.escape(str(school_class['member_join_code']))}</code>\n\n"
             "این کد تا زمان تغییر از پنل کلاس فعال می‌ماند.",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -1764,11 +1767,12 @@ async def product_class_join_code_issue_callback(
     if callback.message is not None:
         await callback.message.edit_text(
             "🔑 <b>کد مشترک ورود به کلاس</b>\n\n"
-            f"کلاس: {code_info['name']}\n"
+            f"کلاس: {html.escape(str(code_info['name']))}\n"
             "هر دانش‌آموز برای عضویت در همین کلاس از این دستور در گفت‌وگوی خصوصی ربات ClassMate استفاده کند:\n\n"
-            f"<code>/join {raw_code}</code>\n\n"
+            f"<code>/join {html.escape(raw_code)}</code>\n\n"
             "کد برای همهٔ دانش‌آموزان این کلاس مشترک است و تا زمان تغییر از پنل کلاس اعتبار دارد. "
             "با صدور کد جدید، کد قبلی فوراً باطل می‌شود.",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
