@@ -197,6 +197,7 @@ async def test_class_join_code_button_displays_the_existing_code_without_rotatin
         callback,
         principal=principal,
         db=db,
+        state=MemoryState(),
         product_session_factory=lambda: ProductSessionContext(),
     )
 
@@ -285,6 +286,7 @@ async def test_class_join_code_button_rejects_group_chats_before_issuing_code(mo
         callback,
         principal=SimpleNamespace(user=SimpleNamespace(id=42)),
         db=object(),
+        state=MemoryState(),
         product_session_factory=lambda: ProductSessionContext(),
     )
 
@@ -413,6 +415,7 @@ async def test_bulk_class_code_action_is_not_available_in_group_chats(monkeypatc
         callback,
         principal=SimpleNamespace(user=SimpleNamespace(id=42)),
         db=object(),
+        state=MemoryState(),
         product_session_factory=lambda: ProductSessionContext(),
     )
 
