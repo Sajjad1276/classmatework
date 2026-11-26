@@ -80,17 +80,18 @@ def test_class_creation_stores_the_first_stable_code() -> None:
     assert _calls(function, "_class_join_code_message")
 
 
-def test_bulk_backfill_persists_codes_and_renders_html() -> None:
+def test_bulk_backfill_persists_codes_and_renders_html_after_confirmation() -> None:
     tree = _tree()
-    function = _function(tree, "product_missing_class_join_codes_callback")
+    confirm_function = _function(tree, "product_missing_class_join_codes_confirm_callback")
+    render_function = _function(tree, "_render_bulk_join_code_result")
     message_edits = [
         node
-        for node in ast.walk(function)
+        for node in ast.walk(render_function)
         if _is_callback_message_method(node, "edit_text")
     ]
     body_answers = [
         node
-        for node in ast.walk(function)
+        for node in ast.walk(render_function)
         if _is_callback_message_method(node, "answer")
         and node.args
         and isinstance(node.args[0], ast.Name)
@@ -101,19 +102,27 @@ def test_bulk_backfill_persists_codes_and_renders_html() -> None:
     assert any(_has_html_parse_mode(call) for call in message_edits)
     assert body_answers
     assert all(_has_html_parse_mode(call) for call in body_answers)
-    assert _calls(function, "store_class_join_code_secret")
-    assert _calls(function, "_class_join_code_summary")
+    assert _calls(confirm_function, "store_class_join_code_secret")
+    assert _calls(render_function, "_class_join_code_summary")
 
 
-def test_rotation_is_separate_and_replaces_the_product_hash_and_saved_secret() -> None:
+def test_rotation_is_separate_and_replaces_the_product_hash_and_saved_secret_after_confirmation() -> None:
     tree = _tree()
-    function = _function(tree, "product_class_join_code_rotate_callback")
-    source = ast.unparse(function)
+    preview_function = _function(tree, "product_class_join_code_rotate_callback")
+    confirm_function = _function(tree, "product_class_join_code_rotate_confirm_callback")
+    save_function = _function(tree, "_save_new_member_join_code")
+    preview_literals = " ".join(
+        node.value
+        for node in ast.walk(preview_function)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
+    confirm_source = ast.unparse(confirm_function)
 
-    assert _calls(function, "issue_product_class_join_code")
-    assert _calls(function, "store_class_join_code_secret")
-    assert "product.class.member_join_code_rotated" in source
-    assert "کد و لینک قبلی منقضی شدند" in source
+    assert _calls(save_function, "issue_product_class_join_code")
+    assert _calls(save_function, "store_class_join_code_secret")
+    assert "product.class.member_join_code_rotated" in confirm_source
+    assert "تغییر کد ورود کلاس" in preview_literals
+    assert "کد فعلی و لینک‌های عضویت قبلی فوراً نامعتبر می‌شوند" in preview_literals
     assert "product:class:join-code:rotate:" in PRODUCT_ROUTER.read_text(encoding="utf-8")
 
 

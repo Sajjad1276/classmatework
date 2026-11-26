@@ -11,11 +11,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+)
+from aiogram.types import (
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +32,7 @@ from app.application.tenant_access import (
     suspend_tenant_member,
 )
 from app.application.tenants import create_tenant
+from app.bot.ux import ensure_back_button
 from app.db.models import User
 from app.modules.access.policy import has_permission
 from app.modules.identity.pairing import (
@@ -41,10 +44,23 @@ from app.modules.identity.principal import TelegramPrincipal
 router = Router(name="admin")
 
 
+def InlineKeyboardMarkup(*args, **kwargs) -> TelegramInlineKeyboardMarkup:
+    """Create an inline keyboard with a safe back path by default."""
+    return ensure_back_button(TelegramInlineKeyboardMarkup(*args, **kwargs))
+
+
 
 class TenantCreation(StatesGroup):
     name = State()
     confirm = State()
+
+class RoleCreationWizard(StatesGroup):
+    confirm = State()
+
+
+class InviteRevocationWizard(StatesGroup):
+    confirm = State()
+
 
 class MemberSuspension(StatesGroup):
     reason = State()
@@ -290,6 +306,7 @@ async def _show_tenant_step(
     message: Message,
     state: FSMContext,
     step: str,
+    notice: str | None = None,
 ) -> None:
     data = await state.get_data()
     flow_token = data.get("flow_token", "")
@@ -326,6 +343,9 @@ async def _show_tenant_step(
     else:
         body = "نام مجموعه را وارد کنید (۲ تا ۱۸۰ نویسه):"
         keyboard = wizard_controls(flow_token)
+
+    if notice:
+        body = f"⚠️ {notice}\n\n{body}"
 
     prompt_id = data.get("flow_prompt_message_id")
     chat_id = data.get("flow_chat_id") or message.chat.id
@@ -650,7 +670,13 @@ async def member_suspend_start_callback(
                             text="⬅️ بازگشت بدون تغییر",
                             callback_data=f"member:suspend:cancel:{suspend_token}",
                         )
-                    ]
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"member:suspend:cancel:{suspend_token}",
+                        )
+                    ],
                 ]
             ),
         )
@@ -671,7 +697,12 @@ async def member_suspend_reason_input(
 
     reason = (message.text or "").strip()
     if not 10 <= len(reason) <= 500:
-        await message.answer("دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد. دوباره وارد کنید.")
+        flow_token = str(data.get("flow_token") or "")
+        await message.answer(
+            "⚠️ دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد.\n\n"
+            "دلیل تعلیق را دوباره وارد کنید:",
+            reply_markup=wizard_controls(flow_token),
+        )
         return
 
     try:
@@ -834,8 +865,13 @@ async def member_directory_search_callback(
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            "نام عضو یا Telegram ID دقیق را وارد کنید.\n"
-            "برای خروج از فرم یا لغو جست‌وجو، از /start استفاده کنید."
+            "نام عضو یا Telegram ID دقیق را وارد کنید:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+                    [InlineKeyboardButton(text="❌ لغو جست‌وجو", callback_data="ux:cancel")],
+                ]
+            ),
         )
 
 
@@ -848,10 +884,22 @@ async def member_directory_search_input(
 ) -> None:
     search_query = (message.text or "").strip()
     if not search_query:
-        await message.answer("عبارت جست‌وجو خالی است؛ نام یا Telegram ID را وارد کنید.")
+        await message.answer(
+            "⚠️ عبارت جست‌وجو خالی است.\n\nنام یا Telegram ID را وارد کنید:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+                [InlineKeyboardButton(text="❌ لغو جست‌وجو", callback_data="ux:cancel")],
+            ]),
+        )
         return
     if search_query.startswith("/"):
-        await message.answer("عبارت جست‌وجو معتبر نیست؛ برای خروج از فرم، /start را بزنید.")
+        await message.answer(
+            "⚠️ عبارت جست‌وجو معتبر نیست.\n\nنام یا Telegram ID را وارد کنید:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+                [InlineKeyboardButton(text="❌ لغو جست‌وجو", callback_data="ux:cancel")],
+            ]),
+        )
         return
 
     data = await state.get_data()
@@ -1139,7 +1187,12 @@ async def tenant_name_step(
 ) -> None:
     value = (message.text or "").strip()
     if not 2 <= len(value) <= 180:
-        await message.answer("نام مجموعه باید بین ۲ تا ۱۸۰ نویسه باشد. دوباره وارد کنید.")
+        await _show_tenant_step(
+            message,
+            state,
+            "name",
+            notice="نام مجموعه باید بین ۲ تا ۱۸۰ نویسه باشد.",
+        )
         return
     await state.update_data(
         tenant_name=value,
@@ -1271,6 +1324,32 @@ async def help_callback(callback: CallbackQuery) -> None:
     if callback.message is not None:
         await _hide_root_keyboard(callback.message)
         await _show_help_panel(callback.message)
+
+
+@router.callback_query(F.data == "ux:cancel")
+async def ux_cancel_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Cancel an uncommitted wizard and return to the authenticated root menu."""
+    current_state = await state.get_state()
+    await state.clear()
+    await callback.answer(
+        "فرم لغو شد؛ هیچ تغییری ثبت نشد."
+        if current_state
+        else "فرم فعالی برای لغو وجود نداشت."
+    )
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await callback.message.answer(
+            "به منوی اصلی برگشتید.",
+            reply_markup=await main_menu(db, principal),
+        )
 
 
 @router.callback_query()

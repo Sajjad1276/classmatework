@@ -12,9 +12,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
     Message,
     ReplyKeyboardRemove,
+)
+from aiogram.types import (
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -25,6 +27,7 @@ from app.application.class_join_codes import (
 from app.application.errors import ApplicationError, ResourceConflict
 from app.application.product_management import (
     add_product_class_member,
+    count_missing_product_class_join_codes,
     create_and_assign_product_subject,
     create_product_announcement,
     create_product_class,
@@ -52,6 +55,8 @@ from app.application.product_management import (
     update_product_class,
     update_product_school,
 )
+from app.bot.ux import add_wizard_cancel, ensure_back_button
+from app.bot.ux import wizard_controls as shared_wizard_controls
 from app.core.config import get_settings
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
@@ -59,6 +64,11 @@ from app.modules.identity.principal import TelegramPrincipal
 
 logger = logging.getLogger(__name__)
 router = Router(name="product-management")
+
+def InlineKeyboardMarkup(*args, **kwargs) -> TelegramInlineKeyboardMarkup:
+    """Create an inline keyboard with a safe back path by default."""
+    return ensure_back_button(TelegramInlineKeyboardMarkup(*args, **kwargs))
+
 
 SCHOOLS_BUTTON = "🏫 مدیریت مدارس و کلاس‌ها"
 OWNER_CLASS_BUTTON = "🎓 کلاس من · دهم ۱۰۴"
@@ -162,6 +172,23 @@ class ClassEditing(StatesGroup):
 
 class SubjectCreation(StatesGroup):
     name = State()
+    confirm = State()
+
+
+class JoinCodeIssue(StatesGroup):
+    confirm = State()
+
+
+class JoinCodeRotation(StatesGroup):
+    confirm = State()
+
+
+class BulkJoinCodeWizard(StatesGroup):
+    confirm = State()
+
+
+class MemberRoleChangeWizard(StatesGroup):
+    confirm = State()
 
 
 class TimetableCreation(StatesGroup):
@@ -205,6 +232,21 @@ async def _close_inline_panel(message: Message | None) -> None:
     except Exception:
         logger.debug("Could not close inline panel before input.", exc_info=True)
 
+async def _render_product_panel(
+    message: Message,
+    body: str,
+    keyboard: InlineKeyboardMarkup,
+) -> None:
+    """Edit an existing bot panel when possible; otherwise send a new one."""
+    if message.from_user is not None and message.from_user.is_bot:
+        try:
+            await message.edit_text(body, reply_markup=keyboard)
+            return
+        except Exception:
+            logger.debug("Could not edit active product panel.", exc_info=True)
+    await message.answer(body, reply_markup=keyboard)
+
+
 
 
 
@@ -241,6 +283,8 @@ def _school_directory_keyboard(
     *,
     can_create: bool,
     can_manage_classes: bool = False,
+    page: int = 1,
+    has_next: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -249,8 +293,25 @@ def _school_directory_keyboard(
                 callback_data=f"product:school:{school['id']}",
             )
         ]
-        for school in schools
+        for school in schools[:8]
     ]
+    navigation: list[InlineKeyboardButton] = []
+    if page > 1:
+        navigation.append(
+            InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"product:schools:page:{page - 1}",
+            )
+        )
+    if has_next:
+        navigation.append(
+            InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"product:schools:page:{page + 1}",
+            )
+        )
+    if navigation:
+        rows.append(navigation)
     if can_create:
         rows.append(
             [InlineKeyboardButton(text="➕ ایجاد مدرسه", callback_data="product:school:create")]
@@ -274,7 +335,11 @@ async def _show_school_directory(
     principal: TelegramPrincipal,
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None,
+    page: int = 1,
 ) -> None:
+    if page < 1:
+        await message.answer("شماره صفحه معتبر نیست.")
+        return
     if not await _has_permission(db, principal, "platform:schools:read"):
         await message.answer("مجوز مشاهدهٔ مدارس را ندارید.")
         return
@@ -288,24 +353,38 @@ async def _show_school_directory(
     can_manage_classes = await _has_permission(db, principal, "platform:classes:manage")
     try:
         async with product_session_factory() as product_db:
-            schools = await list_product_schools(product_db)
+            fetched = await list_product_schools(
+                product_db,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
     except Exception:
         logger.exception("Could not load ClassMate product schools.")
         await message.answer("دریافت فهرست مدارس از دیتابیس ClassMate ناموفق بود.")
         return
 
+    has_next = len(fetched) > 8
+    schools = fetched[:8]
     body = (
-        f"🏫 مدیریت مدارس ClassMate\n\nتعداد مدارس: {len(schools)}\n"
+        f"🏫 مدیریت مدارس ClassMate\n\n"
+        f"صفحه: {page}\n"
         "مدرسه را برای مشاهدهٔ کلاس‌ها انتخاب کنید."
         if schools
-        else "هنوز مدرسه‌ای در ClassMate ثبت نشده است."
+        else (
+            "هنوز مدرسه‌ای در ClassMate ثبت نشده است."
+            if page == 1
+            else "در این صفحه مدرسه‌ای وجود ندارد؛ به صفحه قبل برگردید."
+        )
     )
-    await message.answer(
+    await _render_product_panel(
+        message,
         body,
-        reply_markup=_school_directory_keyboard(
+        _school_directory_keyboard(
             schools,
             can_create=can_create,
             can_manage_classes=can_manage_classes,
+            page=page,
+            has_next=has_next,
         ),
     )
 
@@ -326,7 +405,7 @@ async def schools_button_handler(
     )
 
 
-@router.callback_query(F.data == "product:schools")
+@router.callback_query(F.data.regexp(r"^product:schools(?::page:[1-9][0-9]*)?$"))
 async def schools_refresh_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -335,11 +414,14 @@ async def schools_refresh_callback(
 ) -> None:
     await callback.answer()
     if callback.message is not None:
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
         await _show_school_directory(
             callback.message,
             principal=principal,
             db=db,
             product_session_factory=product_session_factory,
+            page=page,
         )
 
 
@@ -358,8 +440,8 @@ async def _begin_school_creation(
     await state.update_data(product_school_token=token)
     await state.set_state(SchoolCreation.name)
     await message.answer(
-        "نام مدرسه را وارد کنید (۲ تا ۱۸۰ نویسه):\n\n"
-        "برای لغو فرم یا بازگشت به پنل اصلی، دستور /start را بفرستید."
+        "نام مدرسه را وارد کنید (۲ تا ۱۸۰ نویسه):",
+        reply_markup=shared_wizard_controls(),
     )
 
 
@@ -401,7 +483,10 @@ async def school_create_callback(
 async def school_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 180:
-        await message.answer("نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد. دوباره وارد کنید.")
+        await message.answer(
+            "خطا: نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.\n\nنام مدرسه را دوباره وارد کنید:",
+            reply_markup=shared_wizard_controls(),
+        )
         return
 
     data = await state.get_data()
@@ -538,67 +623,15 @@ async def school_create_cancel_callback(
 
 
 
-@router.callback_query(F.data == "product:classes:join-codes:missing")
-async def product_missing_class_join_codes_callback(
+async def _render_bulk_join_code_result(
     callback: CallbackQuery,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+    issued: list[dict],
 ) -> None:
-    if not await _require_private_callback(callback, "صدور کد ورود کلاس‌ها"):
-        return
-    if not await _has_permission(db, principal, "platform:classes:manage"):
-        await callback.answer("مجوز صدور کد ورود کلاس‌ها را ندارید.", show_alert=True)
-        return
-    if product_session_factory is None:
-        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
-        return
-
-    try:
-        async with product_session_factory() as product_db:
-            async with product_db.begin():
-                issued = await issue_missing_product_class_join_codes(
-                    product_db,
-                    limit=2000,
-                )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    except Exception:
-        logger.exception("Could not issue missing ClassMate class join codes.")
-        await callback.answer("صدور گروهی کدهای ورود ناموفق بود.", show_alert=True)
-        return
-
-    if issued:
-        try:
-            for item in issued:
-                await store_class_join_code_secret(
-                    db,
-                    class_id=item["class_id"],
-                    code=item["join_code"],
-                )
-            await record_event(
-                db,
-                event_type="product.class.member_join_codes_backfilled",
-                actor_id=principal.user.id,
-                aggregate_type="platform",
-                event_data={
-                    "issued_count": len(issued),
-                    "class_ids": [item["class_id"] for item in issued],
-                },
-            )
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            logger.exception("Bulk class join-code audit recording failed.")
-
-    await callback.answer(f"برای {len(issued)} کلاس کد صادر شد." if issued else "کدی کم نبود.")
     if callback.message is None:
         return
-
     if not issued:
         await callback.message.edit_text(
-            "✅ همهٔ کلاس‌های فعال از قبل کد ورود دارند؛ کدی تغییر نکرد.",
+            "✅ در زمان تأیید، کدِ فاقد کد دیگری باقی نمانده بود؛ هیچ تغییری اعمال نشد.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
@@ -638,7 +671,183 @@ async def product_missing_class_join_codes_callback(
         await callback.message.answer(body, parse_mode="HTML")
 
 
-@router.callback_query(F.data.regexp(r"^product:school:[0-9]+$"))
+@router.callback_query(F.data == "product:classes:join-codes:missing")
+async def product_missing_class_join_codes_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _require_private_callback(callback, "صدور کد ورود کلاس‌ها"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await callback.answer("مجوز صدور کد ورود کلاس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    try:
+        async with product_session_factory() as product_db:
+            missing_count = await count_missing_product_class_join_codes(product_db)
+    except Exception:
+        logger.exception("Could not count missing ClassMate class join codes.")
+        await callback.answer("بررسی تعداد کدهای فاقد مقدار ناموفق بود.", show_alert=True)
+        return
+
+    if missing_count == 0:
+        await callback.answer("همهٔ کلاس‌های فعال کد ورود دارند.")
+        if callback.message is not None:
+            await callback.message.edit_text(
+                "✅ همهٔ کلاس‌های فعال از قبل کد ورود دارند؛ کدی تغییر نکرد.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
+                    ]
+                ),
+            )
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        bulk_join_code_token=token,
+        bulk_join_code_preview_count=missing_count,
+    )
+    await state.set_state(BulkJoinCodeWizard.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        capped_count = min(missing_count, 2000)
+        cap_note = (
+            "\nبه‌دلیل سقف هر عملیات، فقط ۲۰۰۰ کلاس اول بررسی و پردازش می‌شوند."
+            if missing_count > 2000
+            else ""
+        )
+        await callback.message.edit_text(
+            "پیش‌نمایش صدور گروهی کد ورود\n\n"
+            f"کلاس‌های فعال فاقد کد: {missing_count}\n"
+            f"حداکثر صدور در این عملیات: {capped_count}\n\n"
+            "کدهای موجود تغییر نمی‌کنند. برای هر کلاس فاقد کد یک کد مستقل ساخته می‌شود."
+            f"{cap_note}\n\n"
+            "با تأیید صریح، صدور گروهی آغاز می‌شود. ادامه می‌دهید؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید صدور گروهی",
+                            callback_data=f"product:classes:join-codes:confirm:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"product:classes:join-codes:cancel:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:classes:join-codes:confirm:"))
+async def product_missing_class_join_codes_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != BulkJoinCodeWizard.confirm.state
+        or not token
+        or token != data.get("bulk_join_code_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _require_private_callback(callback, "صدور کد ورود کلاس‌ها"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await state.clear()
+        await callback.answer("مجوز صدور کد ورود کلاس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    try:
+        async with product_session_factory() as product_db:
+            async with product_db.begin():
+                issued = await issue_missing_product_class_join_codes(
+                    product_db,
+                    limit=2000,
+                )
+        if issued:
+            for item in issued:
+                await store_class_join_code_secret(
+                    db,
+                    class_id=item["class_id"],
+                    code=item["join_code"],
+                )
+            await record_event(
+                db,
+                event_type="product.class.member_join_codes_backfilled",
+                actor_id=principal.user.id,
+                aggregate_type="platform",
+                event_data={
+                    "issued_count": len(issued),
+                    "class_ids": [item["class_id"] for item in issued],
+                    "previewed_count": data.get("bulk_join_code_preview_count"),
+                },
+            )
+            await db.commit()
+    except ApplicationError as exc:
+        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        await db.rollback()
+        logger.exception("Could not issue missing ClassMate class join codes.")
+        await callback.answer("صدور گروهی کدهای ورود ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer(f"برای {len(issued)} کلاس کد صادر شد." if issued else "کدی کم نبود.")
+    await _render_bulk_join_code_result(callback, issued)
+
+
+@router.callback_query(F.data.startswith("product:classes:join-codes:cancel:"))
+async def product_missing_class_join_codes_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != BulkJoinCodeWizard.confirm.state
+        or not token
+        or token != data.get("bulk_join_code_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("صدور گروهی لغو شد؛ هیچ کدی صادر نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "صدور گروهی کدها لغو شد؛ هیچ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت به مدارس", callback_data="product:schools")]
+                ]
+            ),
+        )
+
+
+
+
+@router.callback_query(F.data.regexp(r"^product:school:[0-9]+(?::page:[1-9][0-9]*)?$"))
 async def product_school_detail_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -653,21 +862,32 @@ async def product_school_detail_callback(
         return
 
     try:
-        school_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        parts = (callback.data or "").split(":")
+        school_id = int(parts[2])
+        page = int(parts[4]) if len(parts) == 5 and parts[3] == "page" else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             school = await get_product_school(product_db, school_id=school_id)
             if school is None:
                 await callback.answer("مدرسه پیدا نشد.", show_alert=True)
                 return
-            classes = await list_product_classes(product_db, school_id=school_id)
+            fetched_classes = await list_product_classes(
+                product_db,
+                school_id=school_id,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
     except (ValueError, ApplicationError) as exc:
-        await callback.answer(str(exc), show_alert=True)
+        await callback.answer(str(exc) or "شناسه یا صفحه معتبر نیست.", show_alert=True)
         return
     except Exception:
         logger.exception("Could not load ClassMate school %s.", callback.data)
         await callback.answer("دریافت جزئیات مدرسه ناموفق بود.", show_alert=True)
         return
 
+    has_next = len(fetched_classes) > 8
+    classes = fetched_classes[:8]
     status = "فعال" if school["is_active"] else "غیرفعال"
     lines = [
         f"🏫 مدرسه: {school['name']}",
@@ -675,8 +895,9 @@ async def product_school_detail_callback(
         f"وضعیت: {status}",
         f"منطقه زمانی: {school['timezone']}",
         f"تعداد کلاس‌ها: {school['class_count']}",
+        f"صفحهٔ کلاس‌ها: {page}",
         "",
-        "کلاس‌ها:",
+        "کلاس‌های این صفحه:",
     ]
     can_read_classes = await _has_permission(db, principal, "platform:classes:read")
     if classes and can_read_classes:
@@ -684,7 +905,11 @@ async def product_school_detail_callback(
     elif classes:
         lines.append("کلاس ثبت شده است؛ برای مشاهدهٔ جزئیات کلاس مجوز لازم را ندارید.")
     else:
-        lines.append("هنوز کلاسی برای این مدرسه ثبت نشده است.")
+        lines.append(
+            "هنوز کلاسی برای این مدرسه ثبت نشده است."
+            if page == 1
+            else "کلاسی در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
 
     rows = (
         [
@@ -697,11 +922,29 @@ async def product_school_detail_callback(
                     callback_data=f"product:class:{item['id']}",
                 )
             ]
-            for item in classes[:30]
+            for item in classes
         ]
         if can_read_classes
         else []
     )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ کلاس‌های قبلی",
+                    callback_data=f"product:school:{school_id}:page:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="کلاس‌های بعدی ➡️",
+                    callback_data=f"product:school:{school_id}:page:{page + 1}",
+                )
+            )
+        rows.append(navigation)
+
     can_create_class = (
         school["is_active"]
         and await _has_permission(db, principal, "platform:classes:create")
@@ -728,15 +971,12 @@ async def product_school_detail_callback(
                 ),
             ]
         )
-    rows.extend(
+    rows.append(
         [
-            [
-                InlineKeyboardButton(
-                    text="⬅️ بازگشت به مدارس",
-                    callback_data="product:schools",
-                )
-            ],
-
+            InlineKeyboardButton(
+                text="⬅️ بازگشت به مدارس",
+                callback_data="product:schools",
+            )
         ]
     )
     await callback.answer()
@@ -765,7 +1005,10 @@ async def _begin_class_creation(
         product_class_school_id=school_id,
     )
     await state.set_state(ClassCreation.name)
-    await message.answer("نام کلاس را وارد کنید (۲ تا ۸۰ نویسه):")
+    await message.answer(
+        "نام کلاس را وارد کنید (۲ تا ۸۰ نویسه):",
+        reply_markup=shared_wizard_controls(),
+    )
 
 
 @router.callback_query(F.data.regexp(r"^product:class:create:[0-9]+$"))
@@ -809,22 +1052,22 @@ async def product_class_create_callback(
 async def class_name_input(message: Message, state: FSMContext) -> None:
     value = " ".join((message.text or "").split())
     if not 2 <= len(value) <= 80:
-        await message.answer("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+        await message.answer("خطا: نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.\n\nنام کلاس را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_name=value)
     await state.set_state(ClassCreation.grade)
-    await message.answer("پایه یا مقطع کلاس را وارد کنید (مثلاً دهم):")
+    await message.answer("پایه یا مقطع کلاس را وارد کنید (مثلاً دهم):", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassCreation.grade, F.text)
 async def class_grade_input(message: Message, state: FSMContext) -> None:
     value = " ".join((message.text or "").split())
     if not 1 <= len(value) <= 32:
-        await message.answer("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+        await message.answer("خطا: پایه باید بین ۱ تا ۳۲ نویسه باشد.\n\nپایه یا مقطع را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_grade=value)
     await state.set_state(ClassCreation.section)
-    await message.answer("نام بخش/شعبه را وارد کنید؛ اگر ندارد، فقط «-» بفرستید:")
+    await message.answer("نام بخش/شعبه را وارد کنید؛ اگر ندارد، فقط «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassCreation.section, F.text)
@@ -832,7 +1075,7 @@ async def class_section_input(message: Message, state: FSMContext) -> None:
     value = " ".join((message.text or "").split())
     section = None if value == "-" else value
     if section is not None and len(section) > 32:
-        await message.answer("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+        await message.answer("خطا: عنوان بخش کلاس حداکثر ۳۲ نویسه است.\n\nبخش/شعبه را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     token = data.get("product_class_token")
@@ -1028,7 +1271,8 @@ async def product_school_edit_callback(
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            f"نام فعلی مدرسه: {school['name']}\nنام جدید را وارد کنید:"
+            f"نام فعلی مدرسه: {school['name']}\nنام جدید را وارد کنید:",
+            reply_markup=shared_wizard_controls(),
         )
 
 
@@ -1036,7 +1280,7 @@ async def product_school_edit_callback(
 async def product_school_edit_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 180:
-        await message.answer("نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+        await message.answer("خطا: نام مدرسه باید بین ۲ تا ۱۸۰ نویسه باشد.\n\nنام جدید را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     school_id = int(data.get("product_school_edit_id") or 0)
@@ -1301,7 +1545,8 @@ async def product_class_edit_callback(
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            f"نام فعلی کلاس: {class_info['name']}\nنام جدید را وارد کنید:"
+            f"نام فعلی کلاس: {class_info['name']}\nنام جدید را وارد کنید:",
+            reply_markup=shared_wizard_controls(),
         )
 
 
@@ -1309,22 +1554,22 @@ async def product_class_edit_callback(
 async def product_class_edit_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 80:
-        await message.answer("نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.")
+        await message.answer("خطا: نام کلاس باید بین ۲ تا ۸۰ نویسه باشد.\n\nنام کلاس را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_edit_name=name)
     await state.set_state(ClassEditing.grade)
-    await message.answer("پایهٔ جدید کلاس را وارد کنید:")
+    await message.answer("پایهٔ جدید کلاس را وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassEditing.grade, F.text)
 async def product_class_edit_grade_input(message: Message, state: FSMContext) -> None:
     grade = " ".join((message.text or "").split())
     if not 1 <= len(grade) <= 32:
-        await message.answer("پایه باید بین ۱ تا ۳۲ نویسه باشد.")
+        await message.answer("خطا: پایه باید بین ۱ تا ۳۲ نویسه باشد.\n\nپایه یا مقطع را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_class_edit_grade=grade)
     await state.set_state(ClassEditing.section)
-    await message.answer("بخش جدید را وارد کنید؛ برای پاک‌کردن بخش فعلی «-» بفرستید:")
+    await message.answer("بخش جدید را وارد کنید؛ برای پاک‌کردن بخش فعلی «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(ClassEditing.section, F.text)
@@ -1333,7 +1578,7 @@ async def product_class_edit_section_input(message: Message, state: FSMContext) 
     if section == "-":
         section = None
     if section is not None and len(section) > 32:
-        await message.answer("عنوان بخش کلاس حداکثر ۳۲ نویسه است.")
+        await message.answer("خطا: عنوان بخش کلاس حداکثر ۳۲ نویسه است.\n\nبخش/شعبه را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     class_id = int(data.get("product_class_edit_id") or 0)
@@ -1786,14 +2031,52 @@ async def product_class_detail_callback(
         await callback.message.edit_text(body, reply_markup=keyboard)
 
 
+def _new_member_join_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(10))
+
+
+async def _save_new_member_join_code(
+    *,
+    db: AsyncSession,
+    principal: TelegramPrincipal,
+    product_session_factory: async_sessionmaker[AsyncSession],
+    class_id: int,
+    event_type: str,
+) -> tuple[dict, str]:
+    raw_code = _new_member_join_code()
+    async with product_session_factory() as product_db:
+        async with product_db.begin():
+            class_info = await issue_product_class_join_code(
+                product_db,
+                class_id=class_id,
+                code=raw_code,
+            )
+            await store_class_join_code_secret(
+                db,
+                class_id=class_id,
+                code=raw_code,
+            )
+            await record_event(
+                db,
+                event_type=event_type,
+                actor_id=principal.user.id,
+                aggregate_type="class",
+                event_data={"class_id": class_id},
+            )
+    await db.commit()
+    return class_info, raw_code
+
+
 @router.callback_query(F.data.regexp(r"^product:class:join-code:[0-9]+$"))
 async def product_class_join_code_issue_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
-    """Show the class's current code; opening this screen never rotates it."""
+    """Read an existing code, or ask for approval before issuing the first/replacement code."""
     if not await _require_private_callback(callback, "نمایش کد ورود کلاس"):
         return
     if not await _has_permission(db, principal, "platform:classes:manage"):
@@ -1807,73 +2090,185 @@ async def product_class_join_code_issue_callback(
     try:
         saved_secret = await get_class_join_code_secret(db, class_id=class_id)
         async with product_session_factory() as product_db:
-            async with product_db.begin():
-                class_info = await get_product_class(product_db, class_id=class_id)
-                if class_info is None:
-                    await callback.answer("کلاس پیدا نشد.", show_alert=True)
-                    return
-
-                saved_code_is_current = (
-                    saved_secret is not None
-                    and class_info["member_join_code_hash"] is not None
-                    and secrets.compare_digest(
-                        str(saved_secret["join_code_hash"]),
-                        str(class_info["member_join_code_hash"]),
-                    )
-                )
-                if saved_code_is_current:
-                    raw_code = str(saved_secret["join_code"])
-                    replaced_legacy_code = False
-                    issued_new_code = False
-                else:
-                    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-                    raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
-                    replaced_legacy_code = class_info["member_join_code_hash"] is not None
-                    issued_new_code = True
-                    await store_class_join_code_secret(
-                        db,
-                        class_id=class_id,
-                        code=raw_code,
-                    )
-                    await record_event(
-                        db,
-                        event_type="product.class.member_join_code_issued",
-                        actor_id=principal.user.id,
-                        aggregate_type="class",
-                        event_data={
-                            "class_id": class_id,
-                            "reason": (
-                                "legacy_hash_replaced" if replaced_legacy_code else "first_issue"
-                            ),
-                        },
-                    )
-                    await issue_product_class_join_code(
-                        product_db,
-                        class_id=class_id,
-                        code=raw_code,
-                    )
-
-        if issued_new_code:
-            await db.commit()
+            class_info = await get_product_class(product_db, class_id=class_id)
+        if class_info is None:
+            await callback.answer("کلاس پیدا نشد.", show_alert=True)
+            return
     except ApplicationError as exc:
-        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not read ClassMate class join code %s.", class_id)
+        await callback.answer("دریافت اطلاعات کد ورود کلاس ناموفق بود.", show_alert=True)
+        return
+
+    saved_code_is_current = (
+        saved_secret is not None
+        and class_info["member_join_code_hash"] is not None
+        and secrets.compare_digest(
+            str(saved_secret["join_code_hash"]),
+            str(class_info["member_join_code_hash"]),
+        )
+    )
+    if saved_code_is_current:
+        raw_code = str(saved_secret["join_code"])
+        await callback.answer("کد فعلی نمایش داده شد؛ تغییری ثبت نشد.")
+        if callback.message is not None:
+            await callback.message.edit_text(
+                _class_join_code_message(class_info["name"], raw_code),
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="♻️ تغییر کد ورود",
+                                callback_data=f"product:class:join-code:rotate:{class_id}",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="⬅️ بازگشت به کلاس",
+                                callback_data=f"product:class:{class_id}",
+                            )
+                        ],
+                    ]
+                ),
+            )
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        product_join_code_issue_token=token,
+        product_join_code_issue_class_id=class_id,
+        product_join_code_issue_legacy=class_info["member_join_code_hash"] is not None,
+    )
+    await state.set_state(JoinCodeIssue.confirm)
+    legacy_note = (
+        "کد قبلی فقط به‌صورت هش ذخیره شده و قابل بازیابی نیست؛ با صدور کد تازه جایگزین می‌شود."
+        if class_info["member_join_code_hash"] is not None
+        else "برای این کلاس هنوز کد ورود صادر نشده است."
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش صدور کد ورود کلاس\n\n"
+            f"کلاس: {class_info['name']}\n"
+            f"وضعیت: {legacy_note}\n\n"
+            "با تأیید، یک کد جدید ساخته و ذخیره می‌شود. هیچ کدی تا پیش از تأیید صادر نخواهد شد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید صدور کد",
+                            callback_data=f"product:class:join-code:issue-confirm:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"product:class:join-code:issue-cancel:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:class:join-code:issue-confirm:"))
+async def product_class_join_code_issue_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeIssue.confirm.state
+        or not token
+        or token != data.get("product_join_code_issue_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت کد ورود کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int(data.get("product_join_code_issue_class_id") or 0)
+    try:
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+        if class_info is None:
+            raise ApplicationError("کلاس پیدا نشد.")
+        saved_secret = await get_class_join_code_secret(db, class_id=class_id)
+        if (
+            saved_secret is not None
+            and class_info["member_join_code_hash"] is not None
+            and secrets.compare_digest(
+                str(saved_secret["join_code_hash"]),
+                str(class_info["member_join_code_hash"]),
+            )
+        ):
+            await state.clear()
+            await callback.answer("کد توسط یک عملیات دیگر صادر شده است؛ همان کد فعلی نمایش داده می‌شود.")
+            if callback.message is not None:
+                await callback.message.edit_text(
+                    _class_join_code_message(class_info["name"], str(saved_secret["join_code"])),
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="♻️ تغییر کد ورود",
+                                    callback_data=f"product:class:join-code:rotate:{class_id}",
+                                )
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text="⬅️ بازگشت به کلاس",
+                                    callback_data=f"product:class:{class_id}",
+                                )
+                            ],
+                        ]
+                    ),
+                )
+            return
+
+        event_type = (
+            "product.class.member_join_code_issued"
+            if not data.get("product_join_code_issue_legacy")
+            else "product.class.member_join_code_legacy_replaced"
+        )
+        code_info, raw_code = await _save_new_member_join_code(
+            db=db,
+            principal=principal,
+            product_session_factory=product_session_factory,
+            class_id=class_id,
+            event_type=event_type,
+        )
+    except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
     except Exception:
         await db.rollback()
-        logger.exception("Could not load or persist ClassMate class join code %s.", class_id)
-        await callback.answer("دریافت یا ذخیرهٔ کد ورود کلاس ناموفق بود.", show_alert=True)
+        logger.exception("Could not issue ClassMate class join code %s.", class_id)
+        await callback.answer("صدور کد ورود ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
 
-    await callback.answer(
-        "کد جدید صادر شد." if issued_new_code else "کد فعلی کلاس نمایش داده شد؛ تغییری نکرد."
-    )
+    await state.clear()
+    await callback.answer("کد ورود پس از تأیید صادر شد.")
     if callback.message is not None:
         await callback.message.edit_text(
             _class_join_code_message(
-                class_info["name"],
+                code_info["name"],
                 raw_code,
-                replaced_legacy_code=replaced_legacy_code,
+                replaced_legacy_code=bool(data.get("product_join_code_issue_legacy")),
             ),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
@@ -1895,11 +2290,45 @@ async def product_class_join_code_issue_callback(
         )
 
 
+@router.callback_query(F.data.startswith("product:class:join-code:issue-cancel:"))
+async def product_class_join_code_issue_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeIssue.confirm.state
+        or not token
+        or token != data.get("product_join_code_issue_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("product_join_code_issue_class_id") or 0)
+    await state.clear()
+    await callback.answer("صدور کد لغو شد؛ تغییری ثبت نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "صدور کد ورود لغو شد؛ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
 @router.callback_query(F.data.regexp(r"^product:class:join-code:rotate:[0-9]+$"))
 async def product_class_join_code_rotate_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     if not await _require_private_callback(callback, "تغییر کد ورود کلاس"):
@@ -1912,41 +2341,100 @@ async def product_class_join_code_rotate_callback(
         return
 
     class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
     try:
         async with product_session_factory() as product_db:
-            async with product_db.begin():
-                code_info = await issue_product_class_join_code(
-                    product_db,
-                    class_id=class_id,
-                    code=raw_code,
-                )
-                await store_class_join_code_secret(
-                    db,
-                    class_id=class_id,
-                    code=raw_code,
-                )
-                await record_event(
-                    db,
-                    event_type="product.class.member_join_code_rotated",
-                    actor_id=principal.user.id,
-                    aggregate_type="class",
-                    event_data={"class_id": class_id},
-                )
-
-        await db.commit()
+            class_info = await get_product_class(product_db, class_id=class_id)
+        if class_info is None:
+            raise ApplicationError("کلاس پیدا نشد.")
     except ApplicationError as exc:
-        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not prepare class join code rotation %s.", class_id)
+        await callback.answer("آماده‌سازی تغییر کد ناموفق بود.", show_alert=True)
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        product_join_code_rotation_token=token,
+        product_join_code_rotation_class_id=class_id,
+    )
+    await state.set_state(JoinCodeRotation.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش تغییر کد ورود کلاس\n\n"
+            f"کلاس: {class_info['name']}\n\n"
+            "⚠️ با تأیید، کد فعلی و لینک‌های عضویت قبلی فوراً نامعتبر می‌شوند. "
+            "دانش‌آموزان جدید باید کد تازه را دریافت کنند.\n\n"
+            "تغییر کد انجام شود؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید تغییر کد",
+                            callback_data=f"product:class:join-code:rotate-confirm:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"product:class:join-code:rotate-cancel:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:class:join-code:rotate-confirm:"))
+async def product_class_join_code_rotate_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeRotation.confirm.state
+        or not token
+        or token != data.get("product_join_code_rotation_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _require_private_callback(callback, "تغییر کد ورود کلاس"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت کد ورود کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int(data.get("product_join_code_rotation_class_id") or 0)
+    try:
+        code_info, raw_code = await _save_new_member_join_code(
+            db=db,
+            principal=principal,
+            product_session_factory=product_session_factory,
+            class_id=class_id,
+            event_type="product.class.member_join_code_rotated",
+        )
+    except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
     except Exception:
         await db.rollback()
         logger.exception("Could not rotate ClassMate class join code %s.", class_id)
-        await callback.answer("تغییر کد ورود کلاس ناموفق بود.", show_alert=True)
+        await callback.answer("تغییر کد ورود ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
 
-    await callback.answer("کد و لینک قبلی منقضی شدند؛ کد جدید صادر شد.")
+    await state.clear()
+    await callback.answer("کد قبلی پس از تأیید باطل و کد جدید صادر شد.")
     if callback.message is not None:
         await callback.message.edit_text(
             _class_join_code_message(code_info["name"], raw_code),
@@ -1968,6 +2456,47 @@ async def product_class_join_code_rotate_callback(
                 ]
             ),
         )
+
+
+@router.callback_query(F.data.startswith("product:class:join-code:rotate-cancel:"))
+async def product_class_join_code_rotate_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeRotation.confirm.state
+        or not token
+        or token != data.get("product_join_code_rotation_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("product_join_code_rotation_class_id") or 0)
+    await state.clear()
+    await callback.answer("تغییر کد لغو شد؛ کد فعلی معتبر ماند.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "تغییر کد لغو شد؛ کد قبلی همچنان معتبر است.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🔑 نمایش کد فعلی",
+                            callback_data=f"product:class:join-code:{class_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
 
 
 @router.callback_query(F.data.regexp(r"^product:subject:add:[0-9]+$"))
@@ -2004,7 +2533,7 @@ async def product_subject_add_callback(
     await state.set_state(SubjectCreation.name)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("نام درس را وارد کنید (۲ تا ۱۰۰ نویسه):")
+        await callback.message.answer("نام درس را وارد کنید (۲ تا ۱۰۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.message(SubjectCreation.name, F.text)
@@ -2013,23 +2542,90 @@ async def product_subject_name_input(
     principal: TelegramPrincipal,
     db: AsyncSession,
     state: FSMContext,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 100:
-        await message.answer("نام درس باید بین ۲ تا ۱۰۰ نویسه باشد.")
+        await message.answer(
+            "خطا: نام درس باید بین ۲ تا ۱۰۰ نویسه باشد.\n\n"
+            "نام درس را دوباره وارد کنید:",
+            reply_markup=shared_wizard_controls(),
+        )
         return
     if not await _has_permission(db, principal, "platform:subjects:manage"):
         await state.clear()
         await message.answer("مجوز مدیریت درس‌ها را ندارید.")
         return
-    if product_session_factory is None:
-        await state.clear()
-        await message.answer("اتصال دیتابیس ClassMate فعال نیست.")
-        return
 
     data = await state.get_data()
     class_id = int(data.get("product_subject_class_id") or 0)
+    if class_id <= 0:
+        await state.clear()
+        await message.answer("فرم افزودن درس منقضی شده است؛ دوباره شروع کنید.")
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.update_data(
+        product_subject_name=name,
+        product_subject_token=token,
+    )
+    await state.set_state(SubjectCreation.confirm)
+    await message.answer(
+        "پیش‌نمایش ایجاد و تخصیص درس\n\n"
+        f"نام درس: {name}\n"
+        f"شناسه کلاس مقصد: {class_id}\n\n"
+        "با تأیید، درس ایجاد و به همین کلاس تخصیص داده می‌شود.\n"
+        "هیچ تغییری تا انتخاب «تأیید» ثبت نمی‌شود.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ تأیید ایجاد و تخصیص",
+                        callback_data=f"product:subject:confirm:{token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو عملیات",
+                        callback_data=f"product:subject:cancel:{token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("product:subject:confirm:"))
+async def product_subject_create_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != SubjectCreation.confirm.state
+        or not token
+        or token != data.get("product_subject_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است؛ عملیات اجرا نشد.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:subjects:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت درس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int(data.get("product_subject_class_id") or 0)
+    name = str(data.get("product_subject_name") or "")
+    if class_id <= 0 or not name:
+        await state.clear()
+        await callback.answer("اطلاعات فرم معتبر نیست؛ دوباره شروع کنید.", show_alert=True)
+        return
+
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -2039,14 +2635,14 @@ async def product_subject_name_input(
                     name=name,
                 )
     except ApplicationError as exc:
-        await message.answer(str(exc))
+        await callback.answer(str(exc), show_alert=True)
         return
     except Exception:
         logger.exception("Could not create or assign ClassMate subject.")
-        await state.clear()
-        await message.answer("ثبت درس ناموفق بود.")
+        await callback.answer("ثبت درس ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
 
+    audit_warning = False
     try:
         await record_event(
             db,
@@ -2064,26 +2660,67 @@ async def product_subject_name_input(
         )
         await db.commit()
     except Exception:
+        audit_warning = True
         await db.rollback()
         logger.exception("Subject assignment audit failed for class %s.", class_id)
 
     await state.clear()
-    result_label = "درس ایجاد و به کلاس تخصیص داده شد." if subject["created"] else "درس موجود به کلاس تخصیص داده شد."
+    result_label = (
+        "درس ایجاد و به کلاس تخصیص داده شد."
+        if subject["created"]
+        else "درس موجود به کلاس تخصیص داده شد."
+    )
     if not subject["assigned"]:
         result_label = "این درس از قبل به کلاس تخصیص داشت."
-    await message.answer(
-        f"✅ {result_label}\nدرس: {subject['name']}",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="بازگشت به مدیریت کلاس",
-                        callback_data=f"product:class:{class_id}",
-                    )
+    notice = "\n⚠️ ثبت رویداد ممیزی نیازمند بررسی است." if audit_warning else ""
+    await callback.answer("تغییر پس از تأیید ثبت شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"✅ {result_label}{notice}\nدرس: {subject['name']}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="بازگشت به مدیریت کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
                 ]
-            ]
-        ),
-    )
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:subject:cancel:"))
+async def product_subject_create_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != SubjectCreation.confirm.state
+        or not token
+        or token != data.get("product_subject_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("product_subject_class_id") or 0)
+    await state.clear()
+    await callback.answer("عملیات لغو شد؛ تغییری ثبت نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "افزودن درس لغو شد؛ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به مدیریت کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
 
 
 @router.callback_query(F.data.regexp(r"^product:timetable:view:[0-9]+$"))
@@ -2215,7 +2852,7 @@ async def product_timetable_add_callback(
     if callback.message is not None:
         await callback.message.answer(
             f"روز هفته برای کلاس {class_info['name']} را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            reply_markup=add_wizard_cancel(InlineKeyboardMarkup(inline_keyboard=rows)),
         )
 
 
@@ -2250,7 +2887,7 @@ async def timetable_weekday_select_callback(
     if callback.message is not None:
         await callback.message.answer(
             "درس این زنگ را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            reply_markup=add_wizard_cancel(InlineKeyboardMarkup(inline_keyboard=rows)),
         )
 
 
@@ -2277,18 +2914,18 @@ async def timetable_subject_select_callback(
     await state.set_state(TimetableCreation.period)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("شماره زنگ را از ۱ تا ۱۶ وارد کنید:")
+        await callback.message.answer("شماره زنگ را از ۱ تا ۱۶ وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(TimetableCreation.period, F.text)
 async def timetable_period_input(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if not value.isdigit() or not 1 <= int(value) <= 16:
-        await message.answer("شماره زنگ باید عددی بین ۱ تا ۱۶ باشد.")
+        await message.answer("خطا: شماره زنگ باید عددی بین ۱ تا ۱۶ باشد.\n\nشماره زنگ را از ۱ تا ۱۶ دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_timetable_period=int(value))
     await state.set_state(TimetableCreation.time_range)
-    await message.answer("بازه زمانی را با قالب 08:00-08:45 وارد کنید؛ اگر زمان مشخص نیست، «-» بفرستید:")
+    await message.answer("بازه زمانی را با قالب 08:00-08:45 وارد کنید؛ اگر زمان مشخص نیست، «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(TimetableCreation.time_range, F.text)
@@ -2299,7 +2936,7 @@ async def timetable_time_range_input(message: Message, state: FSMContext) -> Non
     else:
         parts = value.split("-")
         if len(parts) != 2:
-            await message.answer("قالب زمان نامعتبر است؛ نمونه صحیح: 08:00-08:45")
+            await message.answer("خطا: قالب زمان نامعتبر است.\n\nبازه زمانی را با قالب 08:00-08:45 دوباره وارد کنید:", reply_markup=shared_wizard_controls())
             return
         try:
             from datetime import time as time_type
@@ -2307,10 +2944,10 @@ async def timetable_time_range_input(message: Message, state: FSMContext) -> Non
             start = time_type.fromisoformat(parts[0].strip())
             end = time_type.fromisoformat(parts[1].strip())
         except ValueError:
-            await message.answer("زمان باید با قالب HH:MM باشد.")
+            await message.answer("خطا: زمان باید با قالب HH:MM باشد.\n\nبازه زمانی را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
             return
         if end <= start:
-            await message.answer("زمان پایان باید بعد از زمان شروع باشد.")
+            await message.answer("خطا: زمان پایان باید بعد از زمان شروع باشد.\n\nبازه زمانی را اصلاح کنید:", reply_markup=shared_wizard_controls())
             return
         start_time, end_time = start.strftime("%H:%M"), end.strftime("%H:%M")
     await state.update_data(
@@ -2318,7 +2955,7 @@ async def timetable_time_range_input(message: Message, state: FSMContext) -> Non
         product_timetable_end=end_time,
     )
     await state.set_state(TimetableCreation.room)
-    await message.answer("نام کلاس/اتاق را وارد کنید؛ اگر ندارد، «-» بفرستید:")
+    await message.answer("نام کلاس/اتاق را وارد کنید؛ اگر ندارد، «-» بفرستید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(TimetableCreation.room, F.text)
@@ -2327,7 +2964,7 @@ async def timetable_room_input(message: Message, state: FSMContext) -> None:
     if room == "-":
         room = None
     if room is not None and len(room) > 80:
-        await message.answer("نام کلاس/اتاق حداکثر ۸۰ نویسه است.")
+        await message.answer("خطا: نام کلاس/اتاق حداکثر ۸۰ نویسه است.\n\nنام اتاق را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_timetable_room=room)
     data = await state.get_data()
@@ -2534,18 +3171,90 @@ async def product_class_member_role_confirm_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+    state: FSMContext,
 ) -> None:
     if not await _require_private_callback(callback, "تغییر نقش عضو"):
         return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
         return
+    parts = (callback.data or "").split(":")
+    class_id, user_id, role = int(parts[1]), int(parts[2]), parts[3]
+    role_labels = {
+        "student": "دانش‌آموز",
+        "class_manager": "مدیر کلاس",
+        "trusted_approver": "تأییدکننده",
+    }
+    if role not in role_labels:
+        await callback.answer("نقش انتخاب‌شده معتبر نیست.", show_alert=True)
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        member_role_change_token=token,
+        member_role_change_class_id=class_id,
+        member_role_change_user_id=user_id,
+        member_role_change_role=role,
+    )
+    await state.set_state(MemberRoleChangeWizard.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش تغییر نقش عضو\n\n"
+            f"شناسه کلاس: {class_id}\n"
+            f"شناسه عضو: {user_id}\n"
+            f"نقش جدید: {role_labels[role]}\n\n"
+            "با تأیید، نقش عضویت این کاربر در همین کلاس تغییر می‌کند. ادامه می‌دهید؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید تغییر نقش",
+                            callback_data=f"pmrc:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"pmrx:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("pmrc:"))
+async def product_class_member_role_apply_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberRoleChangeWizard.confirm.state
+        or not token
+        or token != data.get("member_role_change_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _require_private_callback(callback, "تغییر نقش عضو"):
+        return
+    if not await _has_permission(db, principal, "platform:members:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت نقش اعضا را ندارید.", show_alert=True)
+        return
     if product_session_factory is None:
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
-    parts = (callback.data or "").split(":")
-    class_id, user_id, role = int(parts[1]), int(parts[2]), parts[3]
+
+    class_id = int(data.get("member_role_change_class_id") or 0)
+    user_id = int(data.get("member_role_change_user_id") or 0)
+    role = str(data.get("member_role_change_role") or "")
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -2560,7 +3269,7 @@ async def product_class_member_role_confirm_callback(
         return
     except Exception:
         logger.exception("Could not set ClassMate class member role.")
-        await callback.answer("تغییر نقش عضو ناموفق بود.", show_alert=True)
+        await callback.answer("تغییر نقش عضو ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
     if not changed:
         await callback.answer("عضویت فعال پیدا نشد.", show_alert=True)
@@ -2577,10 +3286,11 @@ async def product_class_member_role_confirm_callback(
     except Exception:
         await db.rollback()
         logger.exception("Class member role audit recording failed.")
-    await callback.answer("نقش عضو تغییر کرد.")
+    await state.clear()
+    await callback.answer("نقش عضو پس از تأیید تغییر کرد.")
     if callback.message is not None:
         await callback.message.edit_text(
-            "نقش عضو تغییر کرد.",
+            "✅ نقش عضو تغییر کرد.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -2594,9 +3304,40 @@ async def product_class_member_role_confirm_callback(
         )
 
 
+@router.callback_query(F.data.startswith("pmrx:"))
+async def product_class_member_role_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != MemberRoleChangeWizard.confirm.state
+        or not token
+        or token != data.get("member_role_change_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("member_role_change_class_id") or 0)
+    await state.clear()
+    await callback.answer("تغییر نقش لغو شد؛ نقش فعلی حفظ شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "تغییر نقش لغو شد؛ هیچ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="👥 بازگشت به اعضای کلاس",
+                            callback_data=f"product:members:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
 
 
-@router.callback_query(F.data.regexp(r"^product:records:[0-9]+$"))
+@router.callback_query(F.data.regexp(r"^product:records:[0-9]+(?::[1-9][0-9]*)?$"))
 async def product_class_records_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2611,18 +3352,23 @@ async def product_class_records_callback(
     if product_session_factory is None:
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
-    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
     try:
+        parts = (callback.data or "").split(":")
+        class_id = int(parts[2])
+        page = int(parts[3]) if len(parts) == 4 else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             class_info = await get_product_class(product_db, class_id=class_id)
-            records = await list_product_class_records(
+            fetched = await list_product_class_records(
                 product_db,
                 class_id=class_id,
                 status="PENDING",
-                limit=50,
+                limit=9,
+                offset=(page - 1) * 8,
             )
     except (ValueError, ApplicationError) as exc:
-        await callback.answer(str(exc), show_alert=True)
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
     except Exception:
         logger.exception("Could not load pending records for ClassMate class %s.", class_id)
@@ -2632,47 +3378,67 @@ async def product_class_records_callback(
         await callback.answer("کلاس پیدا نشد.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    records = fetched[:8]
     counts = {"homework": 0, "exam": 0, "report": 0}
     for item in records:
         counts[item["entity_type"]] += 1
     lines = [
         f"📚 محتوای آموزشی کلاس {class_info['name']}",
-        "",
-        f"تکلیف‌های در انتظار: {counts['homework']}",
-        f"آزمون‌های در انتظار: {counts['exam']}",
-        f"گزارش‌های روزانه در انتظار: {counts['report']}",
+        f"صفحه: {page} · موارد این صفحه: {len(records)}",
+        f"تکلیف‌ها: {counts['homework']}",
+        f"آزمون‌ها: {counts['exam']}",
+        f"گزارش‌های روزانه: {counts['report']}",
         "",
     ]
     rows = []
-    if records:
-        for item in records[:30]:
-            label = {
-                "homework": "تکلیف",
-                "exam": "آزمون",
-                "report": "گزارش",
-            }[item["entity_type"]]
-            title = str(item["title"])[:30]
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=f"🕓 {label}: {title}",
-                        callback_data=(
-                            f"product:record:detail:{class_id}:"
-                            f"{item['entity_type']}:{item['id']}"
-                        ),
-                    )
-                ]
-            )
-    else:
-        lines.append("محتوای در انتظار بررسی وجود ندارد.")
-    rows.extend(
-        [
+    for item in records:
+        label = {
+            "homework": "تکلیف",
+            "exam": "آزمون",
+            "report": "گزارش",
+        }[item["entity_type"]]
+        title = str(item["title"])[:30]
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="⬅️ بازگشت به کلاس",
-                    callback_data=f"product:class:{class_id}",
+                    text=f"🕓 {label}: {title}",
+                    callback_data=(
+                        f"product:record:detail:{class_id}:"
+                        f"{item['entity_type']}:{item['id']}"
+                    ),
                 )
-            ],
+            ]
+        )
+    if not records:
+        lines.append(
+            "محتوای در انتظار بررسی وجود ندارد."
+            if page == 1
+            else "موردی در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"product:records:{class_id}:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"product:records:{class_id}:{page + 1}",
+                )
+            )
+        rows.append(navigation)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ بازگشت به کلاس",
+                callback_data=f"product:class:{class_id}",
+            )
         ]
     )
     await callback.answer()
@@ -2891,7 +3657,7 @@ async def product_record_review_confirm_callback(
         )
 
 
-@router.callback_query(F.data.regexp(r"^product:members:[0-9]+$"))
+@router.callback_query(F.data.regexp(r"^product:members:[0-9]+(?::[1-9][0-9]*)?$"))
 async def product_class_members_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -2907,12 +3673,21 @@ async def product_class_members_callback(
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
     try:
-        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        parts = (callback.data or "").split(":")
+        class_id = int(parts[2])
+        page = int(parts[3]) if len(parts) == 4 else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             class_info = await get_product_class(product_db, class_id=class_id)
-            members = await list_product_class_members(product_db, class_id=class_id)
+            fetched = await list_product_class_members(
+                product_db,
+                class_id=class_id,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
     except (ValueError, ApplicationError) as exc:
-        await callback.answer(str(exc), show_alert=True)
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
     except Exception:
         logger.exception("Could not load ClassMate class members.")
@@ -2922,47 +3697,69 @@ async def product_class_members_callback(
         await callback.answer("کلاس پیدا نشد.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    members = fetched[:8]
     lines = [
         f"👥 اعضای کلاس {class_info['name']}",
-        f"تعداد اعضا: {len(members)}",
-        "دانش‌آموز جدید با کد مشترک همین کلاس و از بخش «عضویت با کد» در ClassMate عضو می‌شود.",
+        f"صفحه: {page} · تعداد نمایش‌داده‌شده: {len(members)}",
+        "دانش‌آموز جدید با کد مشترک همین کلاس و دستور /join در ربات ClassMate عضو می‌شود.",
         "",
     ]
     rows = []
-    if members:
-        for member in members[:30]:
-            active = member["membership_is_active"] and member["user_is_active"]
-            role_label = {
-                "student": "دانش‌آموز",
-                "class_manager": "مدیر کلاس",
-                "trusted_approver": "تأییدکننده",
-            }.get(member["membership_role"], member["membership_role"])
-            lines.append(
-                f"• {member['full_name']} · {member['telegram_id']} · "
-                f"{role_label} · {'فعال' if active else 'غیرفعال'}"
-            )
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=(
-                            f"⛔ تعلیق · {member['full_name'][:18]}"
-                            if active
-                            else f"♻️ فعال‌سازی · {member['full_name'][:18]}"
-                        ),
-                        callback_data=(
-                            f"product:member:status:{class_id}:{member['user_id']}:"
-                            f"{0 if active else 1}"
-                        ),
+    for member in members:
+        active = member["membership_is_active"] and member["user_is_active"]
+        role_label = {
+            "student": "دانش‌آموز",
+            "class_manager": "مدیر کلاس",
+            "trusted_approver": "تأییدکننده",
+        }.get(member["membership_role"], member["membership_role"])
+        lines.append(
+            f"• {member['full_name']} · {member['telegram_id']} · "
+            f"{role_label} · {'فعال' if active else 'غیرفعال'}"
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"⛔ تعلیق · {member['full_name'][:18]}"
+                        if active
+                        else f"♻️ فعال‌سازی · {member['full_name'][:18]}"
                     ),
-                    InlineKeyboardButton(
-                        text="🎖 نقش",
-                        callback_data=f"product:member:role:{class_id}:{member['user_id']}",
+                    callback_data=(
+                        f"product:member:status:{class_id}:{member['user_id']}:"
+                        f"{0 if active else 1}"
                     ),
-                ]
-            )
+                ),
+                InlineKeyboardButton(
+                    text="🎖 نقش",
+                    callback_data=f"product:member:role:{class_id}:{member['user_id']}",
+                ),
+            ]
+        )
 
-    else:
-        lines.append("هنوز عضوی به این کلاس اضافه نشده است.")
+    if not members:
+        lines.append(
+            "هنوز عضوی به این کلاس اضافه نشده است."
+            if page == 1
+            else "عضوی در این صفحه وجود ندارد؛ به صفحه قبل برگردید."
+        )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"product:members:{class_id}:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"product:members:{class_id}:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     rows.extend(
         [
             [
@@ -3015,25 +3812,25 @@ async def product_class_member_add_callback(
     await state.set_state(MemberCreation.telegram_id)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("Telegram ID عضو را فقط به‌صورت عدد وارد کنید:")
+        await callback.message.answer("Telegram ID عضو را فقط به‌صورت عدد وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(MemberCreation.telegram_id, F.text)
 async def product_member_telegram_id_input(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if not value.isdigit() or not 0 < int(value) <= 9_223_372_036_854_775_807:
-        await message.answer("Telegram ID معتبر نیست؛ فقط عدد مثبت وارد کنید.")
+        await message.answer("خطا: Telegram ID معتبر نیست؛ فقط عدد مثبت وارد کنید.\n\nTelegram ID عضو را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_member_telegram_id=int(value))
     await state.set_state(MemberCreation.full_name)
-    await message.answer("نام و نام خانوادگی عضو را وارد کنید:")
+    await message.answer("نام و نام خانوادگی عضو را وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(MemberCreation.full_name, F.text)
 async def product_member_full_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 1 <= len(name) <= 160:
-        await message.answer("نام باید بین ۱ تا ۱۶۰ نویسه باشد.")
+        await message.answer("خطا: نام باید بین ۱ تا ۱۶۰ نویسه باشد.\n\nنام و نام خانوادگی را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     token = secrets.token_urlsafe(8)
@@ -3254,7 +4051,7 @@ async def product_member_status_confirm_callback(
         )
 
 
-@router.callback_query(F.data.regexp(r"^product:announcements:[0-9]+$"))
+@router.callback_query(F.data.regexp(r"^product:announcements:[0-9]+(?::[1-9][0-9]*)?$"))
 async def product_class_announcements_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -3267,11 +4064,23 @@ async def product_class_announcements_callback(
     if product_session_factory is None:
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
-    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
     try:
+        parts = (callback.data or "").split(":")
+        class_id = int(parts[2])
+        page = int(parts[3]) if len(parts) == 4 else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             class_info = await get_product_class(product_db, class_id=class_id)
-            announcements = await list_product_class_announcements(product_db, class_id=class_id)
+            fetched = await list_product_class_announcements(
+                product_db,
+                class_id=class_id,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
+        return
     except Exception:
         logger.exception("Could not load ClassMate announcements.")
         await callback.answer("دریافت اطلاعیه‌ها ناموفق بود.", show_alert=True)
@@ -3280,10 +4089,16 @@ async def product_class_announcements_callback(
         await callback.answer("کلاس پیدا نشد.", show_alert=True)
         return
 
-    lines = [f"📢 اطلاعیه‌های کلاس {class_info['name']}", ""]
+    has_next = len(fetched) > 8
+    announcements = fetched[:8]
+    lines = [
+        f"📢 اطلاعیه‌های کلاس {class_info['name']}",
+        f"صفحه: {page} · تعداد در این صفحه: {len(announcements)}",
+        "",
+    ]
     rows = []
     if announcements:
-        for item in announcements[:20]:
+        for item in announcements:
             state_label = "فعال" if item["is_active"] else "غیرفعال"
             lines.append(f"• {item['title']} · {state_label}")
             rows.append(
@@ -3302,7 +4117,28 @@ async def product_class_announcements_callback(
                 ]
             )
     else:
-        lines.append("هنوز اطلاعیه‌ای برای این کلاس ثبت نشده است.")
+        lines.append(
+            "هنوز اطلاعیه‌ای برای این کلاس ثبت نشده است."
+            if page == 1
+            else "اطلاعیه‌ای در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"product:announcements:{class_id}:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"product:announcements:{class_id}:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     rows.extend(
         [
             [
@@ -3344,25 +4180,25 @@ async def product_announcement_add_callback(
     await state.set_state(AnnouncementCreation.title)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("عنوان اطلاعیه را وارد کنید (۲ تا ۱۸۰ نویسه):")
+        await callback.message.answer("عنوان اطلاعیه را وارد کنید (۲ تا ۱۸۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.message(AnnouncementCreation.title, F.text)
 async def product_announcement_title_input(message: Message, state: FSMContext) -> None:
     title = " ".join((message.text or "").split())
     if not 2 <= len(title) <= 180:
-        await message.answer("عنوان اطلاعیه باید بین ۲ تا ۱۸۰ نویسه باشد.")
+        await message.answer("خطا: عنوان اطلاعیه باید بین ۲ تا ۱۸۰ نویسه باشد.\n\nعنوان را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_announcement_title=title)
     await state.set_state(AnnouncementCreation.body)
-    await message.answer("متن کامل اطلاعیه را وارد کنید (۲ تا ۸۰۰۰ نویسه):")
+    await message.answer("متن کامل اطلاعیه را وارد کنید (۲ تا ۸۰۰۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.message(AnnouncementCreation.body, F.text)
 async def product_announcement_body_input(message: Message, state: FSMContext) -> None:
     body = (message.text or "").strip()
     if not 2 <= len(body) <= 8000:
-        await message.answer("متن اطلاعیه باید بین ۲ تا ۸۰۰۰ نویسه باشد.")
+        await message.answer("خطا: متن اطلاعیه باید بین ۲ تا ۸۰۰۰ نویسه باشد.\n\nمتن را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     token = secrets.token_urlsafe(8)

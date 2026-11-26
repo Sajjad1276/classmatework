@@ -11,9 +11,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
     Message,
     ReplyKeyboardRemove,
+)
+from aiogram.types import (
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -23,10 +25,16 @@ from app.application.control_center import (
     set_class_subject_assignment,
 )
 from app.application.errors import ApplicationError
+from app.bot.ux import ensure_back_button
 from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="control-center")
+
+def InlineKeyboardMarkup(*args, **kwargs) -> TelegramInlineKeyboardMarkup:
+    """Create an inline keyboard with a safe back path by default."""
+    return ensure_back_button(TelegramInlineKeyboardMarkup(*args, **kwargs))
+
 logger = logging.getLogger(__name__)
 TEHRAN = ZoneInfo("Asia/Tehran")
 
@@ -293,7 +301,7 @@ async def class_subject_management_callback(
             page = int(parts[3])
             if page < 1:
                 raise ValueError
-        elif action in {"a", "d", "r"} and len(parts) == 4:
+        elif action in {"a", "c", "d", "r"} and len(parts) == 4:
             class_group_id = UUID(hex=parts[2])
             subject_id = _decode_subject_callback_id(parts[3])
             page = 1
@@ -301,24 +309,66 @@ async def class_subject_management_callback(
             raise ValueError
 
         if action == "a":
-            changed = await set_class_subject_assignment(
+            catalog = await get_class_subject_catalog(
                 db,
                 actor_id=principal.user.id,
                 class_group_id=class_group_id,
-                subject_id=subject_id,
-                assigned=True,
             )
-            await callback.answer(
-                "درس به کلاس تخصیص یافت." if changed else "این درس از قبل در کلاس بود."
+            target = next(
+                (
+                    item for item in catalog["items"]
+                    if item["subject"].id == subject_id
+                ),
+                None,
             )
+            if target is None:
+                raise ApplicationError("درس موردنظر در فهرست این مدرسه پیدا نشد.")
+            if target["assigned"]:
+                await callback.answer("این درس از قبل به کلاس تخصیص دارد.")
+                await _render_class_subject_panel(
+                    callback,
+                    principal=principal,
+                    db=db,
+                    class_group_id=class_group_id,
+                    page=page,
+                )
+                return
+            class_ref = _class_callback_id(class_group_id)
+            subject_ref = _encode_subject_callback_id(subject_id)
+            await callback.answer()
+            if callback.message is not None:
+                await callback.message.edit_text(
+                    "پیش‌نمایش تخصیص درس به کلاس\n\n"
+                    f"کلاس: {catalog['class_group'].name}\n"
+                    f"درس: {target['subject'].name}\n\n"
+                    "با تأیید، این درس در فهرست درس‌های قابل استفادهٔ کلاس قرار می‌گیرد. "
+                    "هیچ تغییری تا انتخاب «تأیید تخصیص» ثبت نمی‌شود.",
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="✅ تأیید تخصیص درس",
+                                    callback_data=f"cs:c:{class_ref}:{subject_ref}",
+                                )
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text="❌ لغو",
+                                    callback_data=f"cs:p:{class_ref}:{page}",
+                                )
+                            ],
+                        ]
+                    ),
+                )
+            return
         elif action == "d":
             await callback.answer()
             if callback.message is not None:
                 class_ref = _class_callback_id(class_group_id)
                 subject_ref = _encode_subject_callback_id(subject_id)
                 await callback.message.edit_text(
-                    "آیا این درس از کلاس برداشته شود؟\n"
-                    "این عمل فقط رابطهٔ درس و کلاس را غیرفعال می‌کند؛ خود درس حذف نمی‌شود.",
+                    "پیش‌نمایش برداشتن درس از کلاس\n\n"
+                    "با تأیید، فقط رابطهٔ درس و کلاس غیرفعال می‌شود؛ خود درس حذف نمی‌شود.",
                     reply_markup=InlineKeyboardMarkup(
                         inline_keyboard=[
                             [
@@ -337,6 +387,17 @@ async def class_subject_management_callback(
                     ),
                 )
             return
+        elif action == "c":
+            changed = await set_class_subject_assignment(
+                db,
+                actor_id=principal.user.id,
+                class_group_id=class_group_id,
+                subject_id=subject_id,
+                assigned=True,
+            )
+            await callback.answer(
+                "درس به کلاس تخصیص یافت." if changed else "این درس از قبل در کلاس بود."
+            )
         elif action == "r":
             changed = await set_class_subject_assignment(
                 db,
