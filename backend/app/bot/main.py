@@ -133,6 +133,13 @@ async def main() -> None:
         product_session_factory = create_session_factory(product_engine)
         try:
             async with product_engine.connect() as product_connection:
+                await product_connection.execute(
+                    text(
+                        "ALTER TABLE public.classes "
+                        "ADD COLUMN IF NOT EXISTS member_join_code VARCHAR(64)"
+                    )
+                )
+                await product_connection.commit()
                 product_state = (
                     await product_connection.execute(
                         text(

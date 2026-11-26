@@ -216,6 +216,7 @@ async def create_product_class(
                     grade,
                     section,
                     is_active,
+                    member_join_code,
                     member_join_code_hash,
                     member_join_code_expires_at
                 )
@@ -226,6 +227,7 @@ async def create_product_class(
                     :grade,
                     :section,
                     TRUE,
+                    :member_join_code,
                     :member_join_code_hash,
                     NULL
                 )
@@ -237,6 +239,7 @@ async def create_product_class(
             "name": normalized_name,
             "grade": normalized_grade,
             "section": normalized_section,
+            "member_join_code": join_code,
             "member_join_code_hash": join_code_hash,
         },
     )
@@ -268,6 +271,7 @@ async def get_product_class(
                 s.name AS school_name,
                 c.group_chat_id,
                 c.group_chat_title,
+                c.member_join_code,
                 (c.member_join_code_hash IS NOT NULL) AS has_member_join_code,
                 c.member_join_code_expires_at
             FROM public.classes AS c
@@ -1384,6 +1388,7 @@ async def issue_product_class_join_code(
             """
             UPDATE public.classes AS c
             SET member_join_code_hash = :code_hash,
+                member_join_code = :code,
                 member_join_code_expires_at = NULL
             FROM public.academic_years AS ay
             JOIN public.schools AS s ON s.id = ay.school_id
@@ -1394,7 +1399,7 @@ async def issue_product_class_join_code(
             RETURNING c.id, c.name, c.member_join_code_expires_at
             """
         ),
-        {"class_id": class_id, "code_hash": code_hash},
+        {"class_id": class_id, "code_hash": code_hash, "code": normalized_code},
     )
     row = result.mappings().one_or_none()
     if row is None:

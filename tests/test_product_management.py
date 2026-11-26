@@ -403,9 +403,10 @@ async def test_create_product_class_creates_a_hashed_reusable_class_join_code() 
     assert created["has_member_join_code"] is True
     assert len(code) == 10
     assert set(code) <= set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    assert params["member_join_code"] == code
     assert params["member_join_code_hash"] == hashlib.sha256(code.encode("utf-8")).hexdigest()
     assert "member_join_code_hash" in str(db.execute.await_args_list[2].args[0])
-    assert params.get("member_join_code") is None
+    assert "member_join_code" in str(db.execute.await_args_list[2].args[0])
 
 
 @pytest.mark.asyncio
@@ -465,6 +466,7 @@ async def test_get_product_class_returns_school_and_class_join_code_status() -> 
         "school_name": "مدرسه نمونه",
         "group_chat_id": None,
         "group_chat_title": None,
+        "member_join_code": "ABCD2345XY",
         "has_member_join_code": True,
         "member_join_code_expires_at": None,
     }
@@ -475,6 +477,6 @@ async def test_get_product_class_returns_school_and_class_join_code_status() -> 
     assert result == expected
     sql = str(db.execute.await_args.args[0])
     assert "ay.school_id" in sql
+    assert "c.member_join_code" in sql
     assert "member_join_code_hash IS NOT NULL" in sql
-
 

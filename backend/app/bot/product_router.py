@@ -1471,6 +1471,22 @@ async def product_class_detail_callback(
     ]
     lines.extend(f"• {item['name']}" for item in subjects[:20])
     lines.extend(["", f"زنگ‌های برنامه هفتگی: {len(timetable)}"])
+    if class_info.get("member_join_code"):
+        lines.extend(
+            [
+                "",
+                "🔑 کد مشترک ورود به کلاس:",
+                f"/join {class_info['member_join_code']}",
+                "این کد ثابت است و فقط با دکمهٔ «تعویض کد ورود کلاس» تغییر می‌کند.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "⚠️ کد ورود قابل نمایش نیست؛ برای صدور یا تعویض کد اقدام کنید.",
+            ]
+        )
     await callback.answer()
     if callback.message is not None:
         await callback.message.edit_text(
