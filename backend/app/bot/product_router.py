@@ -23,6 +23,7 @@ from app.application.class_join_codes import (
     store_class_join_code_secret,
 )
 from app.application.errors import ApplicationError, ResourceConflict
+from app.core.config import get_settings
 from app.application.product_management import (
     add_product_class_member,
     create_and_assign_product_subject,
@@ -55,7 +56,6 @@ from app.application.product_management import (
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
 from app.modules.identity.principal import TelegramPrincipal
-from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = Router(name="product-management")
@@ -66,7 +66,7 @@ CREATE_SCHOOL_BUTTON = "➕ ایجاد مدرسه"
 
 def _class_join_start_url(code: str) -> str | None:
     username = (get_settings().classmate_bot_username or "").strip().lstrip("@")
-    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
         return None
     return f"https://t.me/{username}?start=join_{code}"
 
