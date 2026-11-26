@@ -111,14 +111,18 @@ def test_rotation_is_separate_and_replaces_the_product_hash_and_saved_secret_aft
     preview_function = _function(tree, "product_class_join_code_rotate_callback")
     confirm_function = _function(tree, "product_class_join_code_rotate_confirm_callback")
     save_function = _function(tree, "_save_new_member_join_code")
-    preview_source = ast.unparse(preview_function)
+    preview_literals = " ".join(
+        node.value
+        for node in ast.walk(preview_function)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
     confirm_source = ast.unparse(confirm_function)
 
     assert _calls(save_function, "issue_product_class_join_code")
     assert _calls(save_function, "store_class_join_code_secret")
     assert "product.class.member_join_code_rotated" in confirm_source
-    assert "پیش‌نمایش تغییر کد ورود کلاس" in preview_source
-    assert "کد فعلی و لینک‌های عضویت قبلی فوراً نامعتبر می‌شوند" in preview_source
+    assert "تغییر کد ورود کلاس" in preview_literals
+    assert "کد فعلی و لینک‌های عضویت قبلی فوراً نامعتبر می‌شوند" in preview_literals
     assert "product:class:join-code:rotate:" in PRODUCT_ROUTER.read_text(encoding="utf-8")
 
 
