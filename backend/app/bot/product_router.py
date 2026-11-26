@@ -201,6 +201,21 @@ async def _close_inline_panel(message: Message | None) -> None:
     except Exception:
         logger.debug("Could not close inline panel before input.", exc_info=True)
 
+async def _render_product_panel(
+    message: Message,
+    body: str,
+    keyboard: InlineKeyboardMarkup,
+) -> None:
+    """Edit an existing bot panel when possible; otherwise send a new one."""
+    if message.from_user is not None and message.from_user.is_bot:
+        try:
+            await message.edit_text(body, reply_markup=keyboard)
+            return
+        except Exception:
+            logger.debug("Could not edit active product panel.", exc_info=True)
+    await message.answer(body, reply_markup=keyboard)
+
+
 
 
 
@@ -237,6 +252,8 @@ def _school_directory_keyboard(
     *,
     can_create: bool,
     can_manage_classes: bool = False,
+    page: int = 1,
+    has_next: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -245,8 +262,25 @@ def _school_directory_keyboard(
                 callback_data=f"product:school:{school['id']}",
             )
         ]
-        for school in schools
+        for school in schools[:8]
     ]
+    navigation: list[InlineKeyboardButton] = []
+    if page > 1:
+        navigation.append(
+            InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"product:schools:page:{page - 1}",
+            )
+        )
+    if has_next:
+        navigation.append(
+            InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"product:schools:page:{page + 1}",
+            )
+        )
+    if navigation:
+        rows.append(navigation)
     if can_create:
         rows.append(
             [InlineKeyboardButton(text="➕ ایجاد مدرسه", callback_data="product:school:create")]
@@ -270,7 +304,11 @@ async def _show_school_directory(
     principal: TelegramPrincipal,
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None,
+    page: int = 1,
 ) -> None:
+    if page < 1:
+        await message.answer("شماره صفحه معتبر نیست.")
+        return
     if not await _has_permission(db, principal, "platform:schools:read"):
         await message.answer("مجوز مشاهدهٔ مدارس را ندارید.")
         return
@@ -284,24 +322,38 @@ async def _show_school_directory(
     can_manage_classes = await _has_permission(db, principal, "platform:classes:manage")
     try:
         async with product_session_factory() as product_db:
-            schools = await list_product_schools(product_db)
+            fetched = await list_product_schools(
+                product_db,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
     except Exception:
         logger.exception("Could not load ClassMate product schools.")
         await message.answer("دریافت فهرست مدارس از دیتابیس ClassMate ناموفق بود.")
         return
 
+    has_next = len(fetched) > 8
+    schools = fetched[:8]
     body = (
-        f"🏫 مدیریت مدارس ClassMate\n\nتعداد مدارس: {len(schools)}\n"
+        f"🏫 مدیریت مدارس ClassMate\n\n"
+        f"صفحه: {page}\n"
         "مدرسه را برای مشاهدهٔ کلاس‌ها انتخاب کنید."
         if schools
-        else "هنوز مدرسه‌ای در ClassMate ثبت نشده است."
+        else (
+            "هنوز مدرسه‌ای در ClassMate ثبت نشده است."
+            if page == 1
+            else "در این صفحه مدرسه‌ای وجود ندارد؛ به صفحه قبل برگردید."
+        )
     )
-    await message.answer(
+    await _render_product_panel(
+        message,
         body,
-        reply_markup=_school_directory_keyboard(
+        _school_directory_keyboard(
             schools,
             can_create=can_create,
             can_manage_classes=can_manage_classes,
+            page=page,
+            has_next=has_next,
         ),
     )
 
@@ -323,7 +375,7 @@ async def schools_button_handler(
     )
 
 
-@router.callback_query(F.data == "product:schools")
+@router.callback_query(F.data.regexp(r"^product:schools(?::page:[1-9][0-9]*)?$"))
 async def schools_refresh_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -332,11 +384,14 @@ async def schools_refresh_callback(
 ) -> None:
     await callback.answer()
     if callback.message is not None:
+        raw_page = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+        page = int(raw_page) if raw_page.isdigit() else 1
         await _show_school_directory(
             callback.message,
             principal=principal,
             db=db,
             product_session_factory=product_session_factory,
+            page=page,
         )
 
 
@@ -667,8 +722,8 @@ async def product_missing_class_join_codes_callback(
         await callback.message.answer(body, parse_mode="HTML")
 
 
-@router.callback_query(F.data.regexp(r"^product:school:[0-9]+$"))
-async def product_school_detail_callback(
+@router.callback_query(F.data.regexp(r"^product:school:[0-9]+(?::page:[1-9][0-9]*)?$"))
+async async def product_school_detail_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
@@ -682,21 +737,32 @@ async def product_school_detail_callback(
         return
 
     try:
-        school_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        parts = (callback.data or "").split(":")
+        school_id = int(parts[2])
+        page = int(parts[4]) if len(parts) == 5 and parts[3] == "page" else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             school = await get_product_school(product_db, school_id=school_id)
             if school is None:
                 await callback.answer("مدرسه پیدا نشد.", show_alert=True)
                 return
-            classes = await list_product_classes(product_db, school_id=school_id)
+            fetched_classes = await list_product_classes(
+                product_db,
+                school_id=school_id,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
     except (ValueError, ApplicationError) as exc:
-        await callback.answer(str(exc), show_alert=True)
+        await callback.answer(str(exc) or "شناسه یا صفحه معتبر نیست.", show_alert=True)
         return
     except Exception:
         logger.exception("Could not load ClassMate school %s.", callback.data)
         await callback.answer("دریافت جزئیات مدرسه ناموفق بود.", show_alert=True)
         return
 
+    has_next = len(fetched_classes) > 8
+    classes = fetched_classes[:8]
     status = "فعال" if school["is_active"] else "غیرفعال"
     lines = [
         f"🏫 مدرسه: {school['name']}",
@@ -704,8 +770,9 @@ async def product_school_detail_callback(
         f"وضعیت: {status}",
         f"منطقه زمانی: {school['timezone']}",
         f"تعداد کلاس‌ها: {school['class_count']}",
+        f"صفحهٔ کلاس‌ها: {page}",
         "",
-        "کلاس‌ها:",
+        "کلاس‌های این صفحه:",
     ]
     can_read_classes = await _has_permission(db, principal, "platform:classes:read")
     if classes and can_read_classes:
@@ -713,7 +780,11 @@ async def product_school_detail_callback(
     elif classes:
         lines.append("کلاس ثبت شده است؛ برای مشاهدهٔ جزئیات کلاس مجوز لازم را ندارید.")
     else:
-        lines.append("هنوز کلاسی برای این مدرسه ثبت نشده است.")
+        lines.append(
+            "هنوز کلاسی برای این مدرسه ثبت نشده است."
+            if page == 1
+            else "کلاسی در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
 
     rows = (
         [
@@ -726,11 +797,29 @@ async def product_school_detail_callback(
                     callback_data=f"product:class:{item['id']}",
                 )
             ]
-            for item in classes[:30]
+            for item in classes
         ]
         if can_read_classes
         else []
     )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ کلاس‌های قبلی",
+                    callback_data=f"product:school:{school_id}:page:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="کلاس‌های بعدی ➡️",
+                    callback_data=f"product:school:{school_id}:page:{page + 1}",
+                )
+            )
+        rows.append(navigation)
+
     can_create_class = (
         school["is_active"]
         and await _has_permission(db, principal, "platform:classes:create")
@@ -757,15 +846,12 @@ async def product_school_detail_callback(
                 ),
             ]
         )
-    rows.extend(
+    rows.append(
         [
-            [
-                InlineKeyboardButton(
-                    text="⬅️ بازگشت به مدارس",
-                    callback_data="product:schools",
-                )
-            ],
-
+            InlineKeyboardButton(
+                text="⬅️ بازگشت به مدارس",
+                callback_data="product:schools",
+            )
         ]
     )
     await callback.answer()
@@ -774,27 +860,6 @@ async def product_school_detail_callback(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
-
-
-async def _begin_class_creation(
-    message: Message,
-    *,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-    state: FSMContext,
-    school_id: int,
-) -> None:
-    if not await _has_permission(db, principal, "platform:classes:create"):
-        await message.answer("مجوز ایجاد کلاس را ندارید.")
-        return
-    await state.clear()
-    token = secrets.token_urlsafe(8)
-    await state.update_data(
-        product_class_token=token,
-        product_class_school_id=school_id,
-    )
-    await state.set_state(ClassCreation.name)
-    await message.answer("نام کلاس را وارد کنید (۲ تا ۸۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.callback_query(F.data.regexp(r"^product:class:create:[0-9]+$"))
