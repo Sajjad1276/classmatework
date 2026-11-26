@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.application.control_center import (
@@ -438,3 +438,119 @@ def test_usage_actor_hash_is_stable_and_does_not_expose_telegram_id() -> None:
     assert first != rotated_key
     assert len(first) == 64
     assert "123456789" not in first
+
+
+@pytest.mark.asyncio
+async def test_platform_report_reads_private_starts_and_activity_from_live_classmate_db() -> None:
+    work_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    product_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with work_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    work_factory = async_sessionmaker(work_engine, expire_on_commit=False)
+    product_factory = async_sessionmaker(product_engine, expire_on_commit=False)
+
+    async with product_engine.begin() as connection:
+        await connection.execute(text(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, private_chat_started BOOLEAN NOT NULL, "
+            "is_active BOOLEAN NOT NULL, created_at DATETIME NOT NULL, last_seen_at DATETIME)"
+        ))
+        await connection.execute(text(
+            "CREATE TABLE schools (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL)"
+        ))
+        await connection.execute(text(
+            "CREATE TABLE classes (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL, group_chat_id BIGINT)"
+        ))
+        await connection.execute(text(
+            "CREATE TABLE subjects (id INTEGER PRIMARY KEY)"
+        ))
+        await connection.execute(text(
+            "CREATE TABLE class_memberships (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
+            "is_active BOOLEAN NOT NULL, role VARCHAR(32) NOT NULL)"
+        ))
+
+    now = datetime.now(UTC)
+    async with work_factory() as db, product_factory() as product_db:
+        user = User(display_name="Report Owner", status="active")
+        role = Role(
+            tenant_id=None,
+            key=f"platform_owner_{uuid4().hex[:8]}",
+            name="Platform Owner",
+            is_system=True,
+        )
+        permission = Permission(
+            key="platform:reports:read",
+            description="Read platform report",
+        )
+        db.add_all([user, role, permission])
+        await db.flush()
+        db.add_all([
+            RolePermission(role_id=role.id, permission_id=permission.id, effect="allow"),
+            RoleBinding(
+                user_id=user.id,
+                role_id=role.id,
+                tenant_id=None,
+                scope_type="platform",
+                scope_id=None,
+                created_by_id=user.id,
+            ),
+        ])
+        await db.commit()
+
+        await product_db.execute(text(
+            """
+            INSERT INTO users (id, private_chat_started, is_active, created_at, last_seen_at)
+            VALUES
+                (1, TRUE, TRUE, :recent, :half_hour),
+                (2, TRUE, FALSE, :older, :two_hours),
+                (3, FALSE, TRUE, :older, NULL)
+            """
+        ), {
+            "recent": now - timedelta(hours=12),
+            "older": now - timedelta(days=10),
+            "half_hour": now - timedelta(minutes=30),
+            "two_hours": now - timedelta(hours=2),
+        })
+        await product_db.execute(text(
+            "INSERT INTO schools (id, is_active) VALUES (1, TRUE), (2, FALSE)"
+        ))
+        await product_db.execute(text(
+            "INSERT INTO classes (id, is_active, group_chat_id) VALUES "
+            "(1, TRUE, -100123456), (2, FALSE, NULL)"
+        ))
+        await product_db.execute(text(
+            "INSERT INTO subjects (id) VALUES (1), (2), (3)"
+        ))
+        await product_db.execute(text(
+            "INSERT INTO class_memberships (id, user_id, is_active, role) VALUES "
+            "(1, 1, TRUE, 'student'), (2, 1, TRUE, 'class_manager'), (3, 2, TRUE, 'student')"
+        ))
+        await product_db.commit()
+
+        report = await get_platform_report(
+            db,
+            actor_id=user.id,
+            product_db=product_db,
+        )
+        assert report["source_is_product_db"] == 1
+        assert report["total_users"] == 3
+        assert report["started_users"] == 2
+        assert report["active_users"] == 2
+        assert report["active_started_users"] == 1
+        assert report["active_students"] == 1
+        assert report["active_memberships"] == 3
+        assert report["new_users_1d"] == 1
+        assert report["new_users_7d"] == 1
+        assert report["new_users_30d"] == 2
+        assert report["active_users_1h"] == 1
+        assert report["active_users_4h"] == 2
+        assert report["active_users_12h"] == 2
+        assert report["active_users_24h"] == 2
+        assert report["schools"] == 2
+        assert report["active_schools"] == 1
+        assert report["classes"] == 2
+        assert report["active_classes"] == 1
+        assert report["subjects"] == 3
+        assert report["connected_groups"] == 1
+
+    await product_engine.dispose()
+    await work_engine.dispose()
