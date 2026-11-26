@@ -841,7 +841,7 @@ async def member_directory_search_callback(
     if callback.message is not None:
         await callback.message.answer(
             "نام عضو یا Telegram ID دقیق را وارد کنید.\n"
-            "برای لغو جست‌وجو /cancel را بزنید."
+            "برای خروج از فرم یا لغو جست‌وجو، از /start استفاده کنید."
         )
 
 
@@ -857,7 +857,7 @@ async def member_directory_search_input(
         await message.answer("عبارت جست‌وجو خالی است؛ نام یا Telegram ID را وارد کنید.")
         return
     if search_query.startswith("/"):
-        await message.answer("عبارت جست‌وجو معتبر نیست؛ برای خروج از /cancel استفاده کنید.")
+        await message.answer("عبارت جست‌وجو معتبر نیست؛ برای خروج از فرم، /start را بزنید.")
         return
 
     data = await state.get_data()
@@ -867,7 +867,7 @@ async def member_directory_search_input(
         or not data.get("member_directory_tenant_id")
     ):
         await state.clear()
-        await message.answer("فهرست اعضا منقضی شده است. دوباره /members را اجرا کنید.")
+        await message.answer("فهرست اعضا منقضی شده است. دوباره از پنل اعضا وارد شوید.")
         return
     try:
         tenant_id = UUID(data["member_directory_tenant_id"])
@@ -1282,6 +1282,6 @@ async def help_callback(callback: CallbackQuery) -> None:
 @router.callback_query()
 async def unknown_callback(callback: CallbackQuery) -> None:
     await callback.answer(
-        "این دکمه معتبر نیست یا منقضی شده است. از /menu شروع کنید.",
+        "این دکمه معتبر نیست یا منقضی شده است. با /start به پنل اصلی برگردید.",
         show_alert=True,
     )
