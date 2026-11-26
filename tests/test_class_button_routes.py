@@ -348,3 +348,58 @@ async def test_bulk_class_code_action_is_not_available_in_group_chats(monkeypatc
     )
 
     issue_service.assert_not_awaited()
+
+
+def test_owner_class_shortcut_matches_persian_numbers_and_grade_aliases():
+    matches = [
+        {"name": "۱۰۴", "grade": "دهم", "section": None},
+        {"name": "کلاس", "grade": "10", "section": "۱۰۴"},
+    ]
+    assert all(product_router._is_owner_class_shortcut_candidate(item) for item in matches)
+    assert not product_router._is_owner_class_shortcut_candidate(
+        {"name": "104", "grade": "یازدهم", "section": None}
+    )
+
+
+@pytest.mark.asyncio
+async def test_owner_class_shortcut_opens_the_unique_class_detail_directly(monkeypatch):
+    async def has_permission(_db, _principal, permission_key):
+        return permission_key == "platform:classes:read"
+
+    monkeypatch.setattr(product_router, "_has_permission", has_permission)
+    monkeypatch.setattr(
+        product_router,
+        "list_product_class_shortcut_candidates",
+        AsyncMock(return_value=[
+            {
+                "id": 104,
+                "name": "۱۰۴",
+                "grade": "دهم",
+                "section": None,
+                "school_name": "دبیرستان نمونه",
+            }
+        ]),
+    )
+    panel_builder = AsyncMock(
+        return_value=(
+            "پنل کلاس دهم ۱۰۴",
+            InlineKeyboardMarkup(inline_keyboard=[]),
+        )
+    )
+    monkeypatch.setattr(product_router, "_build_product_class_detail_panel", panel_builder)
+
+    carrier = SimpleNamespace(delete=AsyncMock())
+    message = SimpleNamespace(
+        chat=SimpleNamespace(type="private"),
+        answer=AsyncMock(side_effect=[carrier, None]),
+    )
+    await product_router.owner_class_shortcut_handler(
+        message,
+        principal=SimpleNamespace(user=SimpleNamespace(id=42)),
+        db=object(),
+        product_session_factory=lambda: ProductSessionContext(),
+    )
+
+    panel_builder.assert_awaited_once()
+    assert panel_builder.await_args.args[-1] == 104
+    assert message.answer.await_args_list[-1].args[0] == "پنل کلاس دهم ۱۰۴"
