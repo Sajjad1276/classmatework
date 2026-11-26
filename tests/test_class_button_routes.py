@@ -91,7 +91,7 @@ async def test_class_button_opens_detail_and_displays_all_permitted_actions(monk
     assert "product:timetable:add:37" in callback_data
     assert "product:members:37" in callback_data
     assert "product:announcements:37" in callback_data
-    assert "♻️ تغییر کد ورود کلاس" in labels
+    assert "🔑 کد ورود به کلاس" in labels
     assert "➕ افزودن گروه" in labels
     assert "⬅️ بازگشت به مدرسه" in labels
 
@@ -142,11 +142,30 @@ async def test_class_detail_hides_actions_without_their_permissions(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_class_join_code_button_issues_and_displays_the_native_join_command(monkeypatch):
+async def test_class_join_code_button_displays_the_existing_code_without_rotating(monkeypatch):
     monkeypatch.setattr(product_router, "_has_permission", AsyncMock(return_value=True))
-    issue_code = AsyncMock(return_value={"id": 37, "name": "دهم الف"})
+    saved_secret = {
+        "class_id": 37,
+        "join_code": "ABCD2345XY",
+        "join_code_hash": "current-hash",
+    }
+    get_secret = AsyncMock(return_value=saved_secret)
+    get_class = AsyncMock(
+        return_value={
+            "id": 37,
+            "name": "دهم الف",
+            "is_active": True,
+            "has_member_join_code": True,
+            "member_join_code_hash": "current-hash",
+        }
+    )
+    issue_code = AsyncMock()
+    store_secret = AsyncMock()
     record = AsyncMock()
+    monkeypatch.setattr(product_router, "get_class_join_code_secret", get_secret)
+    monkeypatch.setattr(product_router, "get_product_class", get_class)
     monkeypatch.setattr(product_router, "issue_product_class_join_code", issue_code)
+    monkeypatch.setattr(product_router, "store_class_join_code_secret", store_secret)
     monkeypatch.setattr(product_router, "record_event", record)
 
     callback = _callback("product:class:join-code:37")
@@ -160,16 +179,54 @@ async def test_class_join_code_button_issues_and_displays_the_native_join_comman
         product_session_factory=lambda: ProductSessionContext(),
     )
 
+    get_secret.assert_awaited_once_with(db, class_id=37)
+    get_class.assert_awaited_once()
+    issue_code.assert_not_awaited()
+    store_secret.assert_not_awaited()
+    record.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    text = callback.message.edit_text.await_args.args[0]
+    assert "ABCD2345XY" in text
+    assert "/join " not in text
+    markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].text == "♻️ تغییر کد ورود"
+    assert markup.inline_keyboard[0][0].callback_data == "product:class:join-code:rotate:37"
+
+
+@pytest.mark.asyncio
+async def test_class_join_code_rotation_replaces_code_and_stores_the_new_secret(monkeypatch):
+    monkeypatch.setattr(product_router, "_has_permission", AsyncMock(return_value=True))
+    issue_code = AsyncMock(return_value={"id": 37, "name": "دهم الف"})
+    store_secret = AsyncMock()
+    record = AsyncMock()
+    monkeypatch.setattr(product_router, "issue_product_class_join_code", issue_code)
+    monkeypatch.setattr(product_router, "store_class_join_code_secret", store_secret)
+    monkeypatch.setattr(product_router, "record_event", record)
+
+    callback = _callback("product:class:join-code:rotate:37")
+    principal = SimpleNamespace(user=SimpleNamespace(id=42))
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+
+    await product_router.product_class_join_code_rotate_callback(
+        callback,
+        principal=principal,
+        db=db,
+        product_session_factory=lambda: ProductSessionContext(),
+    )
+
     issue_code.assert_awaited_once()
     code = issue_code.await_args.kwargs["code"]
     assert len(code) == 10
     assert set(code) <= set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-    db.commit.assert_awaited_once()
+    store_secret.assert_awaited_once_with(db, class_id=37, code=code)
     record.assert_awaited_once()
+    db.commit.assert_awaited_once()
     text = callback.message.edit_text.await_args.args[0]
-    assert f"/join {code}" in text
+    assert code in text
     markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
-    assert markup.inline_keyboard[0][0].callback_data == "product:class:37"
+    assert markup.inline_keyboard[0][0].text == "♻️ تغییر کد ورود"
+
+
 
 
 @pytest.mark.asyncio
@@ -244,7 +301,9 @@ async def test_bulk_class_code_action_displays_only_new_codes_in_private_chat(mo
     audit = AsyncMock()
     monkeypatch.setattr(product_router, "_require_private_callback", require_private)
     monkeypatch.setattr(product_router, "_has_permission", has_permission)
+    store_secret = AsyncMock()
     monkeypatch.setattr(product_router, "issue_missing_product_class_join_codes", issue_service)
+    monkeypatch.setattr(product_router, "store_class_join_code_secret", store_secret)
     monkeypatch.setattr(product_router, "record_event", audit)
 
     callback = _callback("product:classes:join-codes:missing")
@@ -259,11 +318,12 @@ async def test_bulk_class_code_action_displays_only_new_codes_in_private_chat(mo
     )
 
     issue_service.assert_awaited_once()
+    store_secret.assert_awaited_once_with(db, class_id=31, code="ABCD2345XY")
     db.commit.assert_awaited_once()
     audit.assert_awaited_once()
     body = callback.message.edit_text.await_args.args[0]
     assert "دهم الف" in body
-    assert "/join ABCD2345XY" in body
+    assert "ABCD2345XY" in body
     assert "کدهای قبلی دست‌نخورده باقی ماندند" in body
 
 
