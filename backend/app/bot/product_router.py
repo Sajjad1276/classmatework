@@ -723,7 +723,7 @@ async def product_missing_class_join_codes_callback(
 
 
 @router.callback_query(F.data.regexp(r"^product:school:[0-9]+(?::page:[1-9][0-9]*)?$"))
-async async def product_school_detail_callback(
+async def product_school_detail_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
