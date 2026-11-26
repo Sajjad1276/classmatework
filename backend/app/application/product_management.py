@@ -17,9 +17,10 @@ async def list_product_schools(
     db: AsyncSession,
     *,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[dict]:
-    if not 1 <= limit <= 100:
-        raise InvalidApplicationInput("تعداد مدارس درخواستی معتبر نیست.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("تعداد یا شماره صفحه مدارس معتبر نیست.")
 
     result = await db.execute(
         text(
@@ -35,10 +36,10 @@ async def list_product_schools(
             LEFT JOIN public.classes AS c ON c.academic_year_id = ay.id
             GROUP BY s.id, s.name, s.timezone, s.is_active
             ORDER BY s.is_active DESC, s.name ASC, s.id ASC
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
             """
         ),
-        {"limit": limit},
+        {"limit": limit, "offset": offset},
     )
     return [dict(row) for row in result.mappings().all()]
 
@@ -78,11 +79,12 @@ async def list_product_classes(
     *,
     school_id: int,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[dict]:
     if school_id <= 0:
         raise InvalidApplicationInput("شناسه مدرسه معتبر نیست.")
-    if not 1 <= limit <= 200:
-        raise InvalidApplicationInput("تعداد کلاس‌های درخواستی معتبر نیست.")
+    if not 1 <= limit <= 200 or offset < 0:
+        raise InvalidApplicationInput("تعداد یا شماره صفحه کلاس‌ها معتبر نیست.")
 
     result = await db.execute(
         text(
@@ -100,10 +102,10 @@ async def list_product_classes(
             JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
             WHERE ay.school_id = :school_id
             ORDER BY c.is_active DESC, c.grade ASC, c.name ASC, c.id ASC
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
             """
         ),
-        {"school_id": school_id, "limit": limit},
+        {"school_id": school_id, "limit": limit, "offset": offset},
     )
     return [dict(row) for row in result.mappings().all()]
 
@@ -312,9 +314,11 @@ async def list_class_subjects(
     db: AsyncSession,
     *,
     class_id: int,
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[dict]:
-    if class_id <= 0:
-        raise InvalidApplicationInput("شناسه کلاس معتبر نیست.")
+    if class_id <= 0 or not 1 <= limit <= 200 or offset < 0:
+        raise InvalidApplicationInput("درخواست فهرست درس‌های کلاس معتبر نیست.")
     result = await db.execute(
         text(
             """
@@ -323,9 +327,10 @@ async def list_class_subjects(
             JOIN public.subjects AS s ON s.id = cs.subject_id
             WHERE cs.class_id = :class_id
             ORDER BY s.name ASC, s.id ASC
+            LIMIT :limit OFFSET :offset
             """
         ),
-        {"class_id": class_id},
+        {"class_id": class_id, "limit": limit, "offset": offset},
     )
     return [dict(row) for row in result.mappings().all()]
 
@@ -521,8 +526,9 @@ async def list_product_class_members(
     *,
     class_id: int,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[dict]:
-    if class_id <= 0 or not 1 <= limit <= 200:
+    if class_id <= 0 or not 1 <= limit <= 200 or offset < 0:
         raise InvalidApplicationInput("درخواست فهرست اعضا معتبر نیست.")
     result = await db.execute(
         text(
@@ -539,10 +545,10 @@ async def list_product_class_members(
             JOIN public.users AS u ON u.id = cm.user_id
             WHERE cm.class_id = :class_id
             ORDER BY cm.is_active DESC, u.full_name ASC, u.id ASC
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
             """
         ),
-        {"class_id": class_id, "limit": limit},
+        {"class_id": class_id, "limit": limit, "offset": offset},
     )
     return [dict(row) for row in result.mappings().all()]
 
@@ -661,8 +667,9 @@ async def list_product_class_announcements(
     *,
     class_id: int,
     limit: int = 30,
+    offset: int = 0,
 ) -> list[dict]:
-    if class_id <= 0 or not 1 <= limit <= 100:
+    if class_id <= 0 or not 1 <= limit <= 100 or offset < 0:
         raise InvalidApplicationInput("درخواست فهرست اطلاعیه‌ها معتبر نیست.")
     result = await db.execute(
         text(
@@ -671,10 +678,10 @@ async def list_product_class_announcements(
             FROM public.announcements
             WHERE class_id = :class_id
             ORDER BY published_at DESC, id DESC
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
             """
         ),
-        {"class_id": class_id, "limit": limit},
+        {"class_id": class_id, "limit": limit, "offset": offset},
     )
     return [dict(row) for row in result.mappings().all()]
 
@@ -999,6 +1006,7 @@ async def list_product_class_records(
     class_id: int,
     status: str = "PENDING",
     limit: int = 50,
+    offset: int = 0,
 ) -> list[dict]:
     allowed_statuses = {
         "PENDING",
@@ -1008,7 +1016,7 @@ async def list_product_class_records(
         "CANCELLED",
         "EXPIRED",
     }
-    if class_id <= 0 or status not in allowed_statuses or not 1 <= limit <= 100:
+    if class_id <= 0 or status not in allowed_statuses or not 1 <= limit <= 100 or offset < 0:
         raise InvalidApplicationInput("درخواست فهرست محتوای آموزشی معتبر نیست.")
 
     result = await db.execute(
@@ -1080,10 +1088,10 @@ async def list_product_class_records(
                   AND r.status = :status
             ) AS records
             ORDER BY created_at DESC, entity_type ASC, id DESC
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
             """
         ),
-        {"class_id": class_id, "status": status, "limit": limit},
+        {"class_id": class_id, "status": status, "limit": limit, "offset": offset},
     )
     return [dict(row) for row in result.mappings().all()]
 
@@ -1431,6 +1439,23 @@ async def issue_product_class_join_code(
         "has_member_join_code": True,
     }
 
+
+
+async def count_missing_product_class_join_codes(db: AsyncSession) -> int:
+    result = await db.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM public.classes AS c
+            JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
+            JOIN public.schools AS s ON s.id = ay.school_id
+            WHERE c.member_join_code_hash IS NULL
+              AND c.is_active IS TRUE
+              AND s.is_active IS TRUE
+            """
+        )
+    )
+    return int(result.scalar_one() or 0)
 
 
 async def issue_missing_product_class_join_codes(
