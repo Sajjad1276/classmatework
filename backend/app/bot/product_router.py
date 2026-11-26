@@ -1806,51 +1806,53 @@ async def product_class_join_code_issue_callback(
     try:
         saved_secret = await get_class_join_code_secret(db, class_id=class_id)
         async with product_session_factory() as product_db:
-            class_info = await get_product_class(product_db, class_id=class_id)
-            if class_info is None:
-                await callback.answer("کلاس پیدا نشد.", show_alert=True)
-                return
+            async with product_db.begin():
+                class_info = await get_product_class(product_db, class_id=class_id)
+                if class_info is None:
+                    await callback.answer("کلاس پیدا نشد.", show_alert=True)
+                    return
 
-            saved_code_is_current = (
-                saved_secret is not None
-                and class_info["member_join_code_hash"] is not None
-                and secrets.compare_digest(
-                    str(saved_secret["join_code_hash"]),
-                    str(class_info["member_join_code_hash"]),
+                saved_code_is_current = (
+                    saved_secret is not None
+                    and class_info["member_join_code_hash"] is not None
+                    and secrets.compare_digest(
+                        str(saved_secret["join_code_hash"]),
+                        str(class_info["member_join_code_hash"]),
+                    )
                 )
-            )
-            if saved_code_is_current:
-                raw_code = str(saved_secret["join_code"])
-                replaced_legacy_code = False
-                issued_new_code = False
-            else:
-                alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-                raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
-                async with product_db.begin():
+                if saved_code_is_current:
+                    raw_code = str(saved_secret["join_code"])
+                    replaced_legacy_code = False
+                    issued_new_code = False
+                else:
+                    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                    raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
+                    replaced_legacy_code = class_info["member_join_code_hash"] is not None
+                    issued_new_code = True
+                    await store_class_join_code_secret(
+                        db,
+                        class_id=class_id,
+                        code=raw_code,
+                    )
+                    await record_event(
+                        db,
+                        event_type="product.class.member_join_code_issued",
+                        actor_id=principal.user.id,
+                        aggregate_type="class",
+                        event_data={
+                            "class_id": class_id,
+                            "reason": (
+                                "legacy_hash_replaced" if replaced_legacy_code else "first_issue"
+                            ),
+                        },
+                    )
                     await issue_product_class_join_code(
                         product_db,
                         class_id=class_id,
                         code=raw_code,
                     )
-                replaced_legacy_code = class_info["member_join_code_hash"] is not None
-                issued_new_code = True
 
         if issued_new_code:
-            await store_class_join_code_secret(
-                db,
-                class_id=class_id,
-                code=raw_code,
-            )
-            await record_event(
-                db,
-                event_type="product.class.member_join_code_issued",
-                actor_id=principal.user.id,
-                aggregate_type="class",
-                event_data={
-                    "class_id": class_id,
-                    "reason": "legacy_hash_replaced" if replaced_legacy_code else "first_issue",
-                },
-            )
             await db.commit()
     except ApplicationError as exc:
         await db.rollback()
@@ -1919,19 +1921,19 @@ async def product_class_join_code_rotate_callback(
                     class_id=class_id,
                     code=raw_code,
                 )
+                await store_class_join_code_secret(
+                    db,
+                    class_id=class_id,
+                    code=raw_code,
+                )
+                await record_event(
+                    db,
+                    event_type="product.class.member_join_code_rotated",
+                    actor_id=principal.user.id,
+                    aggregate_type="class",
+                    event_data={"class_id": class_id},
+                )
 
-        await store_class_join_code_secret(
-            db,
-            class_id=class_id,
-            code=raw_code,
-        )
-        await record_event(
-            db,
-            event_type="product.class.member_join_code_rotated",
-            actor_id=principal.user.id,
-            aggregate_type="class",
-            event_data={"class_id": class_id},
-        )
         await db.commit()
     except ApplicationError as exc:
         await db.rollback()
