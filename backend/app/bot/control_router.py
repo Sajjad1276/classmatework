@@ -12,13 +12,14 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app.bot.ux import ensure_back_button
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
     Message,
     ReplyKeyboardRemove,
+)
+from aiogram.types import (
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,7 @@ from app.application.control_center import (
     set_class_subject_assignment,
 )
 from app.application.errors import ApplicationError
+from app.bot.ux import ensure_back_button
 from app.db.models import ClassGroup
 from app.modules.access.policy import has_permission
 from app.modules.identity.principal import TelegramPrincipal
