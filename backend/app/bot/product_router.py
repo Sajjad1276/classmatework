@@ -2842,7 +2842,7 @@ async def product_class_members_callback(
     lines = [
         f"👥 اعضای کلاس {class_info['name']}",
         f"تعداد اعضا: {len(members)}",
-        "دانش‌آموز جدید با کد مشترک همین کلاس و دستور /join در ربات ClassMate عضو می‌شود.",
+        "دانش‌آموز جدید با کد مشترک همین کلاس و از بخش «عضویت با کد» در ClassMate عضو می‌شود.",
         "",
     ]
     rows = []
