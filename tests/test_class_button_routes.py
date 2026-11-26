@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
+from aiogram.types import InlineKeyboardMarkup
 
 from app.bot import product_router
 
