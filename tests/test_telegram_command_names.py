@@ -54,5 +54,6 @@ def test_admin_bot_commands_follow_telegram_command_constraints() -> None:
     ]
 
     assert commands, "Expected at least one registered Telegram command."
+    assert set(commands) == {"start"}, f"Only /start may be exposed: {commands}"
     invalid = [command for command in commands if not _TELEGRAM_COMMAND.fullmatch(command)]
     assert not invalid, f"Invalid Telegram command names: {invalid}"

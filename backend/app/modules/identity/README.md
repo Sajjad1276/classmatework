@@ -33,14 +33,14 @@
 - Browser Cookie Sessions and CSRF are removed.
 - Redis stores FSM state with TTL, maintains the single-poller lease, and applies separate atomic per-sender message/callback rate limits (defaults: 30 messages and 45 callbacks per 60 seconds). Rate limiting fails closed if Redis is unavailable.
 - PostgreSQL stores pending pairing tokens and processed Telegram Update status/leases.
-- Wizard callbacks are bound to a per-flow token; an old confirmation/back/cancel button cannot affect a later flow.
+- Wizard callbacks are bound to a per-flow token; an old confirmation or navigation button cannot affect a later flow.
 - Telegram Update IDs are recorded to suppress duplicate deliveries. This is not a substitute for idempotent domain use cases: a crash after a domain commit but before Update completion can still require the use case's own idempotency protection.
 - Audit events executed from a Telegram update carry a correlation ID in the form tg-UPDATE_ID.
 
 ## Implemented bot slice
 
 - Private Chat guard and Telegram account resolution.
-- /start, /menu, /back, /cancel, /roles, /role-create, /members, /member-suspend, /member-reactivate, /invite, /invites, /revoke-invite, /help and /status.
+- فقط `/start` برای شروع فعال است؛ همهٔ عملیات دیگر از منوها، پنل‌ها و دکمه‌های inline/reply انجام می‌شود.
 - Account details and a permission-filtered main menu.
 - Role directory for platform owners and tenant managers (tenant managers see only their own tenant's roles).
 - Tenant-local custom role creation; every allow permission must already be held by the creator at the same tenant scope.

@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -90,15 +89,6 @@ async def _hide_root_keyboard(message: Message) -> None:
         pass
 
 
-@router.message(Command("reports"))
-@router.message(Command("dashboard"))
-async def reports_command(
-    message: Message,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-) -> None:
-    await _hide_root_keyboard(message)
-    await _show_reports(message, principal, db)
 
 
 @router.message(F.text == "📊 داشبورد و گزارش‌ها")
@@ -261,8 +251,8 @@ async def class_group_code_callback(
             f"🔐 کد اتصال گروه کلاس «{escape(class_group.name)}»\n\n"
             f"<code>{code}</code>\n\n"
             "۱. ربات اصلی ClassMate را به گروه موردنظر اضافه کنید و دسترسی مدیر بدهید.\n"
-            "۲. همان مدیری که این کد را گرفته، در گروه دستور زیر را برای ربات اصلی بفرستد:\n"
-            f"<code>/classmate_connect {code}</code>\n\n"
+            "۲. همان مدیری که این کد را گرفته، کد را در پنل اتصال گروه ربات اصلی ClassMate وارد کند:\n"
+            f"<code>{code}</code>\n\n"
             f"کد فقط یک‌بار قابل استفاده است و تا {expires_local:%H:%M} اعتبار دارد.\n"
             "ربات اصلی باید مدیر بودن خودش و مدیر فرستنده را پیش از تکمیل اتصال بررسی کند.",
             parse_mode="HTML",

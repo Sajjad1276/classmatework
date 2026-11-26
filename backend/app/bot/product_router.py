@@ -4,7 +4,6 @@ import logging
 import secrets
 
 from aiogram import F, Router
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -216,7 +215,6 @@ async def _show_school_directory(
 
 
 @router.message(F.text == SCHOOLS_BUTTON)
-@router.message(Command("schools"))
 async def schools_button_handler(
     message: Message,
     principal: TelegramPrincipal,
@@ -265,12 +263,11 @@ async def _begin_school_creation(
     await state.set_state(SchoolCreation.name)
     await message.answer(
         "نام مدرسه را وارد کنید (۲ تا ۱۸۰ نویسه):\n\n"
-        "برای لغو، /cancel را بفرستید."
+        "برای لغو، از دکمهٔ «لغو عملیات» استفاده کنید."
     )
 
 
 @router.message(F.text == CREATE_SCHOOL_BUTTON)
-@router.message(Command("school_create"))
 async def school_create_button_handler(
     message: Message,
     principal: TelegramPrincipal,
@@ -304,32 +301,8 @@ async def school_create_callback(
         )
 
 
-@router.message(Command("cancel"), SchoolCreation.name)
-@router.message(Command("cancel"), SchoolCreation.confirm)
-@router.message(Command("cancel"), SchoolEditing.name)
-@router.message(Command("cancel"), SchoolEditing.confirm)
-async def school_creation_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("ایجاد مدرسه لغو شد؛ هیچ تغییری ثبت نشد.")
 
 
-@router.message(Command("cancel"), ClassCreation.name)
-@router.message(Command("cancel"), ClassCreation.grade)
-@router.message(Command("cancel"), ClassCreation.section)
-@router.message(Command("cancel"), ClassCreation.confirm)
-@router.message(Command("cancel"), ClassEditing.name)
-@router.message(Command("cancel"), ClassEditing.grade)
-@router.message(Command("cancel"), ClassEditing.section)
-@router.message(Command("cancel"), ClassEditing.confirm)
-async def class_creation_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("ایجاد کلاس لغو شد؛ هیچ تغییری ثبت نشد.")
 
 
 @router.message(SchoolCreation.name, F.text)
@@ -630,33 +603,8 @@ async def product_class_create_callback(
         )
 
 
-@router.message(Command("cancel"), SubjectCreation.name)
-@router.message(Command("cancel"), TimetableCreation.weekday)
-@router.message(Command("cancel"), TimetableCreation.subject)
-@router.message(Command("cancel"), TimetableCreation.period)
-@router.message(Command("cancel"), TimetableCreation.time_range)
-@router.message(Command("cancel"), TimetableCreation.room)
-@router.message(Command("cancel"), TimetableCreation.confirm)
-async def class_configuration_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("عملیات مدیریت کلاس لغو شد؛ تغییری ثبت نشد.")
 
 
-@router.message(Command("cancel"), MemberCreation.telegram_id)
-@router.message(Command("cancel"), MemberCreation.full_name)
-@router.message(Command("cancel"), MemberCreation.confirm)
-@router.message(Command("cancel"), AnnouncementCreation.title)
-@router.message(Command("cancel"), AnnouncementCreation.body)
-@router.message(Command("cancel"), AnnouncementCreation.confirm)
-async def member_announcement_cancel_command(
-    message: Message,
-    state: FSMContext,
-) -> None:
-    await state.clear()
-    await message.answer("عملیات لغو شد؛ تغییری ثبت نشد.")
 
 
 @router.message(ClassCreation.name, F.text)
@@ -804,8 +752,9 @@ async def product_class_create_confirm_callback(
             f"نام: {school_class['name']}\n"
             f"پایه: {school_class['grade']}\n\n"
             "🔑 کد ورود مشترک دانش‌آموزان این کلاس:\n"
-            f"<code>/join {school_class['member_join_code']}</code>\n\n"
-            "این کد تا زمان تغییر از پنل کلاس فعال می‌ماند.",
+            f"<code>{school_class['member_join_code']}</code>\n\n"
+            "دانش‌آموزان این کد را در پنل عضویت ClassMate وارد کنند. "
+            "کد تا زمان تعویض از پنل کلاس ثابت می‌ماند.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1476,8 +1425,8 @@ async def product_class_detail_callback(
             [
                 "",
                 "🔑 کد مشترک ورود به کلاس:",
-                f"/join {class_info['member_join_code']}",
-                "این کد ثابت است و فقط با دکمهٔ «تعویض کد ورود کلاس» تغییر می‌کند.",
+                f"کد ورود: {class_info['member_join_code']}",
+                "این کد در پنل عضویت ClassMate وارد می‌شود و فقط با دکمهٔ «تعویض کد ورود کلاس» تغییر می‌کند.",
             ]
         )
     else:
@@ -1642,8 +1591,9 @@ async def product_class_join_code_issue_callback(
             "🔑 <b>کد مشترک ورود به کلاس</b>\n\n"
             f"کلاس: {code_info['name']}\n"
             "هر دانش‌آموز برای عضویت در همین کلاس از این دستور در گفت‌وگوی خصوصی ربات ClassMate استفاده کند:\n\n"
-            f"<code>/join {raw_code}</code>\n\n"
-            "کد برای همهٔ دانش‌آموزان این کلاس مشترک است و تا زمان تغییر از پنل کلاس اعتبار دارد. "
+            f"<code>{raw_code}</code>\n\n"
+            "این کد برای همهٔ دانش‌آموزان کلاس مشترک است و در پنل عضویت ClassMate وارد می‌شود. "
+            "تا زمان تغییر از پنل کلاس اعتبار دارد. "
             "با صدور کد جدید، کد قبلی فوراً باطل می‌شود.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
@@ -2698,7 +2648,7 @@ async def product_class_members_callback(
     lines = [
         f"👥 اعضای کلاس {class_info['name']}",
         f"تعداد اعضا: {len(members)}",
-        "دانش‌آموز جدید با کد مشترک همین کلاس و دستور /join در ربات ClassMate عضو می‌شود.",
+        "دانش‌آموز جدید با کد مشترک همین کلاس از پنل عضویت ClassMate وارد می‌شود.",
         "",
     ]
     rows = []
