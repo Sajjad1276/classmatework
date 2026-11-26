@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import base64
-import logging
 import binascii
+import logging
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
