@@ -304,6 +304,7 @@ async def _show_tenant_step(
     message: Message,
     state: FSMContext,
     step: str,
+    notice: str | None = None,
 ) -> None:
     data = await state.get_data()
     flow_token = data.get("flow_token", "")
@@ -340,6 +341,9 @@ async def _show_tenant_step(
     else:
         body = "نام مجموعه را وارد کنید (۲ تا ۱۸۰ نویسه):"
         keyboard = wizard_controls(flow_token)
+
+    if notice:
+        body = f"⚠️ {notice}\\n\\n{body}"
 
     prompt_id = data.get("flow_prompt_message_id")
     chat_id = data.get("flow_chat_id") or message.chat.id
@@ -837,7 +841,12 @@ async def member_suspend_reason_input(
 
     reason = (message.text or "").strip()
     if not 10 <= len(reason) <= 500:
-        await message.answer("دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد. دوباره وارد کنید.")
+        flow_token = str(data.get("flow_token") or "")
+        await message.answer(
+            "⚠️ دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد.\\n\\n"
+            "دلیل تعلیق را دوباره وارد کنید:",
+            reply_markup=wizard_controls(flow_token),
+        )
         return
 
     try:
@@ -1061,10 +1070,26 @@ async def member_directory_search_input(
 ) -> None:
     search_query = (message.text or "").strip()
     if not search_query:
-        await message.answer("عبارت جست‌وجو خالی است؛ نام یا Telegram ID را وارد کنید.")
+        await message.answer(
+            "⚠️ عبارت جست‌وجو خالی است.\\n\\nنام یا Telegram ID را وارد کنید:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+                    [InlineKeyboardButton(text="❌ لغو جست‌وجو", callback_data="ux:cancel")],
+                ]
+            ),
+        )
         return
     if search_query.startswith("/"):
-        await message.answer("عبارت جست‌وجو معتبر نیست؛ برای خروج از /cancel استفاده کنید.")
+        await message.answer(
+            "⚠️ عبارت جست‌وجو معتبر نیست.\\n\\nنام یا Telegram ID را وارد کنید:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+                    [InlineKeyboardButton(text="❌ لغو جست‌وجو", callback_data="ux:cancel")],
+                ]
+            ),
+        )
         return
 
     data = await state.get_data()
@@ -1723,7 +1748,12 @@ async def tenant_name_step(
 ) -> None:
     value = (message.text or "").strip()
     if not 2 <= len(value) <= 180:
-        await message.answer("نام مجموعه باید بین ۲ تا ۱۸۰ نویسه باشد. دوباره وارد کنید.")
+        await _show_tenant_step(
+            message,
+            state,
+            "name",
+            notice="نام مجموعه باید بین ۲ تا ۱۸۰ نویسه باشد.",
+        )
         return
     await state.update_data(
         tenant_name=value,
