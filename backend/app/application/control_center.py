@@ -557,11 +557,11 @@ async def get_platform_report(
         )
         active_students = await product_count(
             """
-            SELECT COUNT(*)
+            SELECT COUNT(DISTINCT cm.user_id)
             FROM public.class_memberships AS cm
             JOIN public.users AS u ON u.id = cm.user_id
             WHERE cm.is_active IS TRUE
-              AND cm.role = 'student'
+              AND LOWER(cm.role) = 'student'
               AND u.is_active IS TRUE
               AND u.private_chat_started IS TRUE
             """
