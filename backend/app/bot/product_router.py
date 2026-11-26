@@ -4,6 +4,7 @@ import html
 import logging
 import re
 import secrets
+import unicodedata
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -40,6 +41,7 @@ from app.application.product_management import (
     list_product_class_members,
     list_product_class_records,
     list_product_classes,
+    list_product_class_shortcut_candidates,
     list_product_schools,
     review_product_class_record,
     set_product_announcement_active,
@@ -59,7 +61,25 @@ logger = logging.getLogger(__name__)
 router = Router(name="product-management")
 
 SCHOOLS_BUTTON = "🏫 مدیریت مدارس و کلاس‌ها"
+OWNER_CLASS_BUTTON = "🎓 کلاس من · دهم ۱۰۴"
 CREATE_SCHOOL_BUTTON = "➕ ایجاد مدرسه"
+
+
+def _normalize_class_shortcut_label(value: object) -> str:
+    digits = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    normalized = unicodedata.normalize("NFKC", str(value or "")).translate(digits)
+    normalized = normalized.replace("ي", "ی").replace("ك", "ک")
+    return re.sub(r"\s+", "", normalized).casefold()
+
+
+def _is_owner_class_shortcut_candidate(item: dict) -> bool:
+    grade = _normalize_class_shortcut_label(item.get("grade"))
+    if grade not in {"دهم", "10", "پایهدهم", "پایه10"}:
+        return False
+
+    name = _normalize_class_shortcut_label(item.get("name"))
+    section = _normalize_class_shortcut_label(item.get("section"))
+    return name in {"104", "کلاس104", "دهم104", "پایهدهم104", "کلاسدهم104"} or section == "104"
 
 
 def _class_join_start_url(code: str) -> str | None:
@@ -1557,36 +1577,21 @@ async def product_class_status_confirm_callback(
         )
 
 
-@router.callback_query(F.data.regexp(r"^product:class:[0-9]+$"))
-async def product_class_detail_callback(
-    callback: CallbackQuery,
-    principal: TelegramPrincipal,
+async def _build_product_class_detail_panel(
     db: AsyncSession,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
-) -> None:
+    principal: TelegramPrincipal,
+    product_db: AsyncSession,
+    class_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
     if not await _has_permission(db, principal, "platform:classes:read"):
-        await callback.answer("مجوز مشاهدهٔ کلاس‌ها را ندارید.", show_alert=True)
-        return
-    if product_session_factory is None:
-        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
-        return
-    try:
-        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
-        async with product_session_factory() as product_db:
-            class_info = await get_product_class(product_db, class_id=class_id)
-            if class_info is None:
-                await callback.answer("کلاس پیدا نشد.", show_alert=True)
-                return
-            subjects = await list_class_subjects(product_db, class_id=class_id)
-            timetable = await list_class_timetable(product_db, class_id=class_id)
-    except (ValueError, ApplicationError) as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    except Exception:
-        logger.exception("Could not load ClassMate class %s.", callback.data)
-        await callback.answer("دریافت جزئیات کلاس ناموفق بود.", show_alert=True)
-        return
+        raise ApplicationError("مجوز مشاهدهٔ کلاس‌ها را ندارید.")
 
+    class_info = await get_product_class(product_db, class_id=class_id)
+    if class_info is None:
+        raise ApplicationError("کلاس پیدا نشد.")
+
+    subjects = await list_class_subjects(product_db, class_id=class_id)
+    timetable = await list_class_timetable(product_db, class_id=class_id)
     lines = [
         f"👥 کلاس: {class_info['name']}",
         f"مدرسه: {class_info['school_name']}",
@@ -1599,108 +1604,178 @@ async def product_class_detail_callback(
     ]
     lines.extend(f"• {item['name']}" for item in subjects[:20])
     lines.extend(["", f"زنگ‌های برنامه هفتگی: {len(timetable)}"])
-    await callback.answer()
-    if callback.message is not None:
-        await callback.message.edit_text(
-            "\n".join(lines),
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    *(
-                        [[
-                            InlineKeyboardButton(
-                                text="➕ افزودن درس",
-                                callback_data=f"product:subject:add:{class_id}",
-                            )
-                        ]]
-                        if await _has_permission(db, principal, "platform:subjects:manage")
-                        else []
-                    ),
-                    *(
-                        [
-                            [
-                                InlineKeyboardButton(
-                                    text="📅 مشاهده برنامه هفتگی",
-                                    callback_data=f"product:timetable:view:{class_id}",
-                                )
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text="➕ افزودن زنگ",
-                                    callback_data=f"product:timetable:add:{class_id}",
-                                )
-                            ],
-                        ]
-                        if await _has_permission(db, principal, "platform:timetable:manage")
-                        else []
-                    ),
-                    *(
-                        [[
-                            InlineKeyboardButton(
-                                text="🔑 کد ورود به کلاس",
-                                callback_data=f"product:class:join-code:{class_id}",
-                            )
-                        ]]
-                        if class_info["is_active"]
-                        and await _has_permission(db, principal, "platform:classes:manage")
-                        else []
-                    ),
-                    *(
-                        [[
-                            InlineKeyboardButton(
-                                text="👥 اعضای کلاس",
-                                callback_data=f"product:members:{class_id}",
-                            )
-                        ]]
-                        if await _has_permission(db, principal, "platform:members:manage")
-                        else []
-                    ),
-                    *(
-                        [[
-                            InlineKeyboardButton(
-                                text="📢 اطلاعیه‌ها",
-                                callback_data=f"product:announcements:{class_id}",
-                            )
-                        ]]
-                        if await _has_permission(db, principal, "platform:announcements:manage")
-                        else []
-                    ),
-                    *(
-                        [[
-                            InlineKeyboardButton(
-                                text="📚 محتوا و صف بررسی",
-                                callback_data=f"product:records:{class_id}",
-                            )
-                        ]]
-                        if await _has_permission(db, principal, "platform:records:read")
-                        or await _has_permission(db, principal, "platform:records:review")
-                        else []
-                    ),
-                    *(
-                        [[
-                            InlineKeyboardButton(
-                                text="✏️ ویرایش کلاس",
-                                callback_data=f"product:class:edit:{class_id}",
-                            ),
-                            InlineKeyboardButton(
-                                text=("⛔ غیرفعال‌سازی کلاس" if class_info["is_active"] else "♻️ فعال‌سازی کلاس"),
-                                callback_data=f"product:class:status:{class_id}:{0 if class_info['is_active'] else 1}",
-                            ),
-                        ]]
-                        if await _has_permission(db, principal, "platform:classes:manage")
-                        else []
-                    ),
+
+    rows: list[list[InlineKeyboardButton]] = []
+    can_manage_subjects = await _has_permission(db, principal, "platform:subjects:manage")
+    can_manage_timetable = await _has_permission(db, principal, "platform:timetable:manage")
+    can_manage_class = await _has_permission(db, principal, "platform:classes:manage")
+    can_manage_members = await _has_permission(db, principal, "platform:members:manage")
+    can_manage_announcements = await _has_permission(db, principal, "platform:announcements:manage")
+    can_read_records = await _has_permission(db, principal, "platform:records:read")
+    can_review_records = await _has_permission(db, principal, "platform:records:review")
+
+    if can_manage_subjects:
+        rows.append([
+            InlineKeyboardButton(
+                text="➕ افزودن درس",
+                callback_data=f"product:subject:add:{class_id}",
+            )
+        ])
+    if can_manage_timetable:
+        rows.extend([
+            [
+                InlineKeyboardButton(
+                    text="📅 مشاهده برنامه هفتگی",
+                    callback_data=f"product:timetable:view:{class_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="➕ افزودن زنگ",
+                    callback_data=f"product:timetable:add:{class_id}",
+                )
+            ],
+        ])
+    if class_info["is_active"] and can_manage_class:
+        rows.append([
+            InlineKeyboardButton(
+                text="🔑 کد ورود به کلاس",
+                callback_data=f"product:class:join-code:{class_id}",
+            )
+        ])
+    if can_manage_members:
+        rows.append([
+            InlineKeyboardButton(
+                text="👥 اعضای کلاس",
+                callback_data=f"product:members:{class_id}",
+            )
+        ])
+    if can_manage_announcements:
+        rows.append([
+            InlineKeyboardButton(
+                text="📢 اطلاعیه‌ها",
+                callback_data=f"product:announcements:{class_id}",
+            )
+        ])
+    if can_read_records or can_review_records:
+        rows.append([
+            InlineKeyboardButton(
+                text="📚 محتوا و صف بررسی",
+                callback_data=f"product:records:{class_id}",
+            )
+        ])
+    if can_manage_class:
+        rows.append([
+            InlineKeyboardButton(
+                text="✏️ ویرایش کلاس",
+                callback_data=f"product:class:edit:{class_id}",
+            ),
+            InlineKeyboardButton(
+                text=("⛔ غیرفعال‌سازی کلاس" if class_info["is_active"] else "♻️ فعال‌سازی کلاس"),
+                callback_data=f"product:class:status:{class_id}:{0 if class_info['is_active'] else 1}",
+            ),
+        ])
+    rows.append([
+        InlineKeyboardButton(
+            text="⬅️ بازگشت به مدرسه",
+            callback_data=f"product:school:{class_info['school_id']}",
+        )
+    ])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.message(F.text == OWNER_CLASS_BUTTON)
+async def owner_class_shortcut_handler(
+    message: Message,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    await _hide_reply_keyboard(message)
+    if not await _has_permission(db, principal, "platform:classes:read"):
+        await message.answer("مجوز مشاهدهٔ کلاس‌ها را ندارید.")
+        return
+    if product_session_factory is None:
+        await message.answer("اتصال دیتابیس اصلی ClassMate فعال نیست.")
+        return
+
+    try:
+        async with product_session_factory() as product_db:
+            candidates = await list_product_class_shortcut_candidates(product_db)
+            matches = [item for item in candidates if _is_owner_class_shortcut_candidate(item)]
+            if not matches:
+                await message.answer(
+                    "کلاس فعال «دهم ۱۰۴» در دیتابیس ClassMate پیدا نشد. "
+                    "نام پایه، شماره کلاس و فعال بودن مدرسه را بررسی کنید."
+                )
+                return
+            if len(matches) > 1:
+                rows = [
                     [
                         InlineKeyboardButton(
-                            text="⬅️ بازگشت به مدرسه",
-                            callback_data=f"product:school:{class_info['school_id']}",
+                            text=f"{item['school_name']} · {item['name']} · {item['grade']}"[:60],
+                            callback_data=f"product:class:{item['id']}",
                         )
-                    ],
+                    ]
+                    for item in matches[:20]
                 ]
-            ),
-        )
+                rows.append([
+                    InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")
+                ])
+                await message.answer(
+                    "چند کلاس فعال با مشخصات دهم ۱۰۴ پیدا شد. مدرسهٔ درست را انتخاب کنید:",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                )
+                return
+
+            class_id = int(matches[0]["id"])
+            body, keyboard = await _build_product_class_detail_panel(
+                db,
+                principal,
+                product_db,
+                class_id,
+            )
+    except ApplicationError as exc:
+        await message.answer(str(exc))
+        return
+    except Exception:
+        logger.exception("Could not open the owner class shortcut.")
+        await message.answer("باز کردن پنل کلاس دهم ۱۰۴ ناموفق بود؛ اتصال دیتابیس را بررسی کنید.")
+        return
+
+    await message.answer(body, reply_markup=keyboard)
 
 
+@router.callback_query(F.data.regexp(r"^product:class:[0-9]+$"))
+async def product_class_detail_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    try:
+        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        async with product_session_factory() as product_db:
+            body, keyboard = await _build_product_class_detail_panel(
+                db,
+                principal,
+                product_db,
+                class_id,
+            )
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not load ClassMate class %s.", callback.data)
+        await callback.answer("دریافت جزئیات کلاس ناموفق بود.", show_alert=True)
+        return
 
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(body, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.regexp(r"^product:class:join-code:[0-9]+$"))
