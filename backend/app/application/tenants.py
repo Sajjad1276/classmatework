@@ -72,9 +72,10 @@ async def list_tenants(
     *,
     actor_id: UUID,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[Tenant]:
-    if not 1 <= limit <= 100:
-        raise InvalidApplicationInput("Tenant page size must be between 1 and 100.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("Tenant page size or offset is invalid.")
     await _require(
         db,
         actor_id=actor_id,
@@ -82,7 +83,7 @@ async def list_tenants(
         tenant_id=None,
     )
     result = await db.execute(
-        select(Tenant).order_by(Tenant.created_at.desc(), Tenant.id).limit(limit)
+        select(Tenant).order_by(Tenant.created_at.desc(), Tenant.id).limit(limit).offset(offset)
     )
     tenants = list(result.scalars().all())
     await record_event(
@@ -90,7 +91,7 @@ async def list_tenants(
         event_type="tenant.directory.read",
         actor_id=actor_id,
         aggregate_type="tenant_directory",
-        event_data={"returned_count": len(tenants), "limit": limit},
+        event_data={"returned_count": len(tenants), "limit": limit, "offset": offset},
     )
     await db.commit()
     return tenants
@@ -251,9 +252,10 @@ async def list_schools(
     actor_id: UUID,
     tenant_id: UUID,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[School]:
-    if not 1 <= limit <= 100:
-        raise InvalidApplicationInput("School page size must be between 1 and 100.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("School page size or offset is invalid.")
     await _require(
         db,
         actor_id=actor_id,
@@ -267,6 +269,7 @@ async def list_schools(
         .where(School.tenant_id == tenant_id, School.status != "archived")
         .order_by(School.created_at.desc(), School.id)
         .limit(limit)
+        .offset(offset)
     )
     schools = list(result.scalars().all())
     await record_event(
@@ -275,7 +278,7 @@ async def list_schools(
         actor_id=actor_id,
         tenant_id=tenant_id,
         aggregate_type="school_directory",
-        event_data={"returned_count": len(schools), "limit": limit},
+        event_data={"returned_count": len(schools), "limit": limit, "offset": offset},
     )
     await db.commit()
     return schools
@@ -547,9 +550,10 @@ async def list_academic_years(
     tenant_id: UUID,
     school_id: UUID,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[AcademicYear]:
-    if not 1 <= limit <= 100:
-        raise InvalidApplicationInput("Academic year page size must be between 1 and 100.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("Academic year page size or offset is invalid.")
     await _require(
         db,
         actor_id=actor_id,
@@ -567,6 +571,7 @@ async def list_academic_years(
         )
         .order_by(AcademicYear.starts_on.desc(), AcademicYear.name)
         .limit(limit)
+        .offset(offset)
     )
     years = list(result.scalars().all())
     await record_event(
@@ -579,6 +584,7 @@ async def list_academic_years(
             "school_id": str(school_id),
             "returned_count": len(years),
             "limit": limit,
+            "offset": offset,
         },
     )
     await db.commit()
@@ -593,9 +599,10 @@ async def list_classes(
     school_id: UUID,
     academic_year_id: UUID | None = None,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[ClassGroup]:
-    if not 1 <= limit <= 100:
-        raise InvalidApplicationInput("Class page size must be between 1 and 100.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("Class page size or offset is invalid.")
     await _require(
         db,
         actor_id=actor_id,
@@ -612,7 +619,7 @@ async def list_classes(
     if academic_year_id is not None:
         statement = statement.where(ClassGroup.academic_year_id == academic_year_id)
     result = await db.execute(
-        statement.order_by(ClassGroup.name, ClassGroup.code).limit(limit)
+        statement.order_by(ClassGroup.name, ClassGroup.code).limit(limit).offset(offset)
     )
     classes = list(result.scalars().all())
     await record_event(
@@ -626,6 +633,7 @@ async def list_classes(
             "academic_year_id": str(academic_year_id) if academic_year_id else None,
             "returned_count": len(classes),
             "limit": limit,
+            "offset": offset,
         },
     )
     await db.commit()
@@ -639,9 +647,10 @@ async def list_subjects(
     tenant_id: UUID,
     school_id: UUID,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[Subject]:
-    if not 1 <= limit <= 100:
-        raise InvalidApplicationInput("Subject page size must be between 1 and 100.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("Subject page size or offset is invalid.")
     await _require(
         db,
         actor_id=actor_id,
@@ -659,6 +668,7 @@ async def list_subjects(
         )
         .order_by(Subject.name, Subject.code)
         .limit(limit)
+        .offset(offset)
     )
     subjects = list(result.scalars().all())
     await record_event(
@@ -671,6 +681,7 @@ async def list_subjects(
             "school_id": str(school_id),
             "returned_count": len(subjects),
             "limit": limit,
+            "offset": offset,
         },
     )
     await db.commit()
@@ -682,9 +693,10 @@ async def list_accessible_tenants(
     *,
     actor_id: UUID,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[Tenant]:
-    if not 1 <= limit <= 100:
-        raise InvalidApplicationInput("Tenant page size must be between 1 and 100.")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("Tenant page size or offset is invalid.")
     result = await db.execute(
         select(Tenant)
         .join(TenantMembership, TenantMembership.tenant_id == Tenant.id)
@@ -695,6 +707,7 @@ async def list_accessible_tenants(
         )
         .order_by(Tenant.created_at.desc(), Tenant.id)
         .limit(limit)
+        .offset(offset)
     )
     return list(result.scalars().all())
 
