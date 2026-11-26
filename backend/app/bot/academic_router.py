@@ -1777,7 +1777,6 @@ async def _show_school_menu(
             InlineKeyboardButton(text="🏫 کلاس‌ها", callback_data="class:list"),
         ])
         rows.append([InlineKeyboardButton(text="📚 درس‌ها", callback_data="subject:list")])
-        rows.append([InlineKeyboardButton(text="📡 گروه‌های کلاس‌ها", callback_data="school:groups:1")])
     if can_year:
         rows.append([InlineKeyboardButton(text="➕ ایجاد سال تحصیلی", callback_data="year:create")])
     if can_class:
@@ -3461,7 +3460,7 @@ async def structure_archive_prompt_callback(
         ),
         "c": (
             "کلاس",
-            "اتصال گروه تلگرام لغو و تخصیص درس‌ها غیرفعال می‌شوند؛ تاریخچه باقی می‌ماند.",
+            "تخصیص درس‌ها غیرفعال می‌شوند؛ تاریخچه باقی می‌ماند.",
             "class:list",
             "class:manage",
         ),
@@ -3695,7 +3694,7 @@ async def restore_structure_prompt_callback(
     labels = {
         "s": ("مدرسه", "وضعیت مدرسه به «آماده‌سازی» برمی‌گردد؛ موارد داخلی همچنان جداگانه بایگانی می‌مانند."),
         "y": ("سال تحصیلی", "سال به وضعیت «برنامه‌ریزی‌شده» برمی‌گردد؛ کلاس‌های بایگانی‌شده خودکار فعال نمی‌شوند."),
-        "c": ("کلاس", "تخصیص‌های درسِ تعلیق‌شده فقط در صورت فعال بودن درس بازمی‌گردند؛ اتصال گروه تلگرام باید مجدداً انجام شود."),
+        "c": ("کلاس", "تخصیص‌های درسِ تعلیق‌شده فقط در صورت فعال بودن درس بازمی‌گردند."),
         "u": ("درس", "تخصیص‌های تعلیق‌شده فقط برای کلاس‌های فعال بازمی‌گردند؛ تخصیص‌های دستیِ برداشته‌شده برنمی‌گردند."),
     }
     title, explanation = labels[code]
