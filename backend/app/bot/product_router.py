@@ -35,7 +35,6 @@ from app.application.product_management import (
     get_product_school,
     issue_missing_product_class_join_codes,
     issue_product_class_join_code,
-    issue_product_group_link_code,
     list_class_subjects,
     list_class_timetable,
     list_product_class_announcements,
@@ -1655,12 +1654,6 @@ async def product_class_detail_callback(
         f"بخش: {class_info['section'] or '—'}",
         f"وضعیت: {'فعال' if class_info['is_active'] else 'غیرفعال'}",
         f"کد ورود دانش‌آموزان: {'فعال' if class_info['has_member_join_code'] else 'صادر نشده'}",
-        f"گروه تلگرام: {class_info['group_chat_title'] or 'متصل نیست'}",
-        *(
-            [f"شناسه گروه: {class_info['group_chat_id']}"]
-            if class_info["group_chat_id"] is not None
-            else []
-        ),
         "",
         f"درس‌های تخصیص‌یافته: {len(subjects)}",
     ]
@@ -1709,21 +1702,6 @@ async def product_class_detail_callback(
                         ]]
                         if class_info["is_active"]
                         and await _has_permission(db, principal, "platform:classes:manage")
-                        else []
-                    ),
-                    *(
-                        [[
-                            InlineKeyboardButton(
-                                text=(
-                                    "➕ افزودن گروه"
-                                    if class_info["group_chat_id"] is None
-                                    else "✏️ ویرایش گروه"
-                                ),
-                                callback_data=f"product:group:link:{class_id}",
-                            )
-                        ]]
-                        if class_info["is_active"]
-                        and await _has_permission(db, principal, "platform:groups:manage")
                         else []
                     ),
                     *(
@@ -2478,88 +2456,6 @@ async def timetable_create_cancel_callback(
         await callback.message.edit_text("ثبت زنگ لغو شد؛ تغییری ثبت نشد.")
 
 
-
-
-@router.callback_query(F.data.regexp(r"^product:group:link:[0-9]+$"))
-async def product_group_link_issue_callback(
-    callback: CallbackQuery,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
-) -> None:
-    if not await _require_private_callback(callback, "اتصال گروه"):
-        return
-    if not await _has_permission(db, principal, "platform:groups:manage"):
-        await callback.answer("مجوز اتصال گروه تلگرام را ندارید.", show_alert=True)
-        return
-    if product_session_factory is None:
-        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
-        return
-
-    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
-    raw_code = secrets.token_hex(12).upper()
-    try:
-        async with product_session_factory() as product_db:
-            async with product_db.begin():
-                link = await issue_product_group_link_code(
-                    product_db,
-                    class_id=class_id,
-                    code=raw_code,
-                    ttl_minutes=15,
-                )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    except Exception:
-        logger.exception("Could not issue a ClassMate group link code.")
-        await callback.answer("صدور کد اتصال گروه ناموفق بود.", show_alert=True)
-        return
-
-    try:
-        await record_event(
-            db,
-            event_type="product.class_group.link_code_issued",
-            actor_id=principal.user.id,
-            aggregate_type="class",
-            event_data={
-                "class_id": class_id,
-                "expires_at": link["group_link_code_expires_at"].isoformat(),
-            },
-        )
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        logger.exception("Group link-code audit recording failed for class %s.", class_id)
-
-    await callback.answer("کد اتصال صادر شد.")
-    if callback.message is not None:
-        await callback.message.edit_text(
-            "🔗 <b>کد اتصال گروه تلگرام</b>\n\n"
-            f"کلاس: {link['name']}\n"
-            + (
-                f"گروه فعلی: {link['group_chat_title']}\n"
-                "با استفاده از این کد در گروه جدید، اتصال قبلی جایگزین می‌شود.\n"
-                if link.get("group_chat_id") is not None
-                else ""
-            )
-            + "اعتبار: ۱۵ دقیقه\n"
-            "کد یک‌بارمصرف:\n"
-            f"<code>{raw_code}</code>\n\n"
-            "ربات ClassMate را در گروه مقصد مدیر کنید؛ سپس مدیر همان گروه "
-            "باید دستور زیر را داخل گروه ارسال کند:\n"
-            f"<code>/link {raw_code}</code>\n\n"
-            "این کد را در گروه عمومی یا برای افراد غیرمدیر ارسال نکنید.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="⬅️ بازگشت به کلاس",
-                            callback_data=f"product:class:{class_id}",
-                        )
-                    ],
-                ]
-            ),
-        )
 
 
 @router.callback_query(F.data.regexp(r"^product:member:role:[0-9]+:[0-9]+$"))
