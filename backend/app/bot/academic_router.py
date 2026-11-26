@@ -1913,6 +1913,7 @@ async def _render_step(
     *,
     state: FSMContext,
     step_name: str,
+    notice: str | None = None,
 ) -> None:
     data = await state.get_data()
     flow_token = data.get("flow_token")
@@ -1934,7 +1935,10 @@ async def _render_step(
             return
         keyboard = _flow_keyboard(flow_token)
 
-    prompt_id = data.get("flow_prompt_message_id")
+    if notice:
+        body = f"⚠️ {notice}\\n\\n{body}"
+
+    prompt_id = data.get("flow_prompt_message_id"
     chat_id = data.get("flow_chat_id") or message.chat.id
     if prompt_id:
         try:
@@ -3046,7 +3050,16 @@ async def _accept_field(
     value = (message.text or "").strip()
     normalized = validator(value)
     if normalized is None:
-        await message.answer(error_message)
+        current_step = await state.get_state()
+        if current_step:
+            await _render_step(
+                message,
+                state=state,
+                step_name=current_step,
+                notice=error_message,
+            )
+        else:
+            await message.answer(error_message)
         return
     await state.update_data(**{key: normalized})
     await state.set_state(next_state)
