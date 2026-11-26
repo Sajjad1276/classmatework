@@ -325,8 +325,6 @@ async def test_schools_directory_offers_bulk_code_issuance_to_class_managers():
 
 @pytest.mark.asyncio
 async def test_bulk_class_code_action_displays_only_new_codes_in_private_chat(monkeypatch):
-    from app.bot import product_router
-
     async def require_private(_callback, _operation):
         return True
 
@@ -342,11 +340,13 @@ async def test_bulk_class_code_action_displays_only_new_codes_in_private_chat(mo
             "join_code": "ABCD2345XY",
         }
     ]
+    count_missing = AsyncMock(return_value=1)
     issue_service = AsyncMock(return_value=issued)
     audit = AsyncMock()
+    store_secret = AsyncMock()
     monkeypatch.setattr(product_router, "_require_private_callback", require_private)
     monkeypatch.setattr(product_router, "_has_permission", has_permission)
-    store_secret = AsyncMock()
+    monkeypatch.setattr(product_router, "count_missing_product_class_join_codes", count_missing)
     monkeypatch.setattr(product_router, "issue_missing_product_class_join_codes", issue_service)
     monkeypatch.setattr(product_router, "store_class_join_code_secret", store_secret)
     monkeypatch.setattr(product_router, "record_event", audit)
@@ -354,11 +354,34 @@ async def test_bulk_class_code_action_displays_only_new_codes_in_private_chat(mo
     callback = _callback("product:classes:join-codes:missing")
     principal = SimpleNamespace(user=SimpleNamespace(id=42))
     db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    state = MemoryState()
 
     await product_router.product_missing_class_join_codes_callback(
         callback,
         principal=principal,
         db=db,
+        state=state,
+        product_session_factory=lambda: ProductSessionContext(),
+    )
+
+    count_missing.assert_awaited_once()
+    issue_service.assert_not_awaited()
+    store_secret.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    audit.assert_not_awaited()
+    preview_text = callback.message.edit_text.await_args.args[0]
+    assert "پیش‌نمایش صدور گروهی کد ورود" in preview_text
+    assert "1" in preview_text
+    markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    confirm_data = markup.inline_keyboard[0][0].callback_data
+    assert confirm_data.startswith("product:classes:join-codes:confirm:")
+
+    confirm_callback = _callback(confirm_data)
+    await product_router.product_missing_class_join_codes_confirm_callback(
+        confirm_callback,
+        principal=principal,
+        db=db,
+        state=state,
         product_session_factory=lambda: ProductSessionContext(),
     )
 
@@ -366,7 +389,7 @@ async def test_bulk_class_code_action_displays_only_new_codes_in_private_chat(mo
     store_secret.assert_awaited_once_with(db, class_id=31, code="ABCD2345XY")
     db.commit.assert_awaited_once()
     audit.assert_awaited_once()
-    body = callback.message.edit_text.await_args.args[0]
+    body = confirm_callback.message.edit_text.await_args.args[0]
     assert "دهم الف" in body
     assert "ABCD2345XY" in body
     assert "کدهای قبلی دست‌نخورده باقی ماندند" in body
