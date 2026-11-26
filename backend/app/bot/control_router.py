@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
