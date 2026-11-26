@@ -1938,7 +1938,7 @@ async def _render_step(
         keyboard = _flow_keyboard(flow_token)
 
     if notice:
-        body = f"⚠️ {notice}\\n\\n{body}"
+        body = f"⚠️ {notice}\n\n{body}"
 
     prompt_id = data.get("flow_prompt_message_id")
     chat_id = data.get("flow_chat_id") or message.chat.id
