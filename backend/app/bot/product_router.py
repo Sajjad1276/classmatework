@@ -2003,23 +2003,90 @@ async def product_subject_name_input(
     principal: TelegramPrincipal,
     db: AsyncSession,
     state: FSMContext,
-    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 100:
-        await message.answer("خطا: نام درس باید بین ۲ تا ۱۰۰ نویسه باشد.\n\nنام درس را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
+        await message.answer(
+            "خطا: نام درس باید بین ۲ تا ۱۰۰ نویسه باشد.\n\n"
+            "نام درس را دوباره وارد کنید:",
+            reply_markup=shared_wizard_controls(),
+        )
         return
     if not await _has_permission(db, principal, "platform:subjects:manage"):
         await state.clear()
         await message.answer("مجوز مدیریت درس‌ها را ندارید.")
         return
-    if product_session_factory is None:
-        await state.clear()
-        await message.answer("اتصال دیتابیس ClassMate فعال نیست.")
-        return
 
     data = await state.get_data()
     class_id = int(data.get("product_subject_class_id") or 0)
+    if class_id <= 0:
+        await state.clear()
+        await message.answer("فرم افزودن درس منقضی شده است؛ دوباره شروع کنید.")
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.update_data(
+        product_subject_name=name,
+        product_subject_token=token,
+    )
+    await state.set_state(SubjectCreation.confirm)
+    await message.answer(
+        "پیش‌نمایش ایجاد و تخصیص درس\n\n"
+        f"نام درس: {name}\n"
+        f"شناسه کلاس مقصد: {class_id}\n\n"
+        "با تأیید، درس ایجاد و به همین کلاس تخصیص داده می‌شود.\n"
+        "هیچ تغییری تا انتخاب «تأیید» ثبت نمی‌شود.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ تأیید ایجاد و تخصیص",
+                        callback_data=f"product:subject:confirm:{token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ لغو عملیات",
+                        callback_data=f"product:subject:cancel:{token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("product:subject:confirm:"))
+async def product_subject_create_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != SubjectCreation.confirm.state
+        or not token
+        or token != data.get("product_subject_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است؛ عملیات اجرا نشد.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:subjects:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت درس‌ها را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int(data.get("product_subject_class_id") or 0)
+    name = str(data.get("product_subject_name") or "")
+    if class_id <= 0 or not name:
+        await state.clear()
+        await callback.answer("اطلاعات فرم معتبر نیست؛ دوباره شروع کنید.", show_alert=True)
+        return
+
     try:
         async with product_session_factory() as product_db:
             async with product_db.begin():
@@ -2029,14 +2096,14 @@ async def product_subject_name_input(
                     name=name,
                 )
     except ApplicationError as exc:
-        await message.answer(str(exc))
+        await callback.answer(str(exc), show_alert=True)
         return
     except Exception:
         logger.exception("Could not create or assign ClassMate subject.")
-        await state.clear()
-        await message.answer("ثبت درس ناموفق بود.")
+        await callback.answer("ثبت درس ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
 
+    audit_warning = False
     try:
         await record_event(
             db,
@@ -2054,26 +2121,67 @@ async def product_subject_name_input(
         )
         await db.commit()
     except Exception:
+        audit_warning = True
         await db.rollback()
         logger.exception("Subject assignment audit failed for class %s.", class_id)
 
     await state.clear()
-    result_label = "درس ایجاد و به کلاس تخصیص داده شد." if subject["created"] else "درس موجود به کلاس تخصیص داده شد."
+    result_label = (
+        "درس ایجاد و به کلاس تخصیص داده شد."
+        if subject["created"]
+        else "درس موجود به کلاس تخصیص داده شد."
+    )
     if not subject["assigned"]:
         result_label = "این درس از قبل به کلاس تخصیص داشت."
-    await message.answer(
-        f"✅ {result_label}\nدرس: {subject['name']}",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="بازگشت به مدیریت کلاس",
-                        callback_data=f"product:class:{class_id}",
-                    )
+    notice = "\n⚠️ ثبت رویداد ممیزی نیازمند بررسی است." if audit_warning else ""
+    await callback.answer("تغییر پس از تأیید ثبت شد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"✅ {result_label}{notice}\nدرس: {subject['name']}",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="بازگشت به مدیریت کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
                 ]
-            ]
-        ),
-    )
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:subject:cancel:"))
+async def product_subject_create_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != SubjectCreation.confirm.state
+        or not token
+        or token != data.get("product_subject_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("product_subject_class_id") or 0)
+    await state.clear()
+    await callback.answer("عملیات لغو شد؛ تغییری ثبت نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "افزودن درس لغو شد؛ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به مدیریت کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
 
 
 @router.callback_query(F.data.regexp(r"^product:timetable:view:[0-9]+$"))
