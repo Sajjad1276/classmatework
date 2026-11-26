@@ -8,7 +8,6 @@ from uuid import UUID
 from aiogram import F, Router
 from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -2640,22 +2639,7 @@ async def class_open_callback(
         return
 
     parent_callback = "year:menu" if year_id is not None else "class:list"
-    can_manage_group = await has_permission(
-        db,
-        user_id=principal.user.id,
-        permission_key="class:group:manage",
-        tenant_id=class_item.tenant_id,
-        scope_type="class",
-        scope_id=class_item.id,
-    )
     buttons = []
-    if can_manage_group:
-        buttons.append([
-            InlineKeyboardButton(
-                text="📡 مدیریت گروه تلگرام",
-                callback_data=f"class:group:{class_item.id}",
-            )
-        ])
     buttons.append([
         InlineKeyboardButton(
             text="📚 مدیریت درس‌های کلاس",
@@ -3338,44 +3322,6 @@ async def structure_cancel_callback(
         )
     else:
         await _clear_flow(state)
-
-@router.message(Command("back"))
-async def structure_back_command(
-    message: Message,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-    state: FSMContext,
-):
-    current = await state.get_state()
-    if not current or not current.startswith("StructureWizard:"):
-        return UNHANDLED
-    if current in _PREVIOUS:
-        await state.set_state(_PREVIOUS[current])
-        await _render_step(
-            message,
-            state=state,
-            step_name=_PREVIOUS[current].state,
-        )
-    else:
-        await _return_to_context_menu(message, state, db, principal)
-    return None
-
-
-@router.message(Command("cancel"))
-async def structure_cancel_command(
-    message: Message,
-    principal: TelegramPrincipal,
-    db: AsyncSession,
-    state: FSMContext,
-):
-    current = await state.get_state()
-    if not current or not current.startswith("StructureWizard:"):
-        return UNHANDLED
-    await message.answer("عملیات لغو شد؛ هیچ تغییری ثبت نشد.")
-    await _return_to_context_menu(message, state, db, principal)
-    return None
-
-
 
 @router.callback_query(F.data.startswith("life:ac:"))
 async def structure_archive_confirm_callback(
