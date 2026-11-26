@@ -670,7 +670,13 @@ async def member_suspend_start_callback(
                             text="⬅️ بازگشت بدون تغییر",
                             callback_data=f"member:suspend:cancel:{suspend_token}",
                         )
-                    ]
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"member:suspend:cancel:{suspend_token}",
+                        )
+                    ],
                 ]
             ),
         )
@@ -859,8 +865,13 @@ async def member_directory_search_callback(
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            "نام عضو یا Telegram ID دقیق را وارد کنید.\n"
-            "برای خروج از فرم یا لغو جست‌وجو، از /start استفاده کنید."
+            "نام عضو یا Telegram ID دقیق را وارد کنید:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
+                    [InlineKeyboardButton(text="❌ لغو جست‌وجو", callback_data="ux:cancel")],
+                ]
+            ),
         )
 
 
