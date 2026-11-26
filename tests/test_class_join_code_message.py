@@ -6,11 +6,15 @@ PRODUCT_ROUTER = (
 )
 
 
-def _function(tree: ast.Module, name: str) -> ast.AsyncFunctionDef:
+def _tree() -> ast.Module:
+    return ast.parse(PRODUCT_ROUTER.read_text(encoding="utf-8"))
+
+
+def _function(tree: ast.Module, name: str) -> ast.AsyncFunctionDef | ast.FunctionDef:
     for node in tree.body:
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == name:
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == name:
             return node
-    raise AssertionError(f"Missing async handler: {name}")
+    raise AssertionError(f"Missing function: {name}")
 
 
 def _is_callback_message_method(node: ast.AST, method: str) -> bool:
@@ -32,19 +36,19 @@ def _has_html_parse_mode(call: ast.Call) -> bool:
     )
 
 
-def _uses_html_escape(function: ast.AsyncFunctionDef) -> bool:
+def _calls(function: ast.AST, name: str) -> bool:
     return any(
         isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "escape"
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "html"
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == name)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == name)
+        )
         for node in ast.walk(function)
     )
 
 
-def test_class_join_code_message_uses_html_parse_mode_and_escapes_class_name() -> None:
-    tree = ast.parse(PRODUCT_ROUTER.read_text(encoding="utf-8"))
+def test_class_join_code_message_uses_html_and_stable_code_lookup() -> None:
+    tree = _tree()
     function = _function(tree, "product_class_join_code_issue_callback")
     message_edits = [
         node
@@ -54,11 +58,14 @@ def test_class_join_code_message_uses_html_parse_mode_and_escapes_class_name() -
 
     assert message_edits
     assert any(_has_html_parse_mode(call) for call in message_edits)
-    assert _uses_html_escape(function)
+    assert _calls(function, "get_class_join_code_secret")
+    assert _calls(function, "compare_digest")
+    assert "saved_secret[\"join_code\"]" in ast.unparse(function)
+    assert "saved_code_is_current" in ast.unparse(function)
 
 
-def test_class_creation_join_code_message_uses_html_parse_mode() -> None:
-    tree = ast.parse(PRODUCT_ROUTER.read_text(encoding="utf-8"))
+def test_class_creation_stores_the_first_stable_code() -> None:
+    tree = _tree()
     function = _function(tree, "product_class_create_confirm_callback")
     message_edits = [
         node
@@ -68,11 +75,12 @@ def test_class_creation_join_code_message_uses_html_parse_mode() -> None:
 
     assert message_edits
     assert any(_has_html_parse_mode(call) for call in message_edits)
-    assert _uses_html_escape(function)
+    assert _calls(function, "store_class_join_code_secret")
+    assert _calls(function, "_class_join_code_message")
 
 
-def test_bulk_join_code_messages_use_html_parse_mode_for_edit_and_followups() -> None:
-    tree = ast.parse(PRODUCT_ROUTER.read_text(encoding="utf-8"))
+def test_bulk_backfill_persists_codes_and_renders_html() -> None:
+    tree = _tree()
     function = _function(tree, "product_missing_class_join_codes_callback")
     message_edits = [
         node
@@ -92,4 +100,48 @@ def test_bulk_join_code_messages_use_html_parse_mode_for_edit_and_followups() ->
     assert any(_has_html_parse_mode(call) for call in message_edits)
     assert body_answers
     assert all(_has_html_parse_mode(call) for call in body_answers)
-    assert _uses_html_escape(function)
+    assert _calls(function, "store_class_join_code_secret")
+    assert _calls(function, "_class_join_code_summary")
+
+
+def test_rotation_is_separate_and_replaces_the_product_hash_and_saved_secret() -> None:
+    tree = _tree()
+    function = _function(tree, "product_class_join_code_rotate_callback")
+    source = ast.unparse(function)
+
+    assert _calls(function, "issue_product_class_join_code")
+    assert _calls(function, "store_class_join_code_secret")
+    assert "product.class.member_join_code_rotated" in source
+    assert "کد و لینک قبلی منقضی شدند" in source
+    assert "product:class:join-code:rotate:" in PRODUCT_ROUTER.read_text(encoding="utf-8")
+
+
+def test_join_message_has_start_link_and_manual_code_fallback() -> None:
+    tree = _tree()
+    function = _function(tree, "_class_join_code_message")
+    source = ast.unparse(function)
+
+    assert "?start=join_" in source
+    assert "عضویت با کد" in source
+    assert "CLASSMATE_BOT_USERNAME" in source
+    assert _calls(function, "escape")
+
+
+def test_class_details_show_code_button_without_rotation_label() -> None:
+    source = PRODUCT_ROUTER.read_text(encoding="utf-8")
+    assert 'text="🔑 کد ورود به کلاس"' in source
+    assert 'text="♻️ تغییر کد ورود"' in source
+    assert "تغییر کد ورود کلاس" not in source
+
+
+def test_join_code_secret_migration_is_chained_after_0012() -> None:
+    migration = (
+        Path(__file__).parents[1]
+        / "backend"
+        / "alembic"
+        / "versions"
+        / "0013_class_join_code_secrets.py"
+    ).read_text(encoding="utf-8")
+    assert 'revision: str = "0013_class_join_code_secrets"' in migration
+    assert 'down_revision: Union[str, None] = "0012_product_record_review"' in migration
+    assert '"class_join_code_secrets"' in migration
