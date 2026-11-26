@@ -54,7 +54,8 @@ from app.application.product_management import (
     update_product_class,
     update_product_school,
 )
-from app.bot.ux import add_wizard_cancel, ensure_back_button, wizard_controls as shared_wizard_controls
+from app.bot.ux import add_wizard_cancel, ensure_back_button
+from app.bot.ux import wizard_controls as shared_wizard_controls
 from app.core.config import get_settings
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
