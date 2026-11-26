@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import secrets
 
 from aiogram import F, Router
@@ -17,6 +18,10 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.application.class_join_codes import (
+    get_class_join_code_secret,
+    store_class_join_code_secret,
+)
 from app.application.errors import ApplicationError, ResourceConflict
 from app.application.product_management import (
     add_product_class_member,
@@ -50,12 +55,67 @@ from app.application.product_management import (
 from app.modules.access.policy import has_permission
 from app.modules.audit.service import record_event
 from app.modules.identity.principal import TelegramPrincipal
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = Router(name="product-management")
 
 SCHOOLS_BUTTON = "🏫 مدیریت مدارس و کلاس‌ها"
 CREATE_SCHOOL_BUTTON = "➕ ایجاد مدرسه"
+
+
+def _class_join_start_url(code: str) -> str | None:
+    username = (get_settings().classmate_bot_username or "").strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        return None
+    return f"https://t.me/{username}?start=join_{code}"
+
+
+def _class_join_code_message(
+    class_name: str,
+    code: str,
+    *,
+    replaced_legacy_code: bool = False,
+) -> str:
+    start_url = _class_join_start_url(code)
+    link_line = (
+        f'🔗 <a href="{html.escape(start_url, quote=True)}">باز کردن لینک استارت عضویت در کلاس</a>'
+        if start_url
+        else (
+            "🔗 لینک استارت پس از تنظیم نام کاربری ربات اصلی ClassMate در "
+            "<code>CLASSMATE_BOT_USERNAME</code> فعال می‌شود."
+        )
+    )
+    legacy_notice = (
+        "⚠️ کد قبلی فقط به‌صورت هش ذخیره شده بود و قابل بازیابی نبود؛ "
+        "این کد جدید جایگزین آن شده است.\n\n"
+        if replaced_legacy_code
+        else ""
+    )
+    return (
+        "🔑 <b>کد ورود به کلاس</b>\n\n"
+        f"کلاس: {html.escape(str(class_name))}\n\n"
+        f"{legacy_notice}"
+        f"{link_line}\n\n"
+        "برای عضویت دستی، در ClassMate وارد بخش «عضویت با کد» شوید و کد زیر را ثبت کنید:\n"
+        f"<code>{html.escape(str(code))}</code>\n\n"
+        "این کد اختصاصی همین کلاس است و تا زمانی که دکمهٔ «تغییر کد ورود» را نزنید، "
+        "ثابت می‌ماند."
+    )
+
+
+def _class_join_code_summary(class_name: str, code: str) -> str:
+    start_url = _class_join_start_url(code)
+    link_line = (
+        f'🔗 <a href="{html.escape(start_url, quote=True)}">لینک استارت عضویت</a>'
+        if start_url
+        else "لینک استارت: با تنظیم CLASSMATE_BOT_USERNAME فعال می‌شود."
+    )
+    return (
+        f"🏫 <b>{html.escape(str(class_name))}</b>\n"
+        f"{link_line}\n"
+        f"کد عضویت دستی: <code>{html.escape(str(code))}</code>"
+    )
 
 
 class SchoolCreation(StatesGroup):
@@ -523,6 +583,12 @@ async def product_missing_class_join_codes_callback(
 
     if issued:
         try:
+            for item in issued:
+                await store_class_join_code_secret(
+                    db,
+                    class_id=item["class_id"],
+                    code=item["join_code"],
+                )
             await record_event(
                 db,
                 event_type="product.class.member_join_codes_backfilled",
@@ -562,8 +628,8 @@ async def product_missing_class_join_codes_callback(
         "",
     ]
     first_lines.extend(
-        f"🏫 {html.escape(str(item['school_name']))} · {html.escape(str(item['class_name']))}\n"
-        f"<code>/join {html.escape(str(item['join_code']))}</code>"
+        f"🏫 {html.escape(str(item['school_name']))}\n"
+        f"{_class_join_code_summary(item['class_name'], item['join_code'])}"
         for item in chunks[0]
     )
     await callback.message.edit_text(
@@ -577,8 +643,8 @@ async def product_missing_class_join_codes_callback(
     )
     for chunk in chunks[1:]:
         body = "\n\n".join(
-            f"🏫 {html.escape(str(item['school_name']))} · {html.escape(str(item['class_name']))}\n"
-            f"<code>/join {html.escape(str(item['join_code']))}</code>"
+            f"🏫 {html.escape(str(item['school_name']))}\n"
+            f"{_class_join_code_summary(item['class_name'], item['join_code'])}"
             for item in chunk
         )
         await callback.message.answer(body, parse_mode="HTML")
@@ -890,6 +956,11 @@ async def product_class_create_confirm_callback(
 
     audit_warning = False
     try:
+        await store_class_join_code_secret(
+            db,
+            class_id=school_class["id"],
+            code=school_class["member_join_code"],
+        )
         await record_event(
             db,
             event_type="product.class.created",
@@ -924,12 +995,16 @@ async def product_class_create_confirm_callback(
             f"شناسه: {school_class['id']}\n"
             f"نام: {html.escape(str(school_class['name']))}\n"
             f"پایه: {html.escape(str(school_class['grade']))}\n\n"
-            "🔑 کد ورود مشترک دانش‌آموزان این کلاس:\n"
-            f"<code>/join {html.escape(str(school_class['member_join_code']))}</code>\n\n"
-            "این کد تا زمان تغییر از پنل کلاس فعال می‌ماند.",
+            f"{_class_join_code_message(school_class['name'], school_class['member_join_code'])}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="♻️ تغییر کد ورود",
+                            callback_data=f"product:class:join-code:rotate:{school_class['id']}",
+                        )
+                    ],
                     [
                         InlineKeyboardButton(
                             text="👥 مدیریت کلاس",
@@ -938,9 +1013,8 @@ async def product_class_create_confirm_callback(
                         InlineKeyboardButton(
                             text="🏫 بازگشت به مدرسه",
                             callback_data=f"product:school:{school_id}",
-                        )
+                        ),
                     ],
-
                 ]
             ),
         )
@@ -1629,11 +1703,7 @@ async def product_class_detail_callback(
                     *(
                         [[
                             InlineKeyboardButton(
-                                text=(
-                                    "♻️ تغییر کد ورود کلاس"
-                                    if class_info["has_member_join_code"]
-                                    else "🔑 صدور کد ورود کلاس"
-                                ),
+                                text="🔑 کد ورود به کلاس",
                                 callback_data=f"product:class:join-code:{class_id}",
                             )
                         ]]
@@ -1722,7 +1792,114 @@ async def product_class_join_code_issue_callback(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
-    if not await _require_private_callback(callback, "صدور کد ورود کلاس"):
+    """Show the class's current code; opening this screen never rotates it."""
+    if not await _require_private_callback(callback, "نمایش کد ورود کلاس"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await callback.answer("مجوز مدیریت کد ورود کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+    try:
+        saved_secret = await get_class_join_code_secret(db, class_id=class_id)
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+            if class_info is None:
+                await callback.answer("کلاس پیدا نشد.", show_alert=True)
+                return
+
+            saved_code_is_current = (
+                saved_secret is not None
+                and class_info["member_join_code_hash"] is not None
+                and secrets.compare_digest(
+                    str(saved_secret["join_code_hash"]),
+                    str(class_info["member_join_code_hash"]),
+                )
+            )
+            if saved_code_is_current:
+                raw_code = str(saved_secret["join_code"])
+                replaced_legacy_code = False
+                issued_new_code = False
+            else:
+                alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
+                async with product_db.begin():
+                    await issue_product_class_join_code(
+                        product_db,
+                        class_id=class_id,
+                        code=raw_code,
+                    )
+                replaced_legacy_code = class_info["member_join_code_hash"] is not None
+                issued_new_code = True
+
+        if issued_new_code:
+            await store_class_join_code_secret(
+                db,
+                class_id=class_id,
+                code=raw_code,
+            )
+            await record_event(
+                db,
+                event_type="product.class.member_join_code_issued",
+                actor_id=principal.user.id,
+                aggregate_type="class",
+                event_data={
+                    "class_id": class_id,
+                    "reason": "legacy_hash_replaced" if replaced_legacy_code else "first_issue",
+                },
+            )
+            await db.commit()
+    except ApplicationError as exc:
+        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        await db.rollback()
+        logger.exception("Could not load or persist ClassMate class join code %s.", class_id)
+        await callback.answer("دریافت یا ذخیرهٔ کد ورود کلاس ناموفق بود.", show_alert=True)
+        return
+
+    await callback.answer(
+        "کد جدید صادر شد." if issued_new_code else "کد فعلی کلاس نمایش داده شد؛ تغییری نکرد."
+    )
+    if callback.message is not None:
+        await callback.message.edit_text(
+            _class_join_code_message(
+                class_info["name"],
+                raw_code,
+                replaced_legacy_code=replaced_legacy_code,
+            ),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="♻️ تغییر کد ورود",
+                            callback_data=f"product:class:join-code:rotate:{class_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:class:join-code:rotate:[0-9]+$"))
+async def product_class_join_code_rotate_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _require_private_callback(callback, "تغییر کد ورود کلاس"):
         return
     if not await _has_permission(db, principal, "platform:classes:manage"):
         await callback.answer("مجوز مدیریت کد ورود کلاس را ندارید.", show_alert=True)
@@ -1742,45 +1919,49 @@ async def product_class_join_code_issue_callback(
                     class_id=class_id,
                     code=raw_code,
                 )
-    except ApplicationError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    except Exception:
-        logger.exception("Could not issue ClassMate class join code.")
-        await callback.answer("صدور کد ورود کلاس ناموفق بود.", show_alert=True)
-        return
 
-    try:
+        await store_class_join_code_secret(
+            db,
+            class_id=class_id,
+            code=raw_code,
+        )
         await record_event(
             db,
-            event_type="product.class.member_join_code_issued",
+            event_type="product.class.member_join_code_rotated",
             actor_id=principal.user.id,
             aggregate_type="class",
             event_data={"class_id": class_id},
         )
         await db.commit()
+    except ApplicationError as exc:
+        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
     except Exception:
         await db.rollback()
-        logger.exception("Class join-code audit recording failed for %s.", class_id)
+        logger.exception("Could not rotate ClassMate class join code %s.", class_id)
+        await callback.answer("تغییر کد ورود کلاس ناموفق بود.", show_alert=True)
+        return
 
-    await callback.answer("کد ورود کلاس صادر شد.")
+    await callback.answer("کد و لینک قبلی منقضی شدند؛ کد جدید صادر شد.")
     if callback.message is not None:
         await callback.message.edit_text(
-            "🔑 <b>کد مشترک ورود به کلاس</b>\n\n"
-            f"کلاس: {html.escape(str(code_info['name']))}\n"
-            "هر دانش‌آموز برای عضویت در همین کلاس از این دستور در گفت‌وگوی خصوصی ربات ClassMate استفاده کند:\n\n"
-            f"<code>/join {html.escape(raw_code)}</code>\n\n"
-            "کد برای همهٔ دانش‌آموزان این کلاس مشترک است و تا زمان تغییر از پنل کلاس اعتبار دارد. "
-            "با صدور کد جدید، کد قبلی فوراً باطل می‌شود.",
+            _class_join_code_message(code_info["name"], raw_code),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
+                            text="♻️ تغییر کد ورود",
+                            callback_data=f"product:class:join-code:rotate:{class_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
                             text="⬅️ بازگشت به کلاس",
                             callback_data=f"product:class:{class_id}",
                         )
-                    ]
+                    ],
                 ]
             ),
         )
