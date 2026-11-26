@@ -1,58 +1,45 @@
 import ast
-import re
 from pathlib import Path
 
-_TELEGRAM_COMMAND = re.compile(r"^[a-z0-9_]{1,32}$")
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
+_BOT_MODULES = (
+    "backend/app/bot/main.py",
+    "backend/app/bot/router.py",
+    "backend/app/bot/product_router.py",
+    "backend/app/bot/control_router.py",
+    "backend/app/bot/academic_router.py",
+)
 
 
-def _registered_commands(path: Path) -> list[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    commands: list[str] = []
+def test_only_start_is_published_and_no_other_command_handlers_exist() -> None:
+    published_commands: list[str] = []
+    command_filters: list[tuple[str, int]] = []
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for relative_path in _BOT_MODULES:
+        path = _SOURCE_ROOT / relative_path
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
 
-        function_name = (
-            node.func.id if isinstance(node.func, ast.Name) else None
-        )
-        if function_name == "BotCommand":
-            value = next(
-                (
-                    keyword.value.value
-                    for keyword in node.keywords
-                    if keyword.arg == "command"
-                    and isinstance(keyword.value, ast.Constant)
-                    and isinstance(keyword.value.value, str)
-                ),
-                None,
+            function_name = (
+                node.func.id if isinstance(node.func, ast.Name) else None
             )
-            if value is not None:
-                commands.append(value)
-        elif (
-            function_name == "Command"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        ):
-            commands.append(node.args[0].value)
+            if function_name == "BotCommand":
+                command = next(
+                    (
+                        keyword.value.value
+                        for keyword in node.keywords
+                        if keyword.arg == "command"
+                        and isinstance(keyword.value, ast.Constant)
+                        and isinstance(keyword.value.value, str)
+                    ),
+                    None,
+                )
+                if command is not None:
+                    published_commands.append(command)
+            elif function_name == "Command":
+                command_filters.append((relative_path, node.lineno))
 
-    return commands
-
-
-def test_admin_bot_commands_follow_telegram_command_constraints() -> None:
-    paths = [
-        _SOURCE_ROOT / "backend/app/bot/main.py",
-        _SOURCE_ROOT / "backend/app/bot/router.py",
-        _SOURCE_ROOT / "backend/app/bot/academic_router.py",
-    ]
-    commands = [
-        command
-        for path in paths
-        for command in _registered_commands(path)
-    ]
-
-    assert commands, "Expected at least one registered Telegram command."
-    invalid = [command for command in commands if not _TELEGRAM_COMMAND.fullmatch(command)]
-    assert not invalid, f"Invalid Telegram command names: {invalid}"
+    assert published_commands == ["start"]
+    assert command_filters == []
