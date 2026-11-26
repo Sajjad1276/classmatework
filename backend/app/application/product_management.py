@@ -269,6 +269,7 @@ async def get_product_class(
                 c.group_chat_id,
                 c.group_chat_title,
                 (c.member_join_code_hash IS NOT NULL) AS has_member_join_code,
+                c.member_join_code_hash,
                 c.member_join_code_expires_at
             FROM public.classes AS c
             JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
