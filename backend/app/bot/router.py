@@ -343,7 +343,7 @@ async def _show_tenant_step(
         keyboard = wizard_controls(flow_token)
 
     if notice:
-        body = f"⚠️ {notice}\\n\\n{body}"
+        body = f"⚠️ {notice}\n\n{body}"
 
     prompt_id = data.get("flow_prompt_message_id")
     chat_id = data.get("flow_chat_id") or message.chat.id
@@ -544,7 +544,7 @@ async def role_create_command(
     parts = left.split()
     if len(parts) != 4 or parts[0].split("@", maxsplit=1)[0] != "/role_create":
         await message.answer(
-            "قالب فرمان:\\n"
+            "قالب فرمان:\n"
             "/role_create TENANT_UUID ROLE_KEY PERMISSION1,PERMISSION2 | نام نمایشی نقش"
         )
         return
@@ -843,7 +843,7 @@ async def member_suspend_reason_input(
     if not 10 <= len(reason) <= 500:
         flow_token = str(data.get("flow_token") or "")
         await message.answer(
-            "⚠️ دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد.\\n\\n"
+            "⚠️ دلیل باید بین ۱۰ تا ۵۰۰ نویسه باشد.\n\n"
             "دلیل تعلیق را دوباره وارد کنید:",
             reply_markup=wizard_controls(flow_token),
         )
@@ -1071,7 +1071,7 @@ async def member_directory_search_input(
     search_query = (message.text or "").strip()
     if not search_query:
         await message.answer(
-            "⚠️ عبارت جست‌وجو خالی است.\\n\\nنام یا Telegram ID را وارد کنید:",
+            "⚠️ عبارت جست‌وجو خالی است.\n\nنام یا Telegram ID را وارد کنید:",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
@@ -1082,7 +1082,7 @@ async def member_directory_search_input(
         return
     if search_query.startswith("/"):
         await message.answer(
-            "⚠️ عبارت جست‌وجو معتبر نیست.\\n\\nنام یا Telegram ID را وارد کنید:",
+            "⚠️ عبارت جست‌وجو معتبر نیست.\n\nنام یا Telegram ID را وارد کنید:",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="root:menu")],
