@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,16 @@ class TenantMemberView:
     telegram_user_id: int | None
     role_keys: tuple[str, ...]
     joined_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TenantMemberPage:
+    items: tuple[TenantMemberView, ...]
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+    search_query: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +114,55 @@ async def _build_role_directory(
     ]
 
 
+async def list_assignable_tenant_permissions(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 200,
+) -> tuple[str, ...]:
+    """Return tenant-scoped permissions the actor can safely delegate."""
+    if not 1 <= limit <= 200:
+        raise InvalidApplicationInput("Permission catalog limit must be between 1 and 200.")
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    permission_keys = (
+        await db.execute(
+            select(Permission.key)
+            .where(~Permission.key.startswith("platform:"))
+            .order_by(Permission.key)
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    assignable: list[str] = []
+    for permission_key in permission_keys:
+        if await has_permission(
+            db,
+            user_id=actor_id,
+            permission_key=permission_key,
+            tenant_id=tenant_id,
+            scope_type="tenant",
+            scope_id=tenant_id,
+        ):
+            assignable.append(permission_key)
+
+    await record_event(
+        db,
+        event_type="role.permission_catalog.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="role_permission_catalog",
+        event_data={"returned_count": len(assignable), "limit": limit},
+    )
+    await db.commit()
+    return tuple(assignable)
+
+
 async def list_tenant_roles(
     db: AsyncSession,
     *,
@@ -139,6 +198,64 @@ async def list_tenant_roles(
     )
     await db.commit()
     return entries
+
+
+async def list_assignable_tenant_roles(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 50,
+) -> list[RoleDirectoryEntry]:
+    """List only tenant roles whose allow-permissions the actor can delegate."""
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Assignable role limit must be between 1 and 100.")
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    rows = (
+        await db.execute(
+            select(Role, Tenant.name)
+            .outerjoin(Tenant, Tenant.id == Role.tenant_id)
+            .where(Role.tenant_id == tenant_id)
+            .order_by(Role.key)
+            .limit(limit)
+        )
+    ).all()
+    entries = await _build_role_directory(db, rows=list(rows))
+    assignable: list[RoleDirectoryEntry] = []
+    for role in entries:
+        allow_keys = [key for key, effect in role.permissions if effect == "allow"]
+        if not allow_keys or any(key.startswith("platform:") for key, _ in role.permissions):
+            continue
+        can_delegate_every_permission = True
+        for permission_key in allow_keys:
+            if not await has_permission(
+                db,
+                user_id=actor_id,
+                permission_key=permission_key,
+                tenant_id=tenant_id,
+                scope_type="tenant",
+                scope_id=tenant_id,
+            ):
+                can_delegate_every_permission = False
+                break
+        if can_delegate_every_permission:
+            assignable.append(role)
+    await record_event(
+        db,
+        event_type="role.tenant_assignable_directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="role_directory",
+        event_data={"returned_count": len(assignable), "limit": limit},
+    )
+    await db.commit()
+    return assignable
+
 
 
 async def list_platform_roles(
@@ -208,6 +325,8 @@ async def create_tenant_role(
         raise InvalidApplicationInput("Choose between 1 and 20 permissions.")
     if any(not item or len(item) > 128 for item in normalized_permissions):
         raise InvalidApplicationInput("One or more permission keys are invalid.")
+    if any(item.startswith("platform:") for item in normalized_permissions):
+        raise AccessDenied
 
     existing = (
         await db.execute(
@@ -398,15 +517,27 @@ async def list_admin_invitations(
     return invitations
 
 
-async def list_tenant_members(
+async def list_tenant_members_page(
     db: AsyncSession,
     *,
     actor_id: UUID,
     tenant_id: UUID,
-    limit: int = 50,
-) -> list[TenantMemberView]:
-    if not 1 <= limit <= 100:
+    page: int = 1,
+    page_size: int = 8,
+    search_query: str | None = None,
+) -> TenantMemberPage:
+    """Return one authorized page of active tenant members, optionally filtered by name or Telegram ID."""
+    if page < 1:
+        raise InvalidApplicationInput("Membership page number must be positive.")
+    if not 1 <= page_size <= 100:
         raise InvalidApplicationInput("Membership page size must be between 1 and 100.")
+
+    normalized_query = (search_query or "").strip()
+    if len(normalized_query) > 80:
+        raise InvalidApplicationInput("عبارت جست‌وجو نباید بیشتر از ۸۰ نویسه باشد.")
+    if not normalized_query:
+        normalized_query = None
+
     await _require_tenant_permission(
         db,
         actor_id=actor_id,
@@ -415,6 +546,52 @@ async def list_tenant_members(
     )
 
     now = datetime.now(UTC)
+    filters = [
+        TenantMembership.tenant_id == tenant_id,
+        TenantMembership.status == "active",
+        User.status == "active",
+        or_(
+            TenantMembership.starts_at.is_(None),
+            TenantMembership.starts_at <= now,
+        ),
+        or_(
+            TenantMembership.ends_at.is_(None),
+            TenantMembership.ends_at > now,
+        ),
+    ]
+    if normalized_query is not None:
+        escaped_query = (
+            normalized_query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        name_filter = User.display_name.ilike(f"%{escaped_query}%", escape="\\")
+        search_filter = name_filter
+        if normalized_query.isdecimal():
+            telegram_id = int(normalized_query)
+            if 0 < telegram_id <= 9_223_372_036_854_775_807:
+                matching_user_ids = select(TelegramAccount.user_id).where(
+                    TelegramAccount.telegram_user_id == telegram_id,
+                    TelegramAccount.status == "active",
+                )
+                search_filter = or_(
+                    name_filter,
+                    User.id.in_(matching_user_ids),
+                )
+        filters.append(search_filter)
+
+    total_items = int(
+        (
+            await db.execute(
+                select(func.count(TenantMembership.id))
+                .join(User, User.id == TenantMembership.user_id)
+                .where(*filters)
+            )
+        ).scalar_one()
+    )
+    total_pages = (total_items + page_size - 1) // page_size
+    effective_page = min(page, total_pages) if total_pages else 1
+
     rows = (
         await db.execute(
             select(TenantMembership, User, TelegramAccount.telegram_user_id)
@@ -426,21 +603,10 @@ async def list_tenant_members(
                     TelegramAccount.status == "active",
                 ),
             )
-            .where(
-                TenantMembership.tenant_id == tenant_id,
-                TenantMembership.status == "active",
-                User.status == "active",
-                or_(
-                    TenantMembership.starts_at.is_(None),
-                    TenantMembership.starts_at <= now,
-                ),
-                or_(
-                    TenantMembership.ends_at.is_(None),
-                    TenantMembership.ends_at > now,
-                ),
-            )
+            .where(*filters)
             .order_by(User.display_name, User.id)
-            .limit(limit)
+            .offset((effective_page - 1) * page_size)
+            .limit(page_size)
         )
     ).all()
 
@@ -464,7 +630,7 @@ async def list_tenant_members(
         for user_id, role_key in binding_rows:
             role_map[user_id].append(role_key)
 
-    members = [
+    members = tuple(
         TenantMemberView(
             user_id=user.id,
             display_name=user.display_name,
@@ -473,10 +639,112 @@ async def list_tenant_members(
             joined_at=membership.starts_at or membership.created_at,
         )
         for membership, user, telegram_user_id in rows
-    ]
+    )
     await record_event(
         db,
         event_type="membership.tenant_directory.read",
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        aggregate_type="membership_directory",
+        event_data={
+            "returned_count": len(members),
+            "total_items": total_items,
+            "page": effective_page,
+            "page_size": page_size,
+            "search_used": normalized_query is not None,
+        },
+    )
+    await db.commit()
+    return TenantMemberPage(
+        items=members,
+        page=effective_page,
+        page_size=page_size,
+        total_items=total_items,
+        total_pages=total_pages,
+        search_query=normalized_query,
+    )
+
+
+async def list_tenant_members(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 50,
+) -> list[TenantMemberView]:
+    """Backward-compatible first-page view for callers that only need a bounded list."""
+    result = await list_tenant_members_page(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        page=1,
+        page_size=limit,
+    )
+    return list(result.items)
+
+
+
+@dataclass(frozen=True, slots=True)
+class SuspendedTenantMemberView:
+    user_id: UUID
+    display_name: str
+    telegram_user_id: int | None
+    suspended_at: datetime | None
+
+
+async def list_suspended_tenant_members(
+    db: AsyncSession,
+    *,
+    actor_id: UUID,
+    tenant_id: UUID,
+    limit: int = 50,
+) -> list[SuspendedTenantMemberView]:
+    if not 1 <= limit <= 100:
+        raise InvalidApplicationInput("Suspended member limit must be between 1 and 100.")
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="membership:manage",
+    )
+    await _require_tenant_permission(
+        db,
+        actor_id=actor_id,
+        tenant_id=tenant_id,
+        permission_key="role:manage",
+    )
+    rows = (
+        await db.execute(
+            select(TenantMembership, User, TelegramAccount.telegram_user_id)
+            .join(User, User.id == TenantMembership.user_id)
+            .outerjoin(
+                TelegramAccount,
+                and_(
+                    TelegramAccount.user_id == User.id,
+                    TelegramAccount.status == "active",
+                ),
+            )
+            .where(
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == "suspended",
+                User.status == "active",
+            )
+            .order_by(TenantMembership.ends_at.desc(), User.display_name, User.id)
+            .limit(limit)
+        )
+    ).all()
+    members = [
+        SuspendedTenantMemberView(
+            user_id=user.id,
+            display_name=user.display_name,
+            telegram_user_id=telegram_user_id,
+            suspended_at=membership.ends_at,
+        )
+        for membership, user, telegram_user_id in rows
+    ]
+    await record_event(
+        db,
+        event_type="membership.tenant_suspended_directory.read",
         actor_id=actor_id,
         tenant_id=tenant_id,
         aggregate_type="membership_directory",

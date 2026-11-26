@@ -5,9 +5,9 @@
 ## 1. مرزهای امنیتی
 
 - رابط انسانی فقط ربات اختصاصی تلگرام است.
-- FastAPI برای Health Check و Integration API است؛ نباید Telegram User ID دلخواه را بدون احراز منبع، هویت مدیر تلقی کند.
+- در Runtime فعلی هیچ FastAPI یا Integration API وجود ندارد؛ هر ارتباط داخلی از Use Case مشترک می‌گذرد و Telegram ID ارسالی از ورودی غیرقابل‌اعتماد هرگز به‌تنهایی هویت مجاز نیست.
 - منطق Authorization در Backend/Use Case است؛ Inline Keyboard و Callback Handler صرفاً ورودی غیرقابل اعتمادند.
-- `classmate2` یک مرز اعتماد خارجی است و فقط با قرارداد Machine-to-Machine متصل می‌شود.
+- اگر `classmate2` در Runtime یا مرز داده‌ای مستقل اجرا شود، اتصال به آن نیازمند قرارداد انتقال امن جداگانه است؛ چنین APIای در Runtime فعلی پیاده‌سازی یا اجرا نمی‌شود.
 
 ## 2. هویت و احراز مدیر
 
@@ -71,20 +71,19 @@
 - Correlation ID مسیر Update → Handler → Use Case → DB/Outbox → Integration را پیوند می‌دهد.
 - Log باید ساختاریافته و Redacted باشد.
 
-## 8. Machine-to-Machine و classmate2
+## 8. ارتباط با Runtime یا سامانه خارجی در آینده
 
-- Telegram User Identity و Service Identity دو هویت جدا هستند.
-- هر Service Credential دارای Audience، Scope، زمان اعتبار، چرخش و امکان ابطال است.
-- API نباید با Header دلخواه `X-Telegram-User-ID` به Caller هویت مدیریتی بدهد.
-- Webhook دارای Signature/تاریخ/Replay Protection است.
-- Payload و Event نسخه‌بندی و اعتبارسنجی می‌شوند.
-- هیچ secret یا تغییر تنظیمی در classmate2 از این پروژه اعمال نمی‌شود.
+- در Runtime فعلی ارتباط داخلی از Application Use Caseهای مشترک انجام می‌شود؛ سرویس HTTP یا Credential مشترک M2M وجود ندارد.
+- اگر یک مصرف‌کننده در آینده واقعاً Runtime جدا داشته باشد، Telegram User Identity و Service Identity باید جدا بمانند.
+- پیش از فعال‌سازی ارتباط بین Runtimeها باید Audience، Scope، انقضا، چرخش و ابطال Credential، امضای درخواست، Replay Protection، Idempotency، Versioning و Audit طراحی و تست شوند.
+- ارسال Telegram ID از Header یا Body بدون احراز هویت مستقل هرگز مجوز مدیریتی ایجاد نمی‌کند.
+- هیچ Secret یا تنظیمی در `classmate2` از این مخزن تغییر داده نمی‌شود.
 
 ## 9. وضعیت پیاده‌سازی فعلی در شاخه فاز یک
 
 **کنترل‌های موجود در کد (نیازمند قبولی CI و آزمون عملی Bot):**
 
-- مسیرهای Browser Auth از API فعال حذف شده‌اند؛ جدول Browser Session در Migration 0003 حذف می‌شود و Email/Password دیگر هویت مدیریتی اجباری نیست.
+- مسیر احراز هویت مرورگری و Browser Session حذف شده‌اند؛ ایمیل/گذرواژه هویت مدیریتی اجباری نیست و Runtime فعلی فقط Bot دارد.
 - TelegramAccount با Telegram User ID عددی، وضعیت اتصال و metadata ایجاد شده است.
 - Bootstrap مالک پلتفرم با Telegram ID عددی و Pairing یک‌بارمصرف مدیران وجود دارد.
 - Private Chat Guard و رد User/TelegramAccount غیرفعال پیاده‌سازی شده است.
@@ -109,7 +108,7 @@
 - اجرای واقعی Bot با Token معتبر و تست end-to-end هنوز انجام نشده است.
 - لغو اتصال، بازیابی مدیر و Step-up/MFA کامل نیست.
 - ویرایش/آرشیو Role، مدیریت مستقل Permission Registry، تعلیق/لغو عضویت و فرم‌های Update/Archive موجودیت‌های آموزشی در Bot هنوز تکمیل نشده‌اند.
-- Integration API و Service Authentication برای اتصال آینده به classmate2 هنوز ساخته نشده‌اند.
+- در Runtime فعلی Integration API وجود ندارد؛ اتصال احتمالی به Runtime مستقل در آینده نیازمند تصمیم و قرارداد امنیتی جداگانه خواهد بود.
 - Audit readهای حساس و Correlation end-to-end هنوز نیازمند بازبینی گسترده‌اند.
 
 هیچ Railway Deployment یا تغییر در classmate2 در این مرحله انجام نشده است.

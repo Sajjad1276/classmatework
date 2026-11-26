@@ -19,7 +19,7 @@
 - ثبت یک گزینه در منو یا تکمیل مستند، معادل تحویل قابلیت نیست.
 - هر فاز فقط پس از قبولی Gate همان فاز بسته می‌شود.
 - رابط انسانی همه قابلیت‌ها فقط Bot تلگرام است. پنل وب، React، سایت مدیریت و Telegram Web App در دامنه محصول نیستند.
-- FastAPI برای Health و Integration/Machine-to-Machine حفظ می‌شود؛ نه به‌عنوان رابط انسانی.
+- سرویس HTTP/FastAPI جداگانه در دامنه فعلی وجود ندارد؛ Botها مستقیماً از Application Use Case مشترک استفاده می‌کنند.
 - پروژه و Serviceها در همان Railway Project موجود مدیریت می‌شوند؛ ایجاد Project جدید جزو این نقشه نیست.
 - تغییر یا Deploy در classmate2 بدون دستور و قرارداد جداگانه ممنوع است.
 
@@ -62,8 +62,8 @@
 
 3. **Application Layer**
    - Use Case، Repository، Policy و Audit Service.
-   - انتقال منطق فعلی از Routerهای FastAPI به Use Case مشترک.
-   - Bot و API فقط Adapter باشند.
+   - منطق دامنه فقط در Use Caseهای مشترک اجرا شود.
+   - Telegram Handlerها صرفاً Adapter باشند.
    - Transaction boundary و خروجی ساخت‌یافته.
 
 4. **هسته دسترسی و صحت داده**
@@ -78,7 +78,7 @@
 5. **پایه عملیات**
    - حفظ PostgreSQL، Redis، Alembic و Audit append-only.
    - Correlation ID از Telegram Update تا Use Case.
-   - جداسازی Service API و Admin Bot.
+   - یکپارچگی مستقیم Botها با Use Caseهای مشترک؛ بدون HTTP relay داخلی.
    - تنظیم اجرای محلی و CI بدون Frontend.
 
 ### تحویل‌های الزامی
@@ -90,7 +90,7 @@
 - انتخاب Tenant مجاز.
 - عملیات پایه Tenant و یک Vertical Slice واقعی برای مدرسه.
 - Audit تمام عملیات حساس و ثبت Actor واقعی.
-- API Health و قرارداد اولیه Machine-to-Machine.
+- قرارداد داخلی مستقیم برای فراخوانی Use Case از Botها.
 
 ### Gate خروج فاز ۱
 
@@ -390,7 +390,7 @@
 - Tenant ID و Callback Data مبنای Authorization نیستند.
 - تمام زمان‌ها UTC ذخیره و مطابق timezone هر Tenant نمایش داده می‌شوند.
 - Secretها فقط در Environment امن نگهداری می‌شوند.
-- FastAPI رابط وب یا جایگزین Bot نمی‌شود.
+- سرویس HTTP مستقل، جایگزین یا پیش‌نیاز Bot نیست.
 - هیچ قابلیت ناقص برای پر کردن منو به فاز بعد منتقل‌شده و «تحویل‌شده» اعلام نمی‌شود.
 
 ## 4. ترتیب و کنترل تغییرات

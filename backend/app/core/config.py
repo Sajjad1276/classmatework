@@ -12,13 +12,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "ClassMate Work API"
     app_env: Literal["development", "test", "staging", "production"] = "development"
-    api_v1_prefix: str = "/api/v1"
     log_level: str = "INFO"
     database_url: str = (
         "postgresql+asyncpg://classmate:local-dev-only@localhost:5432/classmatework"
     )
+    # Separate connection to the live ClassMate product database. It must never
+    # inherit ClassMate Work's schema search_path.
+    c2_db_url: SecretStr | None = None
     redis_url: str = "redis://localhost:6379/0"
     telegram_bot_token: SecretStr | None = None
     bot_fsm_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
@@ -26,6 +27,7 @@ class Settings(BaseSettings):
     bot_message_rate_limit: int = Field(default=30, ge=1, le=1000)
     bot_callback_rate_limit: int = Field(default=45, ge=1, le=1000)
     bot_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+    classmate_telemetry_hash_key: SecretStr | None = None
 
     @field_validator("app_env", mode="before")
     @classmethod

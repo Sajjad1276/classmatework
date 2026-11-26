@@ -14,13 +14,14 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.bot.academic_router import router as academic_router
+from app.bot.control_router import router as control_router
 from app.bot.idempotency import TelegramUpdateDedupMiddleware
 from app.bot.middleware import (
     DatabaseSessionMiddleware,
     PrivateChatOnlyMiddleware,
     TelegramIdentityMiddleware,
 )
+from app.bot.product_router import router as product_router
 from app.bot.rate_limit import TelegramRateLimitMiddleware
 from app.bot.router import router
 from app.core.config import get_settings
@@ -28,6 +29,7 @@ from app.core.logging import configure_logging
 from app.db.runtime import (
     DATABASE_SCHEMA,
     create_database_engine,
+    create_product_database_engine,
     create_redis_client,
     create_session_factory,
 )
@@ -122,6 +124,56 @@ async def main() -> None:
     configure_logging(settings.log_level)
     engine = create_database_engine(settings.database_url)
     session_factory: async_sessionmaker[AsyncSession] = create_session_factory(engine)
+    product_engine = None
+    product_session_factory = None
+    if settings.c2_db_url is not None and settings.c2_db_url.get_secret_value().strip():
+        product_engine = create_product_database_engine(
+            settings.c2_db_url.get_secret_value().strip()
+        )
+        product_session_factory = create_session_factory(product_engine)
+        try:
+            async with product_engine.connect() as product_connection:
+                product_state = (
+                    await product_connection.execute(
+                        text(
+                            "SELECT current_database() AS database, "
+                            "current_schema() AS schema, "
+                            "to_regclass('public.schools')::text AS schools_table, "
+                            "to_regclass('public.classes')::text AS classes_table, "
+                            "to_regclass('public.academic_years')::text AS years_table, "
+                            "to_regclass('public.subjects')::text AS subjects_table, "
+                            "to_regclass('public.timetable_entries')::text AS timetable_table"
+                        )
+                    )
+                ).mappings().one()
+                required_tables = (
+                    "schools_table",
+                    "classes_table",
+                    "years_table",
+                    "subjects_table",
+                    "timetable_table",
+                )
+                missing_tables = [
+                    name for name in required_tables if product_state[name] is None
+                ]
+                if missing_tables:
+                    raise RuntimeError(
+                        "ClassMate product database is missing required tables: "
+                        + ", ".join(missing_tables)
+                    )
+            logger.info(
+                "ClassMate product database connected; database=%s schema=%s",
+                product_state["database"],
+                product_state["schema"],
+            )
+        except Exception:
+            logger.exception(
+                "ClassMate product database is unavailable; product management is disabled."
+            )
+            await product_engine.dispose()
+            product_engine = None
+            product_session_factory = None
+
     redis = create_redis_client(settings.redis_url)
     token = secrets.token_urlsafe(32)
     bot = Bot(token=settings.telegram_bot_token.get_secret_value())
@@ -136,11 +188,15 @@ async def main() -> None:
     )
     dispatcher = Dispatcher(storage=storage)
     dispatcher["redis"] = redis
+    if product_session_factory is not None:
+        # Used only by product-management use cases. Admin identities,
+        # permissions, FSM and audit remain in the isolated Work database.
+        dispatcher["product_session_factory"] = product_session_factory
     dispatcher.update.outer_middleware(
         TelegramUpdateDedupMiddleware(
-                session_factory,
-                lease_ttl=timedelta(seconds=settings.bot_update_lease_seconds),
-            )
+            session_factory,
+            lease_ttl=timedelta(seconds=settings.bot_update_lease_seconds),
+        )
     )
 
     try:
@@ -193,16 +249,19 @@ async def main() -> None:
 
         for observer in (dispatcher.message, dispatcher.callback_query):
             observer.outer_middleware(PrivateChatOnlyMiddleware())
-            observer.outer_middleware(TelegramRateLimitMiddleware(
-                redis,
-                message_limit=settings.bot_message_rate_limit,
-                callback_limit=settings.bot_callback_rate_limit,
-                window_seconds=settings.bot_rate_limit_window_seconds,
-            ))
+            observer.outer_middleware(
+                TelegramRateLimitMiddleware(
+                    redis,
+                    message_limit=settings.bot_message_rate_limit,
+                    callback_limit=settings.bot_callback_rate_limit,
+                    window_seconds=settings.bot_rate_limit_window_seconds,
+                )
+            )
             observer.outer_middleware(DatabaseSessionMiddleware(session_factory))
             observer.outer_middleware(TelegramIdentityMiddleware())
 
-        dispatcher.include_router(academic_router)
+        dispatcher.include_router(product_router)
+        dispatcher.include_router(control_router)
         dispatcher.include_router(router)
 
         await bot.set_my_commands(
@@ -211,16 +270,14 @@ async def main() -> None:
                 BotCommand(command="menu", description="منوی اصلی"),
                 BotCommand(command="back", description="بازگشت یک مرحله"),
                 BotCommand(command="cancel", description="لغو عملیات جاری"),
-                BotCommand(command="roles", description="فهرست نقش‌های قابل واگذاری"),
-                BotCommand(command="role_create", description="ساخت نقش در مجموعه"),
-                BotCommand(command="members", description="فهرست اعضای مجموعه"),
-                BotCommand(command="member_suspend", description="تعلیق عضویت پس از تأیید"),
-                BotCommand(command="member_reactivate", description="فعال‌سازی مجدد عضویت"),
-                BotCommand(command="invite", description="دعوت مدیر با نقش مشخص"),
-                BotCommand(command="invites", description="فهرست دعوت‌های باز"),
+                BotCommand(command="schools", description="مدیریت مدارس ClassMate"),
+                BotCommand(command="school_create", description="ایجاد مدرسه"),
+                BotCommand(command="roles", description="فهرست نقش‌های مدیریتی"),
+                BotCommand(command="invite", description="دعوت مدیر سامانه"),
                 BotCommand(command="revoke_invite", description="لغو دعوت پذیرفته‌نشده"),
                 BotCommand(command="help", description="راهنمای ربات"),
                 BotCommand(command="status", description="وضعیت سرویس‌ها"),
+                BotCommand(command="reports", description="داشبورد و گزارش‌های سامانه"),
             ]
         )
         await bot.delete_webhook(drop_pending_updates=False)
@@ -253,6 +310,8 @@ async def main() -> None:
         await storage.close()
         await redis.aclose()
         await engine.dispose()
+        if product_engine is not None:
+            await product_engine.dispose()
         await bot.session.close()
 
 

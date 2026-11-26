@@ -115,6 +115,8 @@ class ClassGroup(Base):
     __tablename__ = "class_groups"
     __table_args__ = (
         UniqueConstraint("tenant_id", "school_id", "academic_year_id", "code", name="uq_class_groups_code"),
+        UniqueConstraint("tenant_id", "id", name="uq_class_groups_tenant_id"),
+        UniqueConstraint("tenant_id", "school_id", "id", name="uq_class_groups_tenant_school_id"),
         ForeignKeyConstraint(
             ["tenant_id", "school_id"],
             ["schools.tenant_id", "schools.id"],
@@ -146,10 +148,123 @@ class ClassGroup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+
+class ClassTelegramGroup(Base):
+    __tablename__ = "class_telegram_groups"
+    __table_args__ = (
+        UniqueConstraint("class_group_id", name="uq_class_telegram_groups_class"),
+        UniqueConstraint("telegram_chat_id", name="uq_class_telegram_groups_chat"),
+        ForeignKeyConstraint(
+            ["tenant_id", "class_group_id"],
+            ["class_groups.tenant_id", "class_groups.id"],
+            name="fk_class_telegram_groups_tenant_class",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("chat_type IN ('group', 'supergroup')", name="ck_class_telegram_groups_chat_type"),
+        CheckConstraint("status IN ('active', 'revoked', 'attention')", name="ck_class_telegram_groups_status"),
+        Index("ix_class_telegram_groups_tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False)
+    class_group_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    chat_title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    chat_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chat_type: Mapped[str] = mapped_column(String(16), default="supergroup", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    connected_by_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    integration_bot_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ClassGroupLinkHandshake(Base):
+    __tablename__ = "class_group_link_handshakes"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_class_group_link_handshake_hash"),
+        ForeignKeyConstraint(
+            ["tenant_id", "class_group_id"],
+            ["class_groups.tenant_id", "class_groups.id"],
+            name="fk_class_group_handshakes_tenant_class",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("creator_telegram_user_id > 0", name="ck_group_handshake_actor_positive"),
+        CheckConstraint("expires_at > created_at", name="ck_group_handshake_expiry"),
+        Index(
+            "uq_class_group_handshake_active",
+            "class_group_id",
+            unique=True,
+            postgresql_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
+            sqlite_where=text("consumed_at IS NULL AND revoked_at IS NULL"),
+        ),
+        Index("ix_group_handshakes_class_expiry", "class_group_id", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False)
+    class_group_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_by_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    creator_telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UsageEvent(Base):
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        UniqueConstraint("external_event_id", name="uq_usage_events_external_id"),
+        Index("ix_usage_events_name_time", "event_name", "occurred_at"),
+        Index("ix_usage_events_actor_time", "actor_key_hash", "occurred_at"),
+        Index("ix_usage_events_tenant_time", "tenant_id", "occurred_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    external_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_service: Mapped[str] = mapped_column(String(80), nullable=False)
+    event_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    tenant_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=True)
+    actor_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    actor_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    aggregate_type: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    aggregate_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    attributes: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UsageIdentity(Base):
+    __tablename__ = "usage_identities"
+    __table_args__ = (
+        UniqueConstraint("actor_key_hash", name="uq_usage_identities_actor_hash"),
+        CheckConstraint(
+            "status IN ('active', 'inactive', 'blocked')",
+            name="ck_usage_identities_status",
+        ),
+        Index("ix_usage_identities_status_first_seen", "status", "first_seen_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    actor_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="active", nullable=False)
+    first_source_service: Mapped[str] = mapped_column(String(80), nullable=False)
+    last_source_service: Mapped[str] = mapped_column(String(80), nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Subject(Base):
     __tablename__ = "subjects"
     __table_args__ = (
         UniqueConstraint("tenant_id", "school_id", "code", name="uq_subjects_school_code"),
+        UniqueConstraint("tenant_id", "school_id", "id", name="uq_subjects_tenant_school_id"),
         ForeignKeyConstraint(
             ["tenant_id", "school_id"],
             ["schools.tenant_id", "schools.id"],
@@ -169,6 +284,53 @@ class Subject(Base):
     code: Mapped[str] = mapped_column(String(48))
     status: Mapped[str] = mapped_column(String(24), default="active", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ClassSubject(Base):
+    __tablename__ = "class_subjects"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_group_id",
+            "subject_id",
+            name="uq_class_subjects_class_subject",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id", "class_group_id"],
+            ["class_groups.tenant_id", "class_groups.school_id", "class_groups.id"],
+            name="fk_class_subjects_tenant_school_class",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "school_id", "subject_id"],
+            ["subjects.tenant_id", "subjects.school_id", "subjects.id"],
+            name="fk_class_subjects_tenant_school_subject",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'inactive', 'suspended')",
+            name="ck_class_subjects_status",
+        ),
+        Index(
+            "ix_class_subjects_tenant_school_status",
+            "tenant_id",
+            "school_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    school_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    class_group_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subject_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    assigned_by_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class User(Base):
