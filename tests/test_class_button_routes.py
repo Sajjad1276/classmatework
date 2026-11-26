@@ -18,6 +18,28 @@ class ProductSessionContext:
         return self
 
 
+class MemoryState:
+    def __init__(self):
+        self.data = {}
+        self.current_state = None
+
+    async def clear(self):
+        self.data.clear()
+        self.current_state = None
+
+    async def update_data(self, **values):
+        self.data.update(values)
+
+    async def get_data(self):
+        return dict(self.data)
+
+    async def set_state(self, state):
+        self.current_state = getattr(state, "state", state)
+
+    async def get_state(self):
+        return self.current_state
+
+
 def _callback(data: str, *, chat_type: str = "private"):
     message = SimpleNamespace(
         chat=SimpleNamespace(type=chat_type),
