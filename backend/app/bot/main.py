@@ -19,6 +19,7 @@ from app.bot.idempotency import TelegramUpdateDedupMiddleware
 from app.bot.middleware import (
     DatabaseSessionMiddleware,
     PrivateChatOnlyMiddleware,
+    StartOnlyCommandMiddleware,
     TelegramIdentityMiddleware,
 )
 from app.bot.product_router import router as product_router
@@ -247,6 +248,8 @@ async def main() -> None:
 
         await _acquire_poller_lock(redis, token)
 
+        dispatcher.message.outer_middleware(StartOnlyCommandMiddleware())
+
         for observer in (dispatcher.message, dispatcher.callback_query):
             observer.outer_middleware(PrivateChatOnlyMiddleware())
             observer.outer_middleware(
@@ -265,20 +268,7 @@ async def main() -> None:
         dispatcher.include_router(router)
 
         await bot.set_my_commands(
-            [
-                BotCommand(command="start", description="شروع و بررسی دسترسی"),
-                BotCommand(command="menu", description="منوی اصلی"),
-                BotCommand(command="back", description="بازگشت یک مرحله"),
-                BotCommand(command="cancel", description="لغو عملیات جاری"),
-                BotCommand(command="schools", description="مدیریت مدارس ClassMate"),
-                BotCommand(command="school_create", description="ایجاد مدرسه"),
-                BotCommand(command="roles", description="فهرست نقش‌های مدیریتی"),
-                BotCommand(command="invite", description="دعوت مدیر سامانه"),
-                BotCommand(command="revoke_invite", description="لغو دعوت پذیرفته‌نشده"),
-                BotCommand(command="help", description="راهنمای ربات"),
-                BotCommand(command="status", description="وضعیت سرویس‌ها"),
-                BotCommand(command="reports", description="داشبورد و گزارش‌های سامانه"),
-            ]
+            [BotCommand(command="start", description="شروع و نمایش پنل مدیریت")]
         )
         await bot.delete_webhook(drop_pending_updates=False)
         me = await bot.get_me()
