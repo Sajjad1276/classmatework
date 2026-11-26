@@ -1911,6 +1911,32 @@ async def help_callback(callback: CallbackQuery) -> None:
         await _show_help_panel(callback.message)
 
 
+@router.callback_query(F.data == "ux:cancel")
+async def ux_cancel_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Cancel an uncommitted wizard and return to the authenticated root menu."""
+    current_state = await state.get_state()
+    await state.clear()
+    await callback.answer(
+        "فرم لغو شد؛ هیچ تغییری ثبت نشد."
+        if current_state
+        else "فرم فعالی برای لغو وجود نداشت."
+    )
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await callback.message.answer(
+            "به منوی اصلی برگشتید.",
+            reply_markup=await main_menu(db, principal),
+        )
+
+
 @router.callback_query()
 async def unknown_callback(callback: CallbackQuery) -> None:
     await callback.answer(
