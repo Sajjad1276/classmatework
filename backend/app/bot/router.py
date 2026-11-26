@@ -8,10 +8,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from app.bot.ux import ensure_back_button
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -48,6 +49,11 @@ from app.modules.identity.pairing import (
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="admin")
+
+
+def InlineKeyboardMarkup(*args, **kwargs) -> TelegramInlineKeyboardMarkup:
+    """Create an inline keyboard with a safe back path by default."""
+    return ensure_back_button(TelegramInlineKeyboardMarkup(*args, **kwargs))
 
 
 
