@@ -16,10 +16,10 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.types import (
     InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors import (
     AccessDenied,
