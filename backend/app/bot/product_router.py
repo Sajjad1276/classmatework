@@ -3049,7 +3049,7 @@ async def product_class_member_role_confirm_callback(
 
 
 
-@router.callback_query(F.data.regexp(r"^product:records:[0-9]+$"))
+@router.callback_query(F.data.regexp(r"^product:records:[0-9]+(?::[1-9][0-9]*)?$"))
 async def product_class_records_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -3064,18 +3064,23 @@ async def product_class_records_callback(
     if product_session_factory is None:
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
-    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
     try:
+        parts = (callback.data or "").split(":")
+        class_id = int(parts[2])
+        page = int(parts[3]) if len(parts) == 4 else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             class_info = await get_product_class(product_db, class_id=class_id)
-            records = await list_product_class_records(
+            fetched = await list_product_class_records(
                 product_db,
                 class_id=class_id,
                 status="PENDING",
-                limit=50,
+                limit=9,
+                offset=(page - 1) * 8,
             )
     except (ValueError, ApplicationError) as exc:
-        await callback.answer(str(exc), show_alert=True)
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
     except Exception:
         logger.exception("Could not load pending records for ClassMate class %s.", class_id)
@@ -3085,47 +3090,67 @@ async def product_class_records_callback(
         await callback.answer("کلاس پیدا نشد.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    records = fetched[:8]
     counts = {"homework": 0, "exam": 0, "report": 0}
     for item in records:
         counts[item["entity_type"]] += 1
     lines = [
         f"📚 محتوای آموزشی کلاس {class_info['name']}",
-        "",
-        f"تکلیف‌های در انتظار: {counts['homework']}",
-        f"آزمون‌های در انتظار: {counts['exam']}",
-        f"گزارش‌های روزانه در انتظار: {counts['report']}",
+        f"صفحه: {page} · موارد این صفحه: {len(records)}",
+        f"تکلیف‌ها: {counts['homework']}",
+        f"آزمون‌ها: {counts['exam']}",
+        f"گزارش‌های روزانه: {counts['report']}",
         "",
     ]
     rows = []
-    if records:
-        for item in records[:30]:
-            label = {
-                "homework": "تکلیف",
-                "exam": "آزمون",
-                "report": "گزارش",
-            }[item["entity_type"]]
-            title = str(item["title"])[:30]
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=f"🕓 {label}: {title}",
-                        callback_data=(
-                            f"product:record:detail:{class_id}:"
-                            f"{item['entity_type']}:{item['id']}"
-                        ),
-                    )
-                ]
-            )
-    else:
-        lines.append("محتوای در انتظار بررسی وجود ندارد.")
-    rows.extend(
-        [
+    for item in records:
+        label = {
+            "homework": "تکلیف",
+            "exam": "آزمون",
+            "report": "گزارش",
+        }[item["entity_type"]]
+        title = str(item["title"])[:30]
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="⬅️ بازگشت به کلاس",
-                    callback_data=f"product:class:{class_id}",
+                    text=f"🕓 {label}: {title}",
+                    callback_data=(
+                        f"product:record:detail:{class_id}:"
+                        f"{item['entity_type']}:{item['id']}"
+                    ),
                 )
-            ],
+            ]
+        )
+    if not records:
+        lines.append(
+            "محتوای در انتظار بررسی وجود ندارد."
+            if page == 1
+            else "موردی در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"product:records:{class_id}:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"product:records:{class_id}:{page + 1}",
+                )
+            )
+        rows.append(navigation)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ بازگشت به کلاس",
+                callback_data=f"product:class:{class_id}",
+            )
         ]
     )
     await callback.answer()
@@ -3344,7 +3369,7 @@ async def product_record_review_confirm_callback(
         )
 
 
-@router.callback_query(F.data.regexp(r"^product:members:[0-9]+$"))
+@router.callback_query(F.data.regexp(r"^product:members:[0-9]+(?::[1-9][0-9]*)?$"))
 async def product_class_members_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -3360,12 +3385,21 @@ async def product_class_members_callback(
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
     try:
-        class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
+        parts = (callback.data or "").split(":")
+        class_id = int(parts[2])
+        page = int(parts[3]) if len(parts) == 4 else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             class_info = await get_product_class(product_db, class_id=class_id)
-            members = await list_product_class_members(product_db, class_id=class_id)
+            fetched = await list_product_class_members(
+                product_db,
+                class_id=class_id,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
     except (ValueError, ApplicationError) as exc:
-        await callback.answer(str(exc), show_alert=True)
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
         return
     except Exception:
         logger.exception("Could not load ClassMate class members.")
@@ -3375,47 +3409,69 @@ async def product_class_members_callback(
         await callback.answer("کلاس پیدا نشد.", show_alert=True)
         return
 
+    has_next = len(fetched) > 8
+    members = fetched[:8]
     lines = [
         f"👥 اعضای کلاس {class_info['name']}",
-        f"تعداد اعضا: {len(members)}",
+        f"صفحه: {page} · تعداد نمایش‌داده‌شده: {len(members)}",
         "دانش‌آموز جدید با کد مشترک همین کلاس و دستور /join در ربات ClassMate عضو می‌شود.",
         "",
     ]
     rows = []
-    if members:
-        for member in members[:30]:
-            active = member["membership_is_active"] and member["user_is_active"]
-            role_label = {
-                "student": "دانش‌آموز",
-                "class_manager": "مدیر کلاس",
-                "trusted_approver": "تأییدکننده",
-            }.get(member["membership_role"], member["membership_role"])
-            lines.append(
-                f"• {member['full_name']} · {member['telegram_id']} · "
-                f"{role_label} · {'فعال' if active else 'غیرفعال'}"
-            )
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=(
-                            f"⛔ تعلیق · {member['full_name'][:18]}"
-                            if active
-                            else f"♻️ فعال‌سازی · {member['full_name'][:18]}"
-                        ),
-                        callback_data=(
-                            f"product:member:status:{class_id}:{member['user_id']}:"
-                            f"{0 if active else 1}"
-                        ),
+    for member in members:
+        active = member["membership_is_active"] and member["user_is_active"]
+        role_label = {
+            "student": "دانش‌آموز",
+            "class_manager": "مدیر کلاس",
+            "trusted_approver": "تأییدکننده",
+        }.get(member["membership_role"], member["membership_role"])
+        lines.append(
+            f"• {member['full_name']} · {member['telegram_id']} · "
+            f"{role_label} · {'فعال' if active else 'غیرفعال'}"
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"⛔ تعلیق · {member['full_name'][:18]}"
+                        if active
+                        else f"♻️ فعال‌سازی · {member['full_name'][:18]}"
                     ),
-                    InlineKeyboardButton(
-                        text="🎖 نقش",
-                        callback_data=f"product:member:role:{class_id}:{member['user_id']}",
+                    callback_data=(
+                        f"product:member:status:{class_id}:{member['user_id']}:"
+                        f"{0 if active else 1}"
                     ),
-                ]
-            )
+                ),
+                InlineKeyboardButton(
+                    text="🎖 نقش",
+                    callback_data=f"product:member:role:{class_id}:{member['user_id']}",
+                ),
+            ]
+        )
 
-    else:
-        lines.append("هنوز عضوی به این کلاس اضافه نشده است.")
+    if not members:
+        lines.append(
+            "هنوز عضوی به این کلاس اضافه نشده است."
+            if page == 1
+            else "عضوی در این صفحه وجود ندارد؛ به صفحه قبل برگردید."
+        )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"product:members:{class_id}:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"product:members:{class_id}:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     rows.extend(
         [
             [
@@ -3707,7 +3763,7 @@ async def product_member_status_confirm_callback(
         )
 
 
-@router.callback_query(F.data.regexp(r"^product:announcements:[0-9]+$"))
+@router.callback_query(F.data.regexp(r"^product:announcements:[0-9]+(?::[1-9][0-9]*)?$"))
 async def product_class_announcements_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -3720,11 +3776,23 @@ async def product_class_announcements_callback(
     if product_session_factory is None:
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
-    class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
     try:
+        parts = (callback.data or "").split(":")
+        class_id = int(parts[2])
+        page = int(parts[3]) if len(parts) == 4 else 1
+        if page < 1:
+            raise ValueError
         async with product_session_factory() as product_db:
             class_info = await get_product_class(product_db, class_id=class_id)
-            announcements = await list_product_class_announcements(product_db, class_id=class_id)
+            fetched = await list_product_class_announcements(
+                product_db,
+                class_id=class_id,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
+    except (ValueError, ApplicationError) as exc:
+        await callback.answer(str(exc) or "شماره صفحه معتبر نیست.", show_alert=True)
+        return
     except Exception:
         logger.exception("Could not load ClassMate announcements.")
         await callback.answer("دریافت اطلاعیه‌ها ناموفق بود.", show_alert=True)
@@ -3733,10 +3801,16 @@ async def product_class_announcements_callback(
         await callback.answer("کلاس پیدا نشد.", show_alert=True)
         return
 
-    lines = [f"📢 اطلاعیه‌های کلاس {class_info['name']}", ""]
+    has_next = len(fetched) > 8
+    announcements = fetched[:8]
+    lines = [
+        f"📢 اطلاعیه‌های کلاس {class_info['name']}",
+        f"صفحه: {page} · تعداد در این صفحه: {len(announcements)}",
+        "",
+    ]
     rows = []
     if announcements:
-        for item in announcements[:20]:
+        for item in announcements:
             state_label = "فعال" if item["is_active"] else "غیرفعال"
             lines.append(f"• {item['title']} · {state_label}")
             rows.append(
@@ -3755,7 +3829,28 @@ async def product_class_announcements_callback(
                 ]
             )
     else:
-        lines.append("هنوز اطلاعیه‌ای برای این کلاس ثبت نشده است.")
+        lines.append(
+            "هنوز اطلاعیه‌ای برای این کلاس ثبت نشده است."
+            if page == 1
+            else "اطلاعیه‌ای در این صفحه نیست؛ به صفحه قبل برگردید."
+        )
+    if has_next or page > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="⬅️ صفحه قبل",
+                    callback_data=f"product:announcements:{class_id}:{page - 1}",
+                )
+            )
+        if has_next:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="صفحه بعد ➡️",
+                    callback_data=f"product:announcements:{class_id}:{page + 1}",
+                )
+            )
+        rows.append(navigation)
     rows.extend(
         [
             [
