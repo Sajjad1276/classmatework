@@ -11,10 +11,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from app.bot.ux import ensure_back_button
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
+    InlineKeyboardMarkup as TelegramInlineKeyboardMarkup,
     Message,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,6 +72,11 @@ from app.modules.identity.pairing import (
 from app.modules.identity.principal import TelegramPrincipal
 
 router = Router(name="academic-structure")
+
+
+def InlineKeyboardMarkup(*args, **kwargs) -> TelegramInlineKeyboardMarkup:
+    """Create an inline keyboard with a safe back path by default."""
+    return ensure_back_button(TelegramInlineKeyboardMarkup(*args, **kwargs))
 
 
 class TenantRoleWizard(StatesGroup):
