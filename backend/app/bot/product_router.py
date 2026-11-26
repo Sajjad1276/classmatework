@@ -9,7 +9,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app.bot.ux import ensure_back_button, wizard_controls as shared_wizard_controls
+from app.bot.ux import add_wizard_cancel, ensure_back_button, wizard_controls as shared_wizard_controls
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -827,6 +827,7 @@ async def product_class_create_callback(
 
 
 @router.message(Command("cancel"), SubjectCreation.name)
+@router.message(Command("cancel"), SubjectCreation.confirm)
 @router.message(Command("cancel"), TimetableCreation.weekday)
 @router.message(Command("cancel"), TimetableCreation.subject)
 @router.message(Command("cancel"), TimetableCreation.period)
@@ -1993,7 +1994,7 @@ async def product_subject_add_callback(
     await state.set_state(SubjectCreation.name)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("نام درس را وارد کنید (۲ تا ۱۰۰ نویسه):")
+        await callback.message.answer("نام درس را وارد کنید (۲ تا ۱۰۰ نویسه):", reply_markup=shared_wizard_controls())
 
 
 @router.message(SubjectCreation.name, F.text)
@@ -2006,7 +2007,7 @@ async def product_subject_name_input(
 ) -> None:
     name = " ".join((message.text or "").split())
     if not 2 <= len(name) <= 100:
-        await message.answer("نام درس باید بین ۲ تا ۱۰۰ نویسه باشد.")
+        await message.answer("خطا: نام درس باید بین ۲ تا ۱۰۰ نویسه باشد.\n\nنام درس را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     if not await _has_permission(db, principal, "platform:subjects:manage"):
         await state.clear()
@@ -2204,7 +2205,7 @@ async def product_timetable_add_callback(
     if callback.message is not None:
         await callback.message.answer(
             f"روز هفته برای کلاس {class_info['name']} را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            reply_markup=add_wizard_cancel(InlineKeyboardMarkup(inline_keyboard=rows)),
         )
 
 
@@ -2239,7 +2240,7 @@ async def timetable_weekday_select_callback(
     if callback.message is not None:
         await callback.message.answer(
             "درس این زنگ را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            reply_markup=add_wizard_cancel(InlineKeyboardMarkup(inline_keyboard=rows)),
         )
 
 
@@ -2266,7 +2267,7 @@ async def timetable_subject_select_callback(
     await state.set_state(TimetableCreation.period)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("شماره زنگ را از ۱ تا ۱۶ وارد کنید:")
+        await callback.message.answer("شماره زنگ را از ۱ تا ۱۶ وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(TimetableCreation.period, F.text)
@@ -3004,25 +3005,25 @@ async def product_class_member_add_callback(
     await state.set_state(MemberCreation.telegram_id)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("Telegram ID عضو را فقط به‌صورت عدد وارد کنید:")
+        await callback.message.answer("Telegram ID عضو را فقط به‌صورت عدد وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(MemberCreation.telegram_id, F.text)
 async def product_member_telegram_id_input(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if not value.isdigit() or not 0 < int(value) <= 9_223_372_036_854_775_807:
-        await message.answer("Telegram ID معتبر نیست؛ فقط عدد مثبت وارد کنید.")
+        await message.answer("خطا: Telegram ID معتبر نیست؛ فقط عدد مثبت وارد کنید.\n\nTelegram ID عضو را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_member_telegram_id=int(value))
     await state.set_state(MemberCreation.full_name)
-    await message.answer("نام و نام خانوادگی عضو را وارد کنید:")
+    await message.answer("نام و نام خانوادگی عضو را وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(MemberCreation.full_name, F.text)
 async def product_member_full_name_input(message: Message, state: FSMContext) -> None:
     name = " ".join((message.text or "").split())
     if not 1 <= len(name) <= 160:
-        await message.answer("نام باید بین ۱ تا ۱۶۰ نویسه باشد.")
+        await message.answer("خطا: نام باید بین ۱ تا ۱۶۰ نویسه باشد.\n\nنام و نام خانوادگی را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     data = await state.get_data()
     token = secrets.token_urlsafe(8)
