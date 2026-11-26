@@ -152,6 +152,14 @@ class SubjectCreation(StatesGroup):
     confirm = State()
 
 
+class JoinCodeIssue(StatesGroup):
+    confirm = State()
+
+
+class JoinCodeRotation(StatesGroup):
+    confirm = State()
+
+
 class TimetableCreation(StatesGroup):
     weekday = State()
     subject = State()
@@ -1776,14 +1784,52 @@ async def product_class_detail_callback(
 
 
 
+def _new_member_join_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(10))
+
+
+async def _save_new_member_join_code(
+    *,
+    db: AsyncSession,
+    principal: TelegramPrincipal,
+    product_session_factory: async_sessionmaker[AsyncSession],
+    class_id: int,
+    event_type: str,
+) -> tuple[dict, str]:
+    raw_code = _new_member_join_code()
+    async with product_session_factory() as product_db:
+        async with product_db.begin():
+            class_info = await issue_product_class_join_code(
+                product_db,
+                class_id=class_id,
+                code=raw_code,
+            )
+            await store_class_join_code_secret(
+                db,
+                class_id=class_id,
+                code=raw_code,
+            )
+            await record_event(
+                db,
+                event_type=event_type,
+                actor_id=principal.user.id,
+                aggregate_type="class",
+                event_data={"class_id": class_id},
+            )
+    await db.commit()
+    return class_info, raw_code
+
+
 @router.callback_query(F.data.regexp(r"^product:class:join-code:[0-9]+$"))
 async def product_class_join_code_issue_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
-    """Show the class's current code; opening this screen never rotates it."""
+    """Read an existing code, or ask for approval before issuing the first/replacement code."""
     if not await _require_private_callback(callback, "نمایش کد ورود کلاس"):
         return
     if not await _has_permission(db, principal, "platform:classes:manage"):
@@ -1797,73 +1843,185 @@ async def product_class_join_code_issue_callback(
     try:
         saved_secret = await get_class_join_code_secret(db, class_id=class_id)
         async with product_session_factory() as product_db:
-            async with product_db.begin():
-                class_info = await get_product_class(product_db, class_id=class_id)
-                if class_info is None:
-                    await callback.answer("کلاس پیدا نشد.", show_alert=True)
-                    return
-
-                saved_code_is_current = (
-                    saved_secret is not None
-                    and class_info["member_join_code_hash"] is not None
-                    and secrets.compare_digest(
-                        str(saved_secret["join_code_hash"]),
-                        str(class_info["member_join_code_hash"]),
-                    )
-                )
-                if saved_code_is_current:
-                    raw_code = str(saved_secret["join_code"])
-                    replaced_legacy_code = False
-                    issued_new_code = False
-                else:
-                    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-                    raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
-                    replaced_legacy_code = class_info["member_join_code_hash"] is not None
-                    issued_new_code = True
-                    await store_class_join_code_secret(
-                        db,
-                        class_id=class_id,
-                        code=raw_code,
-                    )
-                    await record_event(
-                        db,
-                        event_type="product.class.member_join_code_issued",
-                        actor_id=principal.user.id,
-                        aggregate_type="class",
-                        event_data={
-                            "class_id": class_id,
-                            "reason": (
-                                "legacy_hash_replaced" if replaced_legacy_code else "first_issue"
-                            ),
-                        },
-                    )
-                    await issue_product_class_join_code(
-                        product_db,
-                        class_id=class_id,
-                        code=raw_code,
-                    )
-
-        if issued_new_code:
-            await db.commit()
+            class_info = await get_product_class(product_db, class_id=class_id)
+        if class_info is None:
+            await callback.answer("کلاس پیدا نشد.", show_alert=True)
+            return
     except ApplicationError as exc:
-        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not read ClassMate class join code %s.", class_id)
+        await callback.answer("دریافت اطلاعات کد ورود کلاس ناموفق بود.", show_alert=True)
+        return
+
+    saved_code_is_current = (
+        saved_secret is not None
+        and class_info["member_join_code_hash"] is not None
+        and secrets.compare_digest(
+            str(saved_secret["join_code_hash"]),
+            str(class_info["member_join_code_hash"]),
+        )
+    )
+    if saved_code_is_current:
+        raw_code = str(saved_secret["join_code"])
+        await callback.answer("کد فعلی نمایش داده شد؛ تغییری ثبت نشد.")
+        if callback.message is not None:
+            await callback.message.edit_text(
+                _class_join_code_message(class_info["name"], raw_code),
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="♻️ تغییر کد ورود",
+                                callback_data=f"product:class:join-code:rotate:{class_id}",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="⬅️ بازگشت به کلاس",
+                                callback_data=f"product:class:{class_id}",
+                            )
+                        ],
+                    ]
+                ),
+            )
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        product_join_code_issue_token=token,
+        product_join_code_issue_class_id=class_id,
+        product_join_code_issue_legacy=class_info["member_join_code_hash"] is not None,
+    )
+    await state.set_state(JoinCodeIssue.confirm)
+    legacy_note = (
+        "کد قبلی فقط به‌صورت هش ذخیره شده و قابل بازیابی نیست؛ با صدور کد تازه جایگزین می‌شود."
+        if class_info["member_join_code_hash"] is not None
+        else "برای این کلاس هنوز کد ورود صادر نشده است."
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش صدور کد ورود کلاس\n\n"
+            f"کلاس: {class_info['name']}\n"
+            f"وضعیت: {legacy_note}\n\n"
+            "با تأیید، یک کد جدید ساخته و ذخیره می‌شود. هیچ کدی تا پیش از تأیید صادر نخواهد شد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید صدور کد",
+                            callback_data=f"product:class:join-code:issue-confirm:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"product:class:join-code:issue-cancel:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:class:join-code:issue-confirm:"))
+async def product_class_join_code_issue_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeIssue.confirm.state
+        or not token
+        or token != data.get("product_join_code_issue_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت کد ورود کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int(data.get("product_join_code_issue_class_id") or 0)
+    try:
+        async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+        if class_info is None:
+            raise ApplicationError("کلاس پیدا نشد.")
+        saved_secret = await get_class_join_code_secret(db, class_id=class_id)
+        if (
+            saved_secret is not None
+            and class_info["member_join_code_hash"] is not None
+            and secrets.compare_digest(
+                str(saved_secret["join_code_hash"]),
+                str(class_info["member_join_code_hash"]),
+            )
+        ):
+            await state.clear()
+            await callback.answer("کد توسط یک عملیات دیگر صادر شده است؛ همان کد فعلی نمایش داده می‌شود.")
+            if callback.message is not None:
+                await callback.message.edit_text(
+                    _class_join_code_message(class_info["name"], str(saved_secret["join_code"])),
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="♻️ تغییر کد ورود",
+                                    callback_data=f"product:class:join-code:rotate:{class_id}",
+                                )
+                            ],
+                            [
+                                InlineKeyboardButton(
+                                    text="⬅️ بازگشت به کلاس",
+                                    callback_data=f"product:class:{class_id}",
+                                )
+                            ],
+                        ]
+                    ),
+                )
+            return
+
+        event_type = (
+            "product.class.member_join_code_issued"
+            if not data.get("product_join_code_issue_legacy")
+            else "product.class.member_join_code_legacy_replaced"
+        )
+        code_info, raw_code = await _save_new_member_join_code(
+            db=db,
+            principal=principal,
+            product_session_factory=product_session_factory,
+            class_id=class_id,
+            event_type=event_type,
+        )
+    except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
     except Exception:
         await db.rollback()
-        logger.exception("Could not load or persist ClassMate class join code %s.", class_id)
-        await callback.answer("دریافت یا ذخیرهٔ کد ورود کلاس ناموفق بود.", show_alert=True)
+        logger.exception("Could not issue ClassMate class join code %s.", class_id)
+        await callback.answer("صدور کد ورود ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
 
-    await callback.answer(
-        "کد جدید صادر شد." if issued_new_code else "کد فعلی کلاس نمایش داده شد؛ تغییری نکرد."
-    )
+    await state.clear()
+    await callback.answer("کد ورود پس از تأیید صادر شد.")
     if callback.message is not None:
         await callback.message.edit_text(
             _class_join_code_message(
-                class_info["name"],
+                code_info["name"],
                 raw_code,
-                replaced_legacy_code=replaced_legacy_code,
+                replaced_legacy_code=bool(data.get("product_join_code_issue_legacy")),
             ),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
@@ -1885,11 +2043,45 @@ async def product_class_join_code_issue_callback(
         )
 
 
+@router.callback_query(F.data.startswith("product:class:join-code:issue-cancel:"))
+async def product_class_join_code_issue_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeIssue.confirm.state
+        or not token
+        or token != data.get("product_join_code_issue_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("product_join_code_issue_class_id") or 0)
+    await state.clear()
+    await callback.answer("صدور کد لغو شد؛ تغییری ثبت نشد.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "صدور کد ورود لغو شد؛ تغییری ثبت نشد.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
 @router.callback_query(F.data.regexp(r"^product:class:join-code:rotate:[0-9]+$"))
 async def product_class_join_code_rotate_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
     db: AsyncSession,
+    state: FSMContext,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     if not await _require_private_callback(callback, "تغییر کد ورود کلاس"):
@@ -1902,41 +2094,100 @@ async def product_class_join_code_rotate_callback(
         return
 
     class_id = int((callback.data or "").rsplit(":", maxsplit=1)[-1])
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    raw_code = "".join(secrets.choice(alphabet) for _ in range(10))
     try:
         async with product_session_factory() as product_db:
-            async with product_db.begin():
-                code_info = await issue_product_class_join_code(
-                    product_db,
-                    class_id=class_id,
-                    code=raw_code,
-                )
-                await store_class_join_code_secret(
-                    db,
-                    class_id=class_id,
-                    code=raw_code,
-                )
-                await record_event(
-                    db,
-                    event_type="product.class.member_join_code_rotated",
-                    actor_id=principal.user.id,
-                    aggregate_type="class",
-                    event_data={"class_id": class_id},
-                )
-
-        await db.commit()
+            class_info = await get_product_class(product_db, class_id=class_id)
+        if class_info is None:
+            raise ApplicationError("کلاس پیدا نشد.")
     except ApplicationError as exc:
-        await db.rollback()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Could not prepare class join code rotation %s.", class_id)
+        await callback.answer("آماده‌سازی تغییر کد ناموفق بود.", show_alert=True)
+        return
+
+    token = secrets.token_urlsafe(8)
+    await state.clear()
+    await state.update_data(
+        product_join_code_rotation_token=token,
+        product_join_code_rotation_class_id=class_id,
+    )
+    await state.set_state(JoinCodeRotation.confirm)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "پیش‌نمایش تغییر کد ورود کلاس\n\n"
+            f"کلاس: {class_info['name']}\n\n"
+            "⚠️ با تأیید، کد فعلی و لینک‌های عضویت قبلی فوراً نامعتبر می‌شوند. "
+            "دانش‌آموزان جدید باید کد تازه را دریافت کنند.\n\n"
+            "تغییر کد انجام شود؟",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ تأیید تغییر کد",
+                            callback_data=f"product:class:join-code:rotate-confirm:{token}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="❌ لغو عملیات",
+                            callback_data=f"product:class:join-code:rotate-cancel:{token}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:class:join-code:rotate-confirm:"))
+async def product_class_join_code_rotate_confirm_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    state: FSMContext,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeRotation.confirm.state
+        or not token
+        or token != data.get("product_join_code_rotation_token")
+    ):
+        await callback.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    if not await _require_private_callback(callback, "تغییر کد ورود کلاس"):
+        return
+    if not await _has_permission(db, principal, "platform:classes:manage"):
+        await state.clear()
+        await callback.answer("مجوز مدیریت کد ورود کلاس را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+
+    class_id = int(data.get("product_join_code_rotation_class_id") or 0)
+    try:
+        code_info, raw_code = await _save_new_member_join_code(
+            db=db,
+            principal=principal,
+            product_session_factory=product_session_factory,
+            class_id=class_id,
+            event_type="product.class.member_join_code_rotated",
+        )
+    except ApplicationError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
     except Exception:
         await db.rollback()
         logger.exception("Could not rotate ClassMate class join code %s.", class_id)
-        await callback.answer("تغییر کد ورود کلاس ناموفق بود.", show_alert=True)
+        await callback.answer("تغییر کد ورود ناموفق بود؛ فرم برای تلاش دوباره حفظ شد.", show_alert=True)
         return
 
-    await callback.answer("کد و لینک قبلی منقضی شدند؛ کد جدید صادر شد.")
+    await state.clear()
+    await callback.answer("کد قبلی پس از تأیید باطل و کد جدید صادر شد.")
     if callback.message is not None:
         await callback.message.edit_text(
             _class_join_code_message(code_info["name"], raw_code),
@@ -1947,6 +2198,45 @@ async def product_class_join_code_rotate_callback(
                         InlineKeyboardButton(
                             text="♻️ تغییر کد ورود",
                             callback_data=f"product:class:join-code:rotate:{class_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⬅️ بازگشت به کلاس",
+                            callback_data=f"product:class:{class_id}",
+                        )
+                    ],
+                ]
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith("product:class:join-code:rotate-cancel:"))
+async def product_class_join_code_rotate_cancel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    token = (callback.data or "").rsplit(":", maxsplit=1)[-1]
+    if (
+        await state.get_state() != JoinCodeRotation.confirm.state
+        or not token
+        or token != data.get("product_join_code_rotation_token")
+    ):
+        await callback.answer("این دکمه منقضی شده است.", show_alert=True)
+        return
+    class_id = int(data.get("product_join_code_rotation_class_id") or 0)
+    await state.clear()
+    await callback.answer("تغییر کد لغو شد؛ کد فعلی معتبر ماند.")
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "تغییر کد لغو شد؛ کد قبلی همچنان معتبر است.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🔑 نمایش کد فعلی",
+                            callback_data=f"product:class:join-code:{class_id}",
                         )
                     ],
                     [
