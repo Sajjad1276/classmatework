@@ -1938,7 +1938,7 @@ async def _render_step(
     if notice:
         body = f"⚠️ {notice}\\n\\n{body}"
 
-    prompt_id = data.get("flow_prompt_message_id"
+    prompt_id = data.get("flow_prompt_message_id")
     chat_id = data.get("flow_chat_id") or message.chat.id
     if prompt_id:
         try:
