@@ -354,6 +354,7 @@ async def test_bulk_class_code_action_is_not_available_in_group_chats(monkeypatc
 def test_owner_class_shortcut_matches_persian_numbers_and_grade_aliases():
     matches = [
         {"name": "۱۰۴", "grade": "دهم", "section": None},
+        {"name": "کلاس دهم ۱۰۴", "grade": "دهم", "section": None},
         {"name": "کلاس", "grade": "10", "section": "۱۰۴"},
     ]
     assert all(product_router._is_owner_class_shortcut_candidate(item) for item in matches)
