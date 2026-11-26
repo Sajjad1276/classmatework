@@ -806,6 +806,7 @@ async def product_class_create_confirm_callback(
             "🔑 کد ورود مشترک دانش‌آموزان این کلاس:\n"
             f"<code>/join {school_class['member_join_code']}</code>\n\n"
             "این کد تا زمان تغییر از پنل کلاس فعال می‌ماند.",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -1628,6 +1629,7 @@ async def product_class_join_code_issue_callback(
             f"<code>/join {raw_code}</code>\n\n"
             "کد برای همهٔ دانش‌آموزان این کلاس مشترک است و تا زمان تغییر از پنل کلاس اعتبار دارد. "
             "با صدور کد جدید، کد قبلی فوراً باطل می‌شود.",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -2221,6 +2223,7 @@ async def product_group_link_issue_callback(
             "باید دستور زیر را داخل گروه ارسال کند:\n"
             f"<code>/link {raw_code}</code>\n\n"
             "این کد را در گروه عمومی یا برای افراد غیرمدیر ارسال نکنید.",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
