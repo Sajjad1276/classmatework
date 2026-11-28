@@ -3958,14 +3958,14 @@ async def product_class_member_add_callback(
     await state.set_state(MemberCreation.telegram_id)
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("Telegram ID عضو را فقط به‌صورت عدد وارد کنید:", reply_markup=shared_wizard_controls())
+        await callback.message.answer("شناسهٔ تلگرام عضو را فقط به‌صورت عدد وارد کنید:", reply_markup=shared_wizard_controls())
 
 
 @router.message(MemberCreation.telegram_id, F.text)
 async def product_member_telegram_id_input(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if not value.isdigit() or not 0 < int(value) <= 9_223_372_036_854_775_807:
-        await message.answer("خطا: Telegram ID معتبر نیست؛ فقط عدد مثبت وارد کنید.\n\nTelegram ID عضو را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
+        await message.answer("خطا: شناسهٔ تلگرام معتبر نیست؛ فقط عدد مثبت وارد کنید.\n\nشناسهٔ تلگرام عضو را دوباره وارد کنید:", reply_markup=shared_wizard_controls())
         return
     await state.update_data(product_member_telegram_id=int(value))
     await state.set_state(MemberCreation.full_name)
@@ -3984,7 +3984,7 @@ async def product_member_full_name_input(message: Message, state: FSMContext) ->
     await state.set_state(MemberCreation.confirm)
     await message.answer(
         "پیش‌نمایش افزودن عضو\n\n"
-        f"Telegram ID: {data['product_member_telegram_id']}\n"
+        f"شناسهٔ تلگرام: {data['product_member_telegram_id']}\n"
         f"نام: {name}\n\n"
         "عضویت ثبت شود؟",
         reply_markup=InlineKeyboardMarkup(
@@ -4075,7 +4075,7 @@ async def product_member_add_confirm_callback(
         await callback.message.edit_text(
             "✅ عضو به کلاس اضافه شد.\n"
             f"نام: {member['full_name']}\n"
-            f"Telegram ID: {member['telegram_id']}\n\n"
+            f"شناسهٔ تلگرام: {member['telegram_id']}\n\n"
             "برای عضویت سایر دانش‌آموزان، از کد ورود مشترک در پنل جزئیات کلاس استفاده کنید.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
