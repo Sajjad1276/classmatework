@@ -1911,8 +1911,8 @@ async def _build_product_class_detail_panel(
             ],
             [
                 InlineKeyboardButton(
-                    text="🤖 کاربران استارت‌کردهٔ ربات",
-                    callback_data="product:started-users:1",
+                    text="🤖 کاربران آغازکنندهٔ ربات",
+                    callback_data=f"product:started-users:{class_id}:1",
                 )
             ],
         ])
@@ -3710,7 +3710,7 @@ async def product_record_review_confirm_callback(
         )
 
 
-@router.callback_query(F.data.regexp(r"^product:started-users:[1-9][0-9]*$"))
+@router.callback_query(F.data.regexp(r"^product:started-users:[0-9]+:[1-9][0-9]*$"))
 async def product_started_users_callback(
     callback: CallbackQuery,
     principal: TelegramPrincipal,
@@ -3725,9 +3725,14 @@ async def product_started_users_callback(
     if product_session_factory is None:
         await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
         return
-    page = int((callback.data or "").rsplit(":", 1)[-1])
+    parts = (callback.data or "").split(":")
+    class_id, page = int(parts[2]), int(parts[3])
     try:
         async with product_session_factory() as product_db:
+            class_info = await get_product_class(product_db, class_id=class_id)
+            if class_info is None:
+                await callback.answer("کلاس پیدا نشد.", show_alert=True)
+                return
             users = await list_product_started_users(
                 product_db,
                 limit=9,
@@ -3741,9 +3746,9 @@ async def product_started_users_callback(
     has_next = len(users) > 8
     shown = users[:8]
     lines = [
-        "🤖 کاربران شروع‌کنندهٔ ربات ClassMate",
+        f"🤖 کاربران آغازکنندهٔ ربات ClassMate · {class_info['name']}",
         f"صفحه: {page} · تعداد نمایش‌داده‌شده: {len(shown)}",
-        "این فهرست همهٔ افرادی را نشان می‌دهد که ربات را Start کرده‌اند؛ عضویت در کلاس شرط نمایش نیست.",
+        "این فهرست همهٔ افرادی را نشان می‌دهد که ربات ClassMate را شروع کرده‌اند؛ عضویت در کلاس شرط نمایش نیست.",
         "",
     ]
     rows: list[list[InlineKeyboardButton]] = []
@@ -3767,21 +3772,24 @@ async def product_started_users_callback(
         if page > 1:
             nav.append(InlineKeyboardButton(
                 text="⬅️ صفحه قبل",
-                callback_data=f"product:started-users:{page - 1}",
+                callback_data=f"product:started-users:{class_id}:{page - 1}",
             ))
         if has_next:
             nav.append(InlineKeyboardButton(
                 text="صفحه بعد ➡️",
-                callback_data=f"product:started-users:{page + 1}",
+                callback_data=f"product:started-users:{class_id}:{page + 1}",
             ))
         rows.append(nav)
     rows.append([
-        InlineKeyboardButton(text="⬅️ بازگشت به کلاس", callback_data="root:menu")
+        InlineKeyboardButton(
+            text="⬅️ بازگشت به کلاس",
+            callback_data=f"product:class:{class_id}",
+        )
     ])
     await callback.answer()
     if callback.message is not None:
         await callback.message.edit_text(
-            "\\n".join(lines),
+            "\n".join(lines),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
