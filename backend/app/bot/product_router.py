@@ -3717,7 +3717,7 @@ async def product_started_users_callback(
     db: AsyncSession,
     product_session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
-    if not await _require_private_callback(callback, "کاربران استارت‌کردهٔ ربات"):
+    if not await _require_private_callback(callback, "فهرست کاربران ربات"):
         return
     if not await _has_permission(db, principal, "platform:members:manage"):
         await callback.answer("مجوز مشاهدهٔ کاربران ربات را ندارید.", show_alert=True)
@@ -3766,7 +3766,7 @@ async def product_started_users_callback(
                 )
             ])
     if not shown:
-        lines.append("هنوز کاربری ربات را Start نکرده است.")
+        lines.append("هنوز کسی ربات ClassMate را شروع نکرده است.")
     if page > 1 or has_next:
         nav: list[InlineKeyboardButton] = []
         if page > 1:
@@ -3839,8 +3839,8 @@ async def product_class_members_callback(
     lines = [
         f"👥 اعضای کلاس {class_info['name']}",
         f"صفحه: {page} · تعداد نمایش‌داده‌شده: {len(members)}",
-        "فهرست شامل اعضای ثبت‌شدهٔ همین کلاس است. برای دیدن همهٔ افرادی که ربات را Start کرده‌اند، پنل «کاربران استارت‌کردهٔ ربات» را باز کنید.",
-        "نام کاربری تلگرام در صورت عمومی بودن نمایش داده می‌شود؛ برای حساب‌های بدون username فقط نام و شناسه قابل مشاهده است.",
+        "این فهرست فقط اعضای ثبت‌شدهٔ همین کلاس را نشان می‌دهد. فهرست همهٔ کاربران ربات در بخش «کاربران آغازکنندهٔ ربات» قرار دارد.",
+        "در صورت ثبت نام کاربری تلگرام، نام کاربری و پیوند پروفایل نمایش داده می‌شود؛ در غیر این صورت فقط نام و شناسهٔ تلگرام قابل مشاهده است.",
         "",
     ]
     rows = []
@@ -3910,7 +3910,7 @@ async def product_class_members_callback(
         [
             [
                 InlineKeyboardButton(
-                    text="➕ افزودن عضو با Telegram ID",
+                    text="➕ افزودن عضو با شناسهٔ تلگرام",
                     callback_data=f"product:member:add:{class_id}",
                 )
             ],
