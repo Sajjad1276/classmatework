@@ -3831,7 +3831,8 @@ async def product_class_members_callback(
     lines = [
         f"👥 اعضای کلاس {class_info['name']}",
         f"صفحه: {page} · تعداد نمایش‌داده‌شده: {len(members)}",
-        "دانش‌آموز جدید با کد مشترک همین کلاس و دستور /join در ربات ClassMate عضو می‌شود.",
+        "فهرست شامل اعضای ثبت‌شدهٔ همین کلاس است. برای دیدن همهٔ افرادی که ربات را Start کرده‌اند، پنل «کاربران استارت‌کردهٔ ربات» را باز کنید.",
+        "نام کاربری تلگرام در صورت عمومی بودن نمایش داده می‌شود؛ برای حساب‌های بدون username فقط نام و شناسه قابل مشاهده است.",
         "",
     ]
     rows = []
@@ -3842,10 +3843,18 @@ async def product_class_members_callback(
             "class_manager": "مدیر کلاس",
             "trusted_approver": "تأییدکننده",
         }.get(member["membership_role"], member["membership_role"])
+        username = f"@{member['username']}" if member.get("username") else "بدون نام کاربری"
         lines.append(
-            f"• {member['full_name']} · {member['telegram_id']} · "
+            f"• {member['full_name']} · {username} · {member['telegram_id']} · "
             f"{role_label} · {'فعال' if active else 'غیرفعال'}"
         )
+        if member.get("username"):
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"↗️ @{str(member['username'])[:32]}",
+                    url=f"https://t.me/{str(member['username']).lstrip('@')}",
+                )
+            ])
         rows.append(
             [
                 InlineKeyboardButton(
