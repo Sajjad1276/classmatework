@@ -244,7 +244,8 @@ async def create_product_class(
                     section,
                     is_active,
                     member_join_code_hash,
-                    member_join_code_expires_at
+                    member_join_code_expires_at,
+                    member_join_code_token
                 )
             VALUES
                 (
@@ -254,7 +255,8 @@ async def create_product_class(
                     :section,
                     TRUE,
                     :member_join_code_hash,
-                    NULL
+                    NULL,
+                    :member_join_code_token
                 )
             RETURNING id, name, grade, section, is_active
             """
@@ -265,10 +267,12 @@ async def create_product_class(
             "grade": normalized_grade,
             "section": normalized_section,
             "member_join_code_hash": join_code_hash,
+            "member_join_code_token": join_code,
         },
     )
     school_class = dict(result.mappings().one())
     school_class["member_join_code"] = join_code
+    school_class["member_join_code_token"] = join_code
     school_class["has_member_join_code"] = True
     school_class["member_join_code_expires_at"] = None
     return school_class
@@ -297,7 +301,10 @@ async def get_product_class(
                 c.group_chat_title,
                 (c.member_join_code_hash IS NOT NULL) AS has_member_join_code,
                 c.member_join_code_hash,
-                c.member_join_code_expires_at
+                c.member_join_code_expires_at,
+                c.member_join_code_token,
+                c.member_invite_reminder_next_at,
+                c.member_invite_reminder_last_sent_at
             FROM public.classes AS c
             JOIN public.academic_years AS ay ON ay.id = c.academic_year_id
             JOIN public.schools AS s ON s.id = ay.school_id
@@ -1418,17 +1425,27 @@ async def issue_product_class_join_code(
             """
             UPDATE public.classes AS c
             SET member_join_code_hash = :code_hash,
-                member_join_code_expires_at = NULL
+                member_join_code_token = :normalized_code,
+                member_join_code_expires_at = NULL,
+                member_invite_reminder_next_at = CASE
+                    WHEN c.group_chat_id IS NOT NULL THEN NOW()
+                    ELSE c.member_invite_reminder_next_at
+                END
             FROM public.academic_years AS ay
             JOIN public.schools AS s ON s.id = ay.school_id
             WHERE c.id = :class_id
               AND c.academic_year_id = ay.id
               AND c.is_active IS TRUE
               AND s.is_active IS TRUE
-            RETURNING c.id, c.name, c.member_join_code_expires_at
+            RETURNING c.id, c.name, c.member_join_code_expires_at,
+                      c.member_join_code_token, c.member_invite_reminder_next_at
             """
         ),
-        {"class_id": class_id, "code_hash": code_hash},
+        {
+            "class_id": class_id,
+            "code_hash": code_hash,
+            "normalized_code": normalized_code,
+        },
     )
     row = result.mappings().one_or_none()
     if row is None:
@@ -1439,6 +1456,47 @@ async def issue_product_class_join_code(
         "has_member_join_code": True,
     }
 
+
+
+async def sync_product_class_join_code_token(
+    db: AsyncSession,
+    *,
+    class_id: int,
+    code: str,
+) -> dict:
+    """Backfill the reusable raw deep-link token without changing its hash."""
+    normalized_code = code.strip().upper()
+    if class_id <= 0:
+        raise InvalidApplicationInput("شناسه کلاس معتبر نیست.")
+    if not 8 <= len(normalized_code) <= 64 or any(ch.isspace() for ch in normalized_code):
+        raise InvalidApplicationInput("کد ورود کلاس معتبر نیست.")
+
+    code_hash = hashlib.sha256(normalized_code.encode("utf-8")).hexdigest()
+    result = await db.execute(
+        text(
+            """
+            UPDATE public.classes AS c
+            SET member_join_code_token = :normalized_code,
+                member_invite_reminder_next_at = CASE
+                    WHEN c.group_chat_id IS NOT NULL THEN NOW()
+                    ELSE c.member_invite_reminder_next_at
+                END
+            WHERE c.id = :class_id
+              AND c.member_join_code_hash = :code_hash
+            RETURNING c.id, c.name, c.member_join_code_token,
+                      c.member_invite_reminder_next_at
+            """
+        ),
+        {
+            "class_id": class_id,
+            "code_hash": code_hash,
+            "normalized_code": normalized_code,
+        },
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ResourceConflict("کد ذخیره‌شده با کد فعال کلاس یکسان نیست.")
+    return dict(row)
 
 
 async def count_missing_product_class_join_codes(db: AsyncSession) -> int:
@@ -1498,7 +1556,12 @@ async def issue_missing_product_class_join_codes(
                 """
                 UPDATE public.classes AS c
                 SET member_join_code_hash = :code_hash,
-                    member_join_code_expires_at = NULL
+                    member_join_code_token = :raw_code,
+                    member_join_code_expires_at = NULL,
+                    member_invite_reminder_next_at = CASE
+                        WHEN c.group_chat_id IS NOT NULL THEN NOW()
+                        ELSE c.member_invite_reminder_next_at
+                    END
                 FROM public.academic_years AS ay
                 JOIN public.schools AS s ON s.id = ay.school_id
                 WHERE c.id = :class_id
@@ -1509,7 +1572,11 @@ async def issue_missing_product_class_join_codes(
                 RETURNING c.id
                 """
             ),
-            {"class_id": item["class_id"], "code_hash": code_hash},
+            {
+                "class_id": item["class_id"],
+                "code_hash": code_hash,
+                "raw_code": raw_code,
+            },
         )
         if stored.scalar_one_or_none() is None:
             # Another manager may have issued the code since the candidate query.
