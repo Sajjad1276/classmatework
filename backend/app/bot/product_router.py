@@ -44,6 +44,7 @@ from app.application.product_management import (
     list_class_timetable,
     list_product_class_announcements,
     list_product_class_members,
+    list_product_started_users,
     list_product_class_records,
     list_product_class_shortcut_candidates,
     list_product_classes,
@@ -1901,11 +1902,19 @@ async def _build_product_class_detail_panel(
             )
         ])
     if can_manage_members:
-        rows.append([
-            InlineKeyboardButton(
-                text="👥 اعضای کلاس",
-                callback_data=f"product:members:{class_id}",
-            )
+        rows.extend([
+            [
+                InlineKeyboardButton(
+                    text="👥 اعضای کلاس",
+                    callback_data=f"product:members:{class_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤖 کاربران استارت‌کردهٔ ربات",
+                    callback_data="product:started-users:1",
+                )
+            ],
         ])
     if can_manage_announcements:
         rows.append([
@@ -3698,6 +3707,82 @@ async def product_record_review_confirm_callback(
                     ]
                 ]
             ),
+        )
+
+
+@router.callback_query(F.data.regexp(r"^product:started-users:[1-9][0-9]*$"))
+async def product_started_users_callback(
+    callback: CallbackQuery,
+    principal: TelegramPrincipal,
+    db: AsyncSession,
+    product_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if not await _require_private_callback(callback, "کاربران استارت‌کردهٔ ربات"):
+        return
+    if not await _has_permission(db, principal, "platform:members:manage"):
+        await callback.answer("مجوز مشاهدهٔ کاربران ربات را ندارید.", show_alert=True)
+        return
+    if product_session_factory is None:
+        await callback.answer("اتصال دیتابیس ClassMate فعال نیست.", show_alert=True)
+        return
+    page = int((callback.data or "").rsplit(":", 1)[-1])
+    try:
+        async with product_session_factory() as product_db:
+            users = await list_product_started_users(
+                product_db,
+                limit=9,
+                offset=(page - 1) * 8,
+            )
+    except Exception:
+        logger.exception("Could not load ClassMate started users.")
+        await callback.answer("دریافت کاربران ربات ناموفق بود.", show_alert=True)
+        return
+
+    has_next = len(users) > 8
+    shown = users[:8]
+    lines = [
+        "🤖 کاربران شروع‌کنندهٔ ربات ClassMate",
+        f"صفحه: {page} · تعداد نمایش‌داده‌شده: {len(shown)}",
+        "این فهرست همهٔ افرادی را نشان می‌دهد که ربات را Start کرده‌اند؛ عضویت در کلاس شرط نمایش نیست.",
+        "",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for user in shown:
+        username = f"@{user['username']}" if user.get("username") else "نام کاربری: ثبت نشده"
+        status = "فعال" if user["user_is_active"] else "غیرفعال"
+        lines.append(
+            f"• {user['full_name']} · {username} · {user['telegram_id']} · {status}"
+        )
+        if user.get("username"):
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"↗️ @{str(user['username'])[:32]}",
+                    url=f"https://t.me/{str(user['username']).lstrip('@')}",
+                )
+            ])
+    if not shown:
+        lines.append("هنوز کاربری ربات را Start نکرده است.")
+    if page > 1 or has_next:
+        nav: list[InlineKeyboardButton] = []
+        if page > 1:
+            nav.append(InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"product:started-users:{page - 1}",
+            ))
+        if has_next:
+            nav.append(InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"product:started-users:{page + 1}",
+            ))
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton(text="⬅️ بازگشت به کلاس", callback_data="root:menu")
+    ])
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_text(
+            "\\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
 
