@@ -560,6 +560,36 @@ async def list_product_class_members(
     return [dict(row) for row in result.mappings().all()]
 
 
+async def list_product_started_users(
+    db: AsyncSession,
+    *,
+    limit: int = 9,
+    offset: int = 0,
+) -> list[dict]:
+    """List every user who has started the student bot, regardless of class membership."""
+    if not 1 <= limit <= 100 or offset < 0:
+        raise InvalidApplicationInput("درخواست فهرست کاربران ربات معتبر نیست.")
+    result = await db.execute(
+        text(
+            """
+            SELECT
+                u.id AS user_id,
+                u.telegram_id,
+                u.full_name,
+                u.username,
+                u.is_active AS user_is_active,
+                u.private_chat_started
+            FROM public.users AS u
+            WHERE u.private_chat_started IS TRUE
+            ORDER BY u.id DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {"limit": limit, "offset": offset},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
 async def add_product_class_member(
     db: AsyncSession,
     *,
