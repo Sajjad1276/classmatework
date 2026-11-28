@@ -601,7 +601,7 @@ async def add_product_class_member(
 ) -> dict:
     normalized_name = " ".join(full_name.split())
     if class_id <= 0 or not 0 < telegram_id <= 9_223_372_036_854_775_807:
-        raise InvalidApplicationInput("شناسه کلاس یا Telegram ID معتبر نیست.")
+        raise InvalidApplicationInput("شناسهٔ کلاس یا شناسهٔ تلگرام معتبر نیست.")
     if not 1 <= len(normalized_name) <= 160:
         raise InvalidApplicationInput("نام عضو باید بین ۱ تا ۱۶۰ نویسه باشد.")
 
