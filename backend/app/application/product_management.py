@@ -578,10 +578,12 @@ async def list_product_started_users(
                 u.full_name,
                 u.username,
                 u.is_active AS user_is_active,
-                u.private_chat_started
+                u.private_chat_started,
+                u.first_private_started_at
             FROM public.users AS u
-            WHERE u.private_chat_started IS TRUE
-            ORDER BY u.id DESC
+            WHERE u.first_private_started_at IS NOT NULL
+               OR u.private_chat_started IS TRUE
+            ORDER BY u.first_private_started_at DESC NULLS LAST, u.id DESC
             LIMIT :limit OFFSET :offset
             """
         ),
