@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import logging
 import re
@@ -38,6 +39,7 @@ from app.application.product_management import (
     get_product_school,
     issue_missing_product_class_join_codes,
     issue_product_class_join_code,
+    sync_product_class_join_code_token,
     list_class_subjects,
     list_class_timetable,
     list_product_class_announcements,
@@ -97,6 +99,16 @@ def _class_join_start_url(code: str) -> str | None:
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
         return None
     return f"https://t.me/{username}?start=join_{code}"
+
+
+def _current_product_join_code(class_info: dict) -> str | None:
+    """Trust the product DB token only when it still matches the active hash."""
+    code = str(class_info.get("member_join_code_token") or "").strip().upper()
+    stored_hash = str(class_info.get("member_join_code_hash") or "")
+    if not code or not stored_hash:
+        return None
+    actual_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return code if secrets.compare_digest(actual_hash, stored_hash) else None
 
 
 def _class_join_code_message(
@@ -2102,6 +2114,7 @@ async def product_class_join_code_issue_callback(
         await callback.answer("دریافت اطلاعات کد ورود کلاس ناموفق بود.", show_alert=True)
         return
 
+    product_code = _current_product_join_code(class_info)
     saved_code_is_current = (
         saved_secret is not None
         and class_info["member_join_code_hash"] is not None
@@ -2110,9 +2123,23 @@ async def product_class_join_code_issue_callback(
             str(class_info["member_join_code_hash"]),
         )
     )
-    if saved_code_is_current:
-        raw_code = str(saved_secret["join_code"])
-        await callback.answer("کد فعلی نمایش داده شد؛ تغییری ثبت نشد.")
+    if product_code or saved_code_is_current:
+        raw_code = product_code or str(saved_secret["join_code"])
+        if product_code and (
+            not saved_code_is_current
+            or str(saved_secret["join_code"]).strip().upper() != product_code
+        ):
+            await store_class_join_code_secret(db, class_id=class_id, code=product_code)
+            await db.commit()
+        elif not product_code:
+            async with product_session_factory() as product_db:
+                async with product_db.begin():
+                    await sync_product_class_join_code_token(
+                        product_db,
+                        class_id=class_id,
+                        code=raw_code,
+                    )
+        await callback.answer("کد و لینک فعال کلاس از دیتابیس اصلی خوانده شد؛ تغییری در کد انجام نشد.")
         if callback.message is not None:
             await callback.message.edit_text(
                 _class_join_code_message(class_info["name"], raw_code),
@@ -2207,19 +2234,36 @@ async def product_class_join_code_issue_confirm_callback(
         if class_info is None:
             raise ApplicationError("کلاس پیدا نشد.")
         saved_secret = await get_class_join_code_secret(db, class_id=class_id)
-        if (
+        product_code = _current_product_join_code(class_info)
+        saved_code_is_current = (
             saved_secret is not None
             and class_info["member_join_code_hash"] is not None
             and secrets.compare_digest(
                 str(saved_secret["join_code_hash"]),
                 str(class_info["member_join_code_hash"]),
             )
-        ):
+        )
+        if product_code or saved_code_is_current:
+            raw_code = product_code or str(saved_secret["join_code"])
+            if product_code and (
+                not saved_code_is_current
+                or str(saved_secret["join_code"]).strip().upper() != product_code
+            ):
+                await store_class_join_code_secret(db, class_id=class_id, code=product_code)
+                await db.commit()
+            elif not product_code:
+                async with product_session_factory() as product_db:
+                    async with product_db.begin():
+                        await sync_product_class_join_code_token(
+                            product_db,
+                            class_id=class_id,
+                            code=raw_code,
+                        )
             await state.clear()
-            await callback.answer("کد توسط یک عملیات دیگر صادر شده است؛ همان کد فعلی نمایش داده می‌شود.")
+            await callback.answer("کد فعال کلاس از دیتابیس اصلی خوانده شد؛ صدور تکراری انجام نشد.")
             if callback.message is not None:
                 await callback.message.edit_text(
-                    _class_join_code_message(class_info["name"], str(saved_secret["join_code"])),
+                    _class_join_code_message(class_info["name"], raw_code),
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(
                         inline_keyboard=[
