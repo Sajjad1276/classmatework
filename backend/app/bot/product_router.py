@@ -3748,15 +3748,22 @@ async def product_started_users_callback(
     lines = [
         f"🤖 کاربران آغازکنندهٔ ربات ClassMate · {class_info['name']}",
         f"صفحه: {page} · تعداد نمایش‌داده‌شده: {len(shown)}",
-        "این فهرست همهٔ افرادی را نشان می‌دهد که ربات ClassMate را شروع کرده‌اند؛ عضویت در کلاس شرط نمایش نیست.",
+        "این فهرست همهٔ افرادی را نشان می‌دهد که دست‌کم یک‌بار ربات ClassMate را شروع کرده‌اند؛ عضویت در کلاس شرط نمایش نیست.",
+        "وضعیت دسترسی خصوصی جدا از فعال‌بودن حساب نمایش داده می‌شود؛ کاربرانی که ربات را مسدود کرده‌اند نیز در فهرست باقی می‌مانند.",
         "",
     ]
     rows: list[list[InlineKeyboardButton]] = []
     for user in shown:
         username = f"@{user['username']}" if user.get("username") else "نام کاربری: ثبت نشده"
-        status = "فعال" if user["user_is_active"] else "غیرفعال"
+        account_status = "حساب فعال" if user["user_is_active"] else "حساب غیرفعال"
+        chat_status = (
+            "دسترسی خصوصی فعال"
+            if user["private_chat_started"]
+            else "دسترسی خصوصی غیرفعال"
+        )
         lines.append(
-            f"• {user['full_name']} · {username} · {user['telegram_id']} · {status}"
+            f"• {user['full_name']} · {username} · {user['telegram_id']} · "
+            f"{account_status} · {chat_status}"
         )
         if user.get("username"):
             rows.append([
